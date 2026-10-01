@@ -3,6 +3,8 @@ title: Introduction
 description: What is Marko and why should you use it?
 ---
 
+<iframe style="width: 100%; aspect-ratio: 16 / 9; border: 0; margin-top: -1.5rem;" src="https://www.youtube-nocookie.com/embed/P_1TtSBQ2vo" title="Introducing Marko: The Truly Modular PHP Framework" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen loading="lazy"></iframe>
+
 Marko is a modular PHP 8.5+ framework that combines Magento's powerful extensibility system with Laravel's developer experience. It's built on four core principles:
 
 1. **Pragmatically opinionated** — The right thing is easy, the wrong thing is annoying. Every "no" comes with a "yes, this way instead."
