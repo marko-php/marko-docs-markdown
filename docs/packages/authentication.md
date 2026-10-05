@@ -48,11 +48,20 @@ return [
     ],
 
     'remember' => [
-        'expiration' => 43200, // 30 days
-        'cookie' => 'remember_token',
+        'lifetime' => 43200, // minutes (30 days)
+        'cookie' => [
+            'prefix' => 'remember_',
+            'path' => '/',
+            'domain' => '',
+            'secure' => null, // null follows session.cookie.secure
+            'http_only' => true,
+            'same_site' => 'Lax',
+        ],
     ],
 ];
 ```
+
+See [Remember Me](#remember-me) for what each `remember` option controls.
 
 ## Usage
 
@@ -183,7 +192,9 @@ if ($guard->check()) {
 }
 ```
 
-`SessionGuard` also implements `Marko\Core\Contracts\ResettableInterface`. In a long-running worker (e.g. Swoole, RoadRunner), call `reset()` between requests to clear the guard's cached user so one request's authenticated user is never served to the next:
+Resolve guards through `AuthManager` (or inject `GuardInterface`, which is bound to `AuthManager::guard()`). Guards built this way receive the event dispatcher, the cookie jar, and the remember token manager, so remember-me and [events](#events) work out of the box. If you construct a `SessionGuard` by hand without a cookie jar and token manager, `login($user, remember: true)` throws an `AuthException` instead of silently ignoring the flag.
+
+`SessionGuard` also implements `Marko\Core\Contracts\ResettableInterface`. In a long-running worker (e.g. Swoole, RoadRunner), call `reset()` between requests to clear the guard's cached user so one request's authenticated user is never served to the next (`marko/roadrunner` does this automatically for every resolved `ResettableInterface` service):
 
 ```php
 use Marko\Core\Contracts\ResettableInterface;
@@ -276,6 +287,99 @@ class JwtGuard implements GuardInterface
 }
 ```
 
+## Remember Me
+
+Pass `remember: true` when logging a user in to keep them signed in after their session expires:
+
+```php title="LoginController.php"
+use Marko\Authentication\Contracts\GuardInterface;
+use Marko\Authentication\Contracts\UserProviderInterface;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+
+class LoginController
+{
+    public function __construct(
+        private GuardInterface $guard,
+        private UserProviderInterface $userProvider,
+    ) {}
+
+    public function login(
+        Request $request,
+    ): Response {
+        $credentials = [
+            'email' => $request->post('email'),
+            'password' => $request->post('password'),
+        ];
+        $user = $this->userProvider->retrieveByCredentials($credentials);
+
+        if ($user === null || !$this->userProvider->validateCredentials($user, $credentials)) {
+            return new Response('Invalid credentials', 401);
+        }
+
+        $this->guard->login($user, remember: (bool) $request->post('remember'));
+
+        return Response::redirect('/dashboard');
+    }
+}
+```
+
+### How It Works
+
+1. `login($user, remember: true)` generates a random token, stores its SHA-256 hash through `UserProviderInterface::updateRememberToken()`, and queues a `remember_{guard}` cookie (e.g. `remember_session`) holding `{user id}|{plain token}`.
+2. `QueuedCookiesMiddleware` attaches the queued cookie to the response with `Response::withCookie()`. The package registers this middleware as global middleware and orders it after the session driver modules, so there is nothing to wire up. Cookies never go through `setcookie()`, so behavior is identical under PHP-FPM and RoadRunner.
+3. On a later request with no authenticated session, `user()` reads the cookie, calls `retrieveByRememberToken($id, $hash)` with the **hash** of the cookie's token, verifies it against `getRememberToken()` with a constant-time comparison, and rotates the token (a new cookie is sent) to prevent replay.
+4. `logout()` clears the stored token (`updateRememberToken($user, null)`) and sends an expired remember cookie.
+
+### User Provider Requirements
+
+Remember-me stores tokens through your user provider, so the provider and user must persist them:
+
+- `updateRememberToken()` must call `$user->setRememberToken($token)` and save it (typically a nullable `remember_token` column). If the user's `getRememberToken()` does not return the new hash afterwards, `login(..., remember: true)` throws an `AuthException` rather than issuing a cookie that can never be honored.
+- `retrieveByRememberToken()` receives the stored hash. Compare it to the stored value with `hash_equals()`.
+
+```php title="UserProvider.php"
+public function retrieveByRememberToken(
+    int|string $identifier,
+    string $token,
+): ?AuthenticatableInterface {
+    $user = $this->userRepository->find((int) $identifier);
+    $storedToken = $user?->getRememberToken();
+
+    if ($storedToken === null || !hash_equals($storedToken, $token)) {
+        return null;
+    }
+
+    return $user;
+}
+
+public function updateRememberToken(
+    AuthenticatableInterface $user,
+    ?string $token,
+): void {
+    $user->setRememberToken($token);
+    $this->userRepository->save($user);
+}
+```
+
+### Cookie Configuration
+
+All remember-me options live under `remember` in `config/authentication.php`:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `lifetime` | `43200` | Cookie and token lifetime in minutes (30 days) |
+| `cookie.prefix` | `'remember_'` | Cookie name prefix; the guard name is appended (`remember_session`) |
+| `cookie.path` | `'/'` | Cookie `Path` attribute |
+| `cookie.domain` | `''` | Cookie `Domain` attribute; an empty string omits it |
+| `cookie.secure` | `null` | Cookie `Secure` flag; `null` follows `session.cookie.secure` |
+| `cookie.http_only` | `true` | Cookie `HttpOnly` flag |
+| `cookie.same_site` | `'Lax'` | Cookie `SameSite` attribute (`Lax`, `Strict` or `None`; `None` requires `secure`) |
+
+### Cookie Jar
+
+The guard reads and writes cookies through `CookieJarInterface`, which is bound as a singleton to `Marko\Authentication\Cookie\RequestCookieJar`. The jar reads from the current request and queues writes until `QueuedCookiesMiddleware` attaches them to the response. Writing a cookie when no HTTP request is being handled (for example, `login(..., remember: true)` from a CLI command) throws an `AuthException`. The jar implements `ResettableInterface`, so long-running workers clear its request and queue between requests.
+
 ## Middleware
 
 ### AuthMiddleware
@@ -337,6 +441,8 @@ Authenticated users are redirected to a configured path (default: `/`).
 ## Events
 
 The auth package dispatches [events](/docs/packages/events/) during the authentication lifecycle. Create observers to react to these events.
+
+`SessionGuard` dispatches `LoginEvent`, `LogoutEvent` and `FailedLoginEvent` through core's `EventDispatcherInterface`, which `AuthManager` passes to every session guard it builds. Any guard you get from `AuthManager::guard()` or by injecting `GuardInterface` fires them. `TokenGuard` is stateless (no login or logout) and dispatches no events.
 
 ### LoginEvent
 
@@ -473,4 +579,28 @@ public function retrieveByCredentials(array $credentials): ?AuthenticatableInter
 public function validateCredentials(AuthenticatableInterface $user, array $credentials): bool;
 public function retrieveByRememberToken(int|string $identifier, string $token): ?AuthenticatableInterface;
 public function updateRememberToken(AuthenticatableInterface $user, ?string $token): void;
+```
+
+`retrieveByRememberToken()` receives the SHA-256 hash of the cookie's token, the same value previously passed to `updateRememberToken()`.
+
+### SessionGuard
+
+```php
+public function login(AuthenticatableInterface $user, bool $remember = false): void;
+```
+
+### CookieJarInterface
+
+```php
+public function get(string $name): ?string;
+public function set(string $name, string $value, int $minutes = 0): void;
+public function delete(string $name): void;
+```
+
+### RequestCookieJar
+
+```php
+public function setRequest(Request $request): void;
+public function pullQueuedCookies(): array; // array<int, Cookie>
+public function reset(): void;
 ```
