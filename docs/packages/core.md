@@ -132,18 +132,52 @@ return [
 ];
 ```
 
+### Application Environment
+
+`AppEnvironment` is the single answer to "which environment is this application running in?". `Application` registers one shared instance in the container at boot, so any class or boot callback can type-hint it:
+
+```php
+use Marko\Core\Environment\AppEnvironment;
+
+class ReportMailer
+{
+    public function __construct(
+        private AppEnvironment $appEnvironment,
+    ) {}
+
+    public function recipients(): array
+    {
+        return $this->appEnvironment->isProduction()
+            ? ['finance@example.com']
+            : ['dev@example.com'];
+    }
+}
+```
+
+It reads `MARKO_ENV` first, then `APP_ENV`, from `$_ENV` with a `getenv()` fallback, so it works whether or not [marko/env](/docs/packages/env/) is installed and regardless of PHP's `variables_order` setting. Values are compared case-insensitively:
+
+| Method | Returns `true` for |
+|---|---|
+| `isProduction()` | `production`, `prod`, or no value at all |
+| `isDevelopment()` | `development`, `dev`, `local` |
+
+Any other name (for example `staging` or `testing`) is neither production nor development. `name()` returns the trimmed, lowercased value, or `production` when neither variable is set (or both are empty). Defaulting to production means a deployment that forgets to set the environment fails safe instead of exposing development behavior.
+
 ### Environment-Specific Bindings
 
 When different environments need different implementations (e.g., a mock service in development vs the real one in production), use the `boot` callback to conditionally override bindings:
 
 ```php title="module.php"
+use Marko\Core\Container\Container;
+use Marko\Core\Environment\AppEnvironment;
+
 return [
     'bindings' => [
         // Default binding — used in all environments
         PaymentGatewayInterface::class => StripePaymentGateway::class,
     ],
-    'boot' => function (Container $container): void {
-        if (($_ENV['APP_ENV'] ?? 'production') === 'development') {
+    'boot' => function (Container $container, AppEnvironment $appEnvironment): void {
+        if ($appEnvironment->isDevelopment()) {
             $container->bind(
                 PaymentGatewayInterface::class,
                 MockPaymentGateway::class,
@@ -240,25 +274,25 @@ Deletes the compiled cache file. Idempotent --- safe to run when no cache exists
 
 #### How boot uses the cache
 
-At boot, `Application::initialize()` reads three environment variables directly (not via `marko/config`, so the gate works before any config package is loaded):
+At boot, `Application::initialize()` reads these environment variables directly from `$_ENV`, falling back to `getenv()` (not via `marko/config`, so the gate works before any config package is loaded):
 
 | Variable | Default | Description |
 |---|---|---|
-| `APP_ENV` | `production` | Application environment. Set to `development` to disable the cache. |
+| `MARKO_ENV` / `APP_ENV` | `production` | Application environment, read through [`AppEnvironment`](#application-environment). `development`, `dev`, or `local` disable the cache. `MARKO_ENV` wins when both are set. |
 | `DISCOVERY_CACHE_ENABLED` | `true` | Set to `0`, `false`, `no`, `off`, or empty to disable. |
 | `DISCOVERY_CACHE_PATH` | `storage/cache/discovery.php` | Path to the cache file. Relative paths resolve from the project root; absolute paths are used as-is. |
 
 The cache is used when **all three conditions** are true:
 
 1. `DISCOVERY_CACHE_ENABLED` is truthy
-2. `APP_ENV` is not `development`
+2. `AppEnvironment::isDevelopment()` is false (the environment is not `development`, `dev`, or `local`)
 3. The cache file exists at `DISCOVERY_CACHE_PATH`
 
 If the cache file is **missing**, boot falls back to a normal full rescan --- no error.
 
 If the cache file is **corrupt, malformed, or version-mismatched**, boot throws `DiscoveryCacheException` immediately. There is no silent fallback. Run `marko discovery:clear` then `marko discovery:cache` to rebuild.
 
-In **`development`** environment the cache is always bypassed, so adding or editing a `#[Plugin]`, `#[Observer]`, `#[Preference]`, or `#[Command]` takes effect on the next request without any manual step.
+In a **development** environment (`development`, `dev`, or `local` --- the skeleton ships `APP_ENV=local`) the cache is always bypassed, so adding or editing a `#[Plugin]`, `#[Observer]`, `#[Preference]`, or `#[Command]` takes effect on the next request without any manual step.
 
 #### Configuration via `marko/config`
 
@@ -338,6 +372,23 @@ interface ContainerInterface extends PsrContainerInterface
 ```
 
 The concrete `Container` class additionally provides `resolvedInstances(?string $interface = null): array` --- not part of `ContainerInterface`. It returns only instances already built, optionally filtered to those implementing `$interface`, and never triggers resolution as a side effect. See [Resetting Request-Scoped State](#resetting-request-scoped-state-in-long-running-processes) above.
+
+### AppEnvironment
+
+```php
+use Marko\Core\Environment\AppEnvironment;
+
+class AppEnvironment
+{
+    public function __construct(?array $variables = null);
+
+    public function name(): string;
+    public function isProduction(): bool;
+    public function isDevelopment(): bool;
+}
+```
+
+Registered as a shared container instance by `Application`. Pass `$variables` (for example `['APP_ENV' => 'local']`) to read from that array only, instead of the real environment --- useful in tests. See [Application Environment](#application-environment) above.
 
 ### Contracts
 

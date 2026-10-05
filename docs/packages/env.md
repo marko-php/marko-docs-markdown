@@ -24,7 +24,13 @@ $envLoader = new EnvLoader();
 $envLoader->load(__DIR__);
 ```
 
-The `.env` file is optional — if it does not exist, the loader silently returns. System environment variables are never overwritten, allowing production deployments to override `.env` values.
+The `.env` file is optional. Real environment variables always take precedence over `.env` values, so production deployments can override anything from the container, PaaS, or web server.
+
+### Real Environment Variables Are Mirrored Into `$_ENV`
+
+Before reading `.env`, the loader copies every real environment variable (everything `getenv()` returns) into `$_ENV`, without overwriting entries that are already there. This happens even when no `.env` file exists.
+
+PHP only fills `$_ENV` itself when the `variables_order` ini setting contains `E`, and the `php.ini-production` default (`GPCS`) does not. Without mirroring, a config file such as `'host' => $_ENV['DB_HOST'] ?? 'localhost'` would silently fall back to its default in a typical container deployment. With mirroring, `$_ENV` and `getenv()` agree no matter how PHP is configured, so config files can safely read `$_ENV`.
 
 ### The `env()` Helper
 
@@ -89,7 +95,7 @@ $host = $this->config->getString('database.host');
 public function load(string $path): void;
 ```
 
-Loads environment variables from a `.env` file in the given directory. Skips comments, blank lines, and lines without `=`. Removes surrounding quotes (single or double) from values. Does not overwrite existing system environment variables.
+Mirrors real environment variables (from `getenv()`) into `$_ENV` without overwriting existing entries, then loads environment variables from a `.env` file in the given directory, if one exists. Skips comments, blank lines, and lines without `=`. Removes surrounding quotes (single or double) from values. Does not overwrite existing system environment variables — real environment variables win over `.env` values.
 
 ### env()
 

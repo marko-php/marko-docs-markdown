@@ -97,6 +97,8 @@ class DatabaseConnection
 }
 ```
 
+The repository is a shared instance (a singleton). Config files are discovered and loaded once, the first time anything resolves `ConfigRepositoryInterface`, and every class that injects it receives that same instance. The repository is read-only, so sharing it is also safe in long-running workers such as [marko/roadrunner](/docs/packages/roadrunner/). Because config is loaded once, changes to environment variables after that point are not picked up until the next process boot.
+
 ### Type-Safe Accessors
 
 Use typed accessor methods to get values with automatic type validation. These methods throw `ConfigNotFoundException` when the key is missing and `ConfigException` on type mismatch.
@@ -150,7 +152,7 @@ $name = $config->get('mail.from.name'); // 'My App'
 
 ### Environment Variables
 
-Config files are regular PHP, so you can use environment variables directly.
+Config files are regular PHP, so you can use environment variables directly. When [marko/env](/docs/packages/env/) is installed, real environment variables are mirrored into `$_ENV` at boot, so `$_ENV` reads work even when PHP's `variables_order` setting lacks `E` and there is no `.env` file.
 
 ```php title="config/database.php"
 <?php
