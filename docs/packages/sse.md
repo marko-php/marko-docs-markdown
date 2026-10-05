@@ -11,6 +11,74 @@ Server-Sent Events for Marko --- push real-time updates to browsers without WebS
 composer require marko/sse
 ```
 
+## When to Use SSE vs. Broadcasting
+
+`marko/sse` streams from inside a normal PHP request. Under PHP-FPM, **every open stream holds one FPM worker** for up to `timeout` seconds (300 by default) --- 2,000 viewers need 2,000 workers. That makes it a good fit for low-concurrency streams and a poor fit for audiences:
+
+| Use `marko/sse` for | Use [`marko/broadcasting`](/docs/packages/broadcasting/) for |
+|---|---|
+| Admin dashboards, job progress, a few dozen viewers | Live updates to large audiences |
+| Concurrent streams comfortably below your FPM workers minus headroom for regular traffic | Anything that could exceed `pm.max_children` |
+| No extra infrastructure | A Mercure hub (built into FrankenPHP) or a Pusher-protocol server (Pusher, Soketi, Laravel Reverb) holds the connections; PHP makes one short HTTP call per event |
+
+Rule of thumb: keep concurrent SSE streams at or below *(FPM workers − the workers your regular traffic needs)*, and set [`max_connections`](#configuration) so a burst of viewers gets a `503` instead of exhausting the pool and taking the rest of the site down.
+
+:::caution
+`marko/sse` is not compatible with [`marko/roadrunner`](/docs/packages/roadrunner/): a long-lived stream would block the worker for every other request. RoadRunner refuses the package by default, and if acknowledged, SSE routes return a 500. Use `marko/broadcasting` instead.
+:::
+
+## Configuration
+
+The optional connection guard caps concurrent streams across **all** PHP workers. It is off by default.
+
+```php title="config/sse.php"
+return [
+    // null = unlimited (guard disabled)
+    'max_connections' => isset($_ENV['SSE_MAX_CONNECTIONS']) && $_ENV['SSE_MAX_CONNECTIONS'] !== ''
+        ? (int) $_ENV['SSE_MAX_CONNECTIONS']
+        : null,
+    // Seconds a rejected client should wait before reconnecting
+    'retry_after' => (int) ($_ENV['SSE_RETRY_AFTER'] ?? 5),
+];
+```
+
+When `max_connections` is set, inject `SseConnectionLimiter` and pass it to `StreamingResponse`. Before streaming, the response takes a connection slot; if none is free it sends `503 Service Unavailable` with a `Retry-After` header instead of holding a worker. The slot is released in a `finally` block --- after the stream ends, when it throws, and when the client disconnects. With `max_connections` unset, the limiter is a no-op and never touches the cache.
+
+```php
+use Marko\Routing\Attributes\Get;
+use Marko\Sse\SseConnectionLimiter;
+use Marko\Sse\SseStream;
+use Marko\Sse\StreamingResponse;
+
+public function __construct(
+    private SseConnectionLimiter $sseConnectionLimiter,
+) {}
+
+#[Get('/jobs/{jobId}/progress')]
+public function progress(int $jobId): StreamingResponse
+{
+    return new StreamingResponse(
+        stream: new SseStream(dataProvider: fn (): array => $this->progressEvents($jobId)),
+        connectionLimiter: $this->sseConnectionLimiter,
+    );
+}
+```
+
+Slots live in the cache bound to `CacheInterface`, so the guard needs a cache **shared across PHP processes** --- [`marko/cache-redis`](/docs/packages/cache-redis/), or [`marko/cache-file`](/docs/packages/cache-file/) on a single server. The in-process [`marko/cache-array`](/docs/packages/cache-array/) driver is refused with an `SseException`. Each slot key expires after the stream `timeout` plus 60 seconds, so a slot held by a worker that crashed frees itself.
+
+Browsers do not retry an `EventSource` that receives a `503`; handle the `error` event and reconnect after the `Retry-After` delay:
+
+```javascript
+function connect() {
+    const source = new EventSource('/jobs/1/progress');
+    source.onerror = () => {
+        if (source.readyState === EventSource.CLOSED) {
+            setTimeout(connect, 5000);
+        }
+    };
+}
+```
+
 ## Usage
 
 ### Polling endpoint
@@ -122,7 +190,7 @@ return new StreamingResponse($stream);
 
 ### Deployment considerations
 
-**PHP-FPM:** Each open SSE connection holds a worker process for the duration of the stream. Tune `pm.max_children` for your expected concurrent connections, or create a dedicated FPM pool for SSE endpoints to isolate them from regular request traffic.
+**PHP-FPM:** Each open SSE connection holds a worker process for the duration of the stream. Tune `pm.max_children` for your expected concurrent connections, or create a dedicated FPM pool for SSE endpoints to isolate them from regular request traffic. Set [`max_connections`](#configuration) so a burst of viewers cannot exhaust the pool, and see [When to Use SSE vs. Broadcasting](#when-to-use-sse-vs-broadcasting) for audiences larger than your worker count.
 
 **Proxy buffering:** `StreamingResponse` sets `X-Accel-Buffering: no` automatically, which disables nginx proxy buffering so events reach the client immediately.
 
@@ -164,6 +232,7 @@ public function __construct(
     private int $pollInterval = 1,
 )
 
+public function timeout(): int;
 public function close(): void;
 
 /** @return Generator<int, string> @throws JsonException */
@@ -182,11 +251,41 @@ public function getIterator(): Generator;
 use Marko\Sse\StreamingResponse;
 use Marko\Sse\SseStream;
 
-public function __construct(private SseStream $stream, int $statusCode = 200)
+public const int SLOT_TTL_GRACE_SECONDS = 60;
 
-/** @throws JsonException */
+public function __construct(
+    private SseStream $stream,
+    int $statusCode = 200,
+    private ?SseConnectionLimiter $connectionLimiter = null,
+)
+
+/** @throws JsonException|InvalidKeyException|RandomException */
 public function send(): void;
+
+// The 503 + Retry-After response sent when no connection slot is free
+public function serviceUnavailableResponse(): Response;
 ```
+
+### SseConnectionLimiter
+
+```php
+use Marko\Sse\SseConnectionLimiter;
+
+public function __construct(
+    private CacheInterface $cache,
+    private ?int $maxConnections,
+    private int $retryAfter,
+)
+
+public function isLimited(): bool;
+public function retryAfter(): int;
+
+// Slot number, or null when every slot is taken
+public function acquire(int $ttl): ?int;
+public function release(int $slot): void;
+```
+
+Built from `config/sse.php` by the module binding. Uses only `increment()` (a return value of `1` means the slot was free) and `delete()` on the cache --- never `get()`.
 
 ### SseException
 
@@ -195,3 +294,5 @@ Extends [`MarkoException`](/docs/packages/core/). Includes factory methods:
 - `SseException::ambiguousSource()` --- thrown when both a `dataProvider` and a `subscription` are passed to `SseStream`.
 - `SseException::noSource()` --- thrown when neither a `dataProvider` nor a `subscription` is provided.
 - `SseException::invalidField(string $field, string $value)` --- thrown by `SseEvent` constructor when the `event` or `id` field contains a CR (`\r`) or LF (`\n`) character. SSE field values must not span multiple lines; passing a value with embedded newlines is an error.
+- `SseException::invalidMaxConnections(int $maxConnections)` --- thrown when `sse.max_connections` is below 1.
+- `SseException::processLocalCache(string $cacheClass)` --- thrown when the connection guard is enabled but `CacheInterface` is bound to a process-local driver such as `marko/cache-array`.

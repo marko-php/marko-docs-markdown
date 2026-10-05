@@ -199,7 +199,9 @@ Update your environment variables to match the new driver, and your controllers 
 
 ## Deployment Considerations
 
-**PHP-FPM worker pools:** Each open SSE connection holds a PHP-FPM worker for the duration of the stream. Tune `pm.max_children` to account for concurrent SSE connections, or create a dedicated FPM pool for SSE endpoints to isolate them from regular request traffic.
+**PHP-FPM worker pools:** Each open SSE connection holds a PHP-FPM worker for the duration of the stream. Tune `pm.max_children` to account for concurrent SSE connections, or create a dedicated FPM pool for SSE endpoints to isolate them from regular request traffic. Set [`sse.max_connections`](/docs/packages/sse/#configuration) so a burst of viewers gets a `503` instead of exhausting the pool.
+
+**Large audiences:** When concurrent viewers can exceed your FPM workers, publish through [`marko/broadcasting`](/docs/packages/broadcasting/) instead. A Mercure hub (built into FrankenPHP) or a Pusher-protocol server (Pusher, Soketi, Laravel Reverb) holds the connections, and PHP makes one short HTTP call per event. See [When to Use SSE vs. Broadcasting](/docs/packages/sse/#when-to-use-sse-vs-broadcasting).
 
 **Proxy buffering:** `StreamingResponse` sets `X-Accel-Buffering: no` automatically, which disables nginx proxy buffering so events reach the client immediately. If you use a different reverse proxy, ensure response buffering is disabled for SSE endpoints.
 
@@ -259,6 +261,7 @@ it('formats events from a data provider', function () {
 ## Related Links
 
 - [marko/sse](/docs/packages/sse/) --- SSE package reference with full API details
+- [marko/broadcasting](/docs/packages/broadcasting/) --- driver-agnostic broadcasting for large audiences (Mercure, Pusher)
 - [marko/pubsub](/docs/packages/pubsub/) --- PubSub contracts and interfaces
 - [marko/pubsub-redis](/docs/packages/pubsub-redis/) --- Redis driver reference
 - [marko/pubsub-pgsql](/docs/packages/pubsub-pgsql/) --- PostgreSQL driver reference

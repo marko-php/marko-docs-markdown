@@ -3,9 +3,9 @@ title: marko/testing
 description: Reusable fakes with built-in assertions that eliminate test boilerplate.
 ---
 
-Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, and the clock. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. Pest expectation extensions (`toHaveDispatched`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`) are included for fluent assertions.
+Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, and the clock. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`) are included for fluent assertions.
 
-Available fakes: `FakeEventDispatcher`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`.
+Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`.
 
 ## Installation
 
@@ -26,6 +26,23 @@ $dispatcher->dispatch(new OrderPlaced($order));
 $dispatcher->assertDispatched(OrderPlaced::class);
 $dispatcher->assertDispatchedCount(OrderPlaced::class, 1);
 $dispatcher->assertNotDispatched(OrderShipped::class);
+```
+
+### FakeBroadcaster
+
+Implements `BroadcasterInterface` from [`marko/broadcasting`](/docs/packages/broadcasting/). A string channel matches by name; a `Channel`/`PrivateChannel` also matches its privacy. The optional callback receives the event data and id.
+
+```php
+use Marko\Broadcasting\PrivateChannel;
+use Marko\Testing\Fake\FakeBroadcaster;
+
+$broadcaster = new FakeBroadcaster();
+$broadcaster->broadcast(new PrivateChannel('orders.7'), 'order.shipped', ['id' => 7]);
+
+$broadcaster->assertBroadcast('orders.7', 'order.shipped');
+$broadcaster->assertBroadcast(new PrivateChannel('orders.7'), 'order.shipped', fn (array $data) => $data['id'] === 7);
+$broadcaster->assertNotBroadcast('orders.7', 'order.cancelled');
+$broadcaster->assertBroadcastCount(1);
 ```
 
 ### FakeMailer
@@ -273,6 +290,7 @@ Use them in tests:
 
 ```php
 expect($dispatcher)->toHaveDispatched(OrderPlaced::class);
+expect($broadcaster)->toHaveBroadcast('orders.7', 'order.shipped');
 expect($mailer)->toHaveSent();
 expect($mailer)->toHaveSent(fn (Message $m) => $m->to === 'user@example.com');
 expect($queue)->toHavePushed(SendEmailJob::class);
@@ -294,6 +312,21 @@ public function assertNotDispatched(string $eventClass): void;
 public function assertDispatchedCount(string $eventClass, int $expected): void;
 public function clear(): void;
 ```
+
+### FakeBroadcaster
+
+```php
+public function broadcast(string|Channel $channel, string $event, array $data, ?string $id = null): void;
+public function dispatch(BroadcastableInterface $broadcastable): void;
+public function broadcastsOf(string|Channel $channel, string $event): array;
+public function assertBroadcast(string|Channel $channel, string $event, ?callable $callback = null): void;
+public function assertNotBroadcast(string|Channel $channel, string $event): void;
+public function assertBroadcastCount(int $expected): void;
+public function assertNothingBroadcast(): void;
+public function clear(): void;
+```
+
+Recorded entries are in the public `$broadcasts` property (`channel`, `event`, `data`, `id`).
 
 ### FakeMailer
 
