@@ -3,7 +3,7 @@ title: marko/testing
 description: Reusable fakes with built-in assertions that eliminate test boilerplate.
 ---
 
-Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, and the clock. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`) are included for fluent assertions.
+Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, and the clock. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. An in-process HTTP test client (`TestClient`) sends requests through your real routes, middleware and controllers for feature tests. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`, `toHaveStatus`, `toHaveJsonPath`) are included for fluent assertions.
 
 Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`.
 
@@ -276,6 +276,128 @@ KnownDriversValidator::assertSkeletonSuggestContainsAll(
 );
 ```
 
+## HTTP Tests
+
+`TestClient` sends requests through your application in process: the real router, global and route middleware (sessions, CSRF, auth, CORS, rate limits) and controllers all run, with no web server and no superglobals. It boots the application once and serves any number of requests, so a feature test costs about as much as a unit test.
+
+```php
+use Marko\Testing\Http\TestClient;
+
+$client = TestClient::boot(basePath: $projectRoot); // boots the Application once
+
+$client->get('/api/v1/shows/42')
+    ->assertOk()
+    ->assertJsonPath('data.status', 'live');
+
+$client->withHeaders(['X-Request-Id' => 'abc'])
+    ->postJson('/api/v1/shows/42/events', ['type' => 'view'])
+    ->assertStatus(202);
+
+$client->post('/login', ['email' => 'a@b.c', 'password' => 'secret']) // form-encoded
+    ->assertRedirect('/dashboard')
+    ->assertCookie('marko_session');
+
+$client->actingAs($user)->get('/dashboard')->assertOk();
+$client->withCookie('locale', 'nl')->get('/')->assertSee('Welkom');
+```
+
+Use `TestClient::forApplication($app)` to wrap an `Application` you booted yourself. `TestClient::boot()` throws when the base path does not exist.
+
+### Pest setup
+
+Create one client per test, so state from one test (cookies, `actingAs()`, headers) never reaches the next:
+
+```php title="tests/Pest.php"
+use Marko\Testing\Http\TestClient;
+
+uses()->beforeEach(function () {
+    $this->http = TestClient::boot(dirname(__DIR__));
+})->in('Feature');
+```
+
+```php title="tests/Feature/ShowTest.php"
+it('shows a live show', function () {
+    $this->http->getJson('/api/v1/shows/42')
+        ->assertOk()
+        ->assertJsonPath('data.status', 'live');
+});
+```
+
+### Sending requests
+
+| Method | Sends |
+|--------|-------|
+| `get($uri, $query = [], $headers = [])`, `head(...)` | `$query` merged into the URI's query string |
+| `post($uri, $data = [], $headers = [])`, `put`, `patch`, `delete`, `options` | `$data` as form fields (`Request::post()`), form-encoded |
+| `postJson($uri, $data = [], $headers = [])`, `putJson`, `patchJson`, `deleteJson` | `json_encode($data)` as the body, with `Content-Type` and `Accept: application/json` |
+| `getJson($uri, $query = [], $headers = [])` | A GET with `Accept: application/json`; GET carries no body, so `$query` is the query string |
+| `json($method, $uri, $data = [], $headers = [])` | Any method with a JSON body |
+| `call($method, $uri, $data = [], $headers = [], ?string $body = null)` | Any method; pass `$body` for a raw body (e.g. XML). Passing both form `$data` and a `$body` throws |
+
+The client builds a `Marko\Routing\Http\Request` the way PHP would for a real request:
+
+- Headers become `HTTP_*` server keys; `Content-Type` and `Content-Length` become `CONTENT_TYPE` and `CONTENT_LENGTH`.
+- `REQUEST_METHOD`, `REQUEST_URI` (with the query string), `QUERY_STRING`, `HTTP_HOST` and `SERVER_NAME` (`localhost`, or the host of a full URL such as `https://shop.test/cart`), and `REMOTE_ADDR` (`127.0.0.1`) are set.
+- `withServerVariables(['REMOTE_ADDR' => '203.0.113.9'])` overrides any server key for later requests.
+- Controllers read the payload exactly as in production: `$request->json('type')`, `$request->post('email')`, `$request->input('page')`.
+
+### Client state
+
+The client behaves like a browser, so what you set stays set for later requests on the same client:
+
+- `withHeaders(array)` / `withHeader($name, $value)`: sent with every later request. Headers passed to one call win for that call only.
+- **Cookie jar**: cookies a response sets are stored and sent back with the next request (as request cookies and a `Cookie` header). A cookie the response expires is dropped. Session-backed flows such as a form login followed by a protected page, or a CSRF token round trip, just work. `withCookie($name, $value)` and `withCookies(array)` add cookies, `withoutCookies()` empties the jar, and `cookies()` returns it. Cookies are keyed by name; domain and path are not matched.
+- `withFile($field, $path, ?$clientFilename = null, ?$clientMediaType = null)`: uploads a copy of the file with the **next** request as a `Marko\Routing\Http\UploadedFile` (multipart). The original file is never moved. A missing file throws `TestClientException`.
+
+### Acting as a user
+
+`actingAs($user, ?string $guard = null)` authenticates every later request as `$user` without a login request and without writing to the session. It puts a `FakeGuard` holding the user in place of the guard named `$guard` (the default guard from `config/authentication.php` when `null`) in the application's `AuthManager`; for the default guard, the container's `GuardInterface` is replaced as well. `AuthMiddleware` and any controller that injects `GuardInterface` or `AuthManager` see the user.
+
+```php
+use Marko\Testing\Fake\FakeAuthenticatable;
+
+$this->http->actingAs(new FakeAuthenticatable(id: 7))
+    ->get('/dashboard')
+    ->assertOk();
+
+$this->http->actingAs($apiUser, 'api')->getJson('/api/me')->assertOk();
+```
+
+`actingAs()` needs the `marko/authentication` module loaded by the application.
+
+### Request-scoped state and exceptions
+
+Before each request, the client calls `reset()` on every resolved `ResettableInterface` service (`Marko\Core\RequestStateResetter`, the same code the RoadRunner worker runs), so the session, the session guard and similar request-scoped state never leak from one request to the next.
+
+An exception thrown by a controller or middleware propagates out of `$client->get()`, so the test shows the real stack trace. HTTP exceptions (`HttpExceptionInterface`, e.g. `HttpException::notFound()`) are rendered into a response by the router, exactly as in production, so `assertNotFound()` and friends work on them.
+
+The client opens no database connections of its own.
+
+### Assertions
+
+Requests return a `Marko\Testing\Http\TestResponse`. Every assertion returns the response, so they chain, and throws `AssertionFailedException` on failure. The message includes the response status and the first 500 bytes of the body:
+
+```
+Expected response status 200 but got 500.
+
+Response status: 500
+Response body: {"message":"Internal Server Error"}
+```
+
+- Status: `assertStatus($status)`, `assertOk()`, `assertCreated()`, `assertNoContent()` (also checks the body is empty), `assertUnauthorized()`, `assertForbidden()`, `assertNotFound()`, `assertUnprocessable()`
+- Redirects: `assertRedirect(?string $to = null)` checks for a 3xx status with a `Location` header, matching `$to` exactly when given
+- Headers (names are case-insensitive): `assertHeader($name, ?$value = null)`, `assertHeaderMissing($name)`
+- Cookies the response sets: `assertCookie($name, ?$value = null)`, `assertCookieMissing($name)`
+- Body: `assertSee($text)`, `assertDontSee($text)` (raw substring, not HTML-escaped)
+- JSON (dot paths, with numeric segments for list items: `data.items.0.id`):
+  - `assertJson(array $subset)`: the body contains the subset, compared recursively
+  - `assertExactJson(array $data)`: the body equals the data; object key order is ignored
+  - `assertJsonPath($path, $expected)`: the value at the path is identical (`===`) to `$expected`
+  - `assertJsonCount($count, ?$path = null)`: the root, or the array at the path, has `$count` items
+  - `assertJsonMissingPath($path)`: the path does not exist
+
+A body that is not valid JSON fails a JSON assertion with a clear message. The accessors `status()`, `body()`, `header($name)`, `json(?$path = null)` and `response()` (the wrapped `Response`) are available for anything else.
+
 ## Pest Expectations
 
 The expectations register automatically. `marko/testing` declares a Pest plugin (`Marko\Testing\Pest\ExpectationsPlugin`) under `extra.pest.plugins` in its `composer.json`, and Pest boots it once `expect()` exists, including in `--parallel` workers. There is nothing to add to `Pest.php`.
@@ -298,6 +420,10 @@ expect($logger)->toHaveLogged('Payment failed');
 expect($logger)->toHaveLogged('Payment failed', LogLevel::Error);
 expect($http)->toHaveSentRequest();
 expect($http)->toHaveSentRequest(fn (RecordedRequest $r) => $r->url === 'https://api.example.com/orders');
+
+// TestResponse
+expect($response)->toHaveStatus(201);
+expect($response)->toHaveJsonPath('data.status', 'live');
 ```
 
 ## API Reference
@@ -501,6 +627,67 @@ public function travelTo(DateTimeImmutable|string $now): void;
 public function assertNowIs(DateTimeImmutable|string $expected): void;
 ```
 
+### TestClient
+
+```php
+public static function boot(string $basePath): self;
+public static function forApplication(Application $application): self;
+public function application(): Application;
+public function withHeaders(array $headers): static;
+public function withHeader(string $name, string $value): static;
+public function withServerVariables(array $variables): static;
+public function withCookie(string $name, string $value): static;
+public function withCookies(array $cookies): static;
+public function withoutCookies(): static;
+public function cookies(): array;
+public function withFile(string $field, string $path, ?string $clientFilename = null, ?string $clientMediaType = null): static;
+public function actingAs(AuthenticatableInterface $user, ?string $guard = null): static;
+public function get(string $uri, array $query = [], array $headers = []): TestResponse;
+public function head(string $uri, array $query = [], array $headers = []): TestResponse;
+public function post(string $uri, array $data = [], array $headers = []): TestResponse;
+public function put(string $uri, array $data = [], array $headers = []): TestResponse;
+public function patch(string $uri, array $data = [], array $headers = []): TestResponse;
+public function delete(string $uri, array $data = [], array $headers = []): TestResponse;
+public function options(string $uri, array $data = [], array $headers = []): TestResponse;
+public function getJson(string $uri, array $query = [], array $headers = []): TestResponse;
+public function postJson(string $uri, array $data = [], array $headers = []): TestResponse;
+public function putJson(string $uri, array $data = [], array $headers = []): TestResponse;
+public function patchJson(string $uri, array $data = [], array $headers = []): TestResponse;
+public function deleteJson(string $uri, array $data = [], array $headers = []): TestResponse;
+public function json(string $method, string $uri, array $data = [], array $headers = []): TestResponse;
+public function call(string $method, string $uri, array $data = [], array $headers = [], ?string $body = null): TestResponse;
+```
+
+### TestResponse
+
+```php
+public function response(): Response;
+public function status(): int;
+public function body(): string;
+public function header(string $name): ?string;
+public function json(?string $path = null): mixed;
+public function assertStatus(int $status): static;
+public function assertOk(): static;
+public function assertCreated(): static;
+public function assertNoContent(): static;
+public function assertUnauthorized(): static;
+public function assertForbidden(): static;
+public function assertNotFound(): static;
+public function assertUnprocessable(): static;
+public function assertRedirect(?string $to = null): static;
+public function assertHeader(string $name, ?string $value = null): static;
+public function assertHeaderMissing(string $name): static;
+public function assertCookie(string $name, ?string $value = null): static;
+public function assertCookieMissing(string $name): static;
+public function assertSee(string $text): static;
+public function assertDontSee(string $text): static;
+public function assertJson(array $subset): static;
+public function assertExactJson(array $data): static;
+public function assertJsonPath(string $path, mixed $expected): static;
+public function assertJsonCount(int $count, ?string $path = null): static;
+public function assertJsonMissingPath(string $path): static;
+```
+
 ### KnownDriversValidator
 
 ```php
@@ -519,4 +706,6 @@ public static function unexpectedContains(string $type, string $needle): self;
 public static function expectedEmpty(string $type): self;
 public static function unexpectedEmpty(string $type): self;
 public static function strayRequest(string $method, string $url): self;
+public static function responseAssertion(string $expectation, int $status, string $body): self;
+public static function invalidJsonResponse(int $status, string $body, string $error): self;
 ```

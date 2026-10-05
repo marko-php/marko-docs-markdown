@@ -596,10 +596,17 @@ public function __construct(
 )
 
 public function name(): string;
+public function value(): string;
+public function expires(): ?int;
 public function path(): ?string;
 public function domain(): ?string;
+public function secure(): bool;
+public function httpOnly(): bool;
+public function sameSite(): ?string;
 public function toSetCookieString(): string;
 ```
+
+`value()` returns the raw value, before the URL-encoding applied in the `Set-Cookie` line.
 
 `expires: null` or `expires: 0` omits the `Expires` attribute, producing a browser-session cookie. The value passed to `toSetCookieString()` is `rawurlencode()`d. The constructor throws `CookieException` for an invalid cookie name (control characters, whitespace, or separator characters such as `( ) < > @ , ; : \ " / [ ] ? = { }`), and also throws when `sameSite` is `'None'` without `secure: true`.
 

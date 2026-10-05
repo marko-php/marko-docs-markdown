@@ -237,7 +237,9 @@ foreach ($container->resolvedInstances(ResettableInterface::class) as $resettabl
 }
 ```
 
-`resolvedInstances()` is declared on the concrete `Container` class, not on `ContainerInterface` --- code that needs it must type-hint `Container` or check `instanceof Container` rather than relying on the interface.
+`Marko\Core\RequestStateResetter` wraps that loop: `new RequestStateResetter($container)->reset()` resets every resolved `ResettableInterface` instance in ascending binding-id order, and lets a failing `reset()` propagate. The RoadRunner worker and the [marko/testing](/docs/packages/testing/) HTTP test client both call it before each request.
+
+`resolvedInstances()` is declared on `ContainerInterface` and implemented by `Container`.
 
 Current implementors: `Session` ([marko/session](/docs/packages/session/)), `SessionGuard` ([marko/authentication](/docs/packages/authentication/)), and `ReadWriteConnection` ([marko/database-readwrite](/docs/packages/database-readwrite/)).
 
