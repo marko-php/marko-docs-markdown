@@ -3,9 +3,9 @@ title: marko/testing
 description: Reusable fakes with built-in assertions that eliminate test boilerplate.
 ---
 
-Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, mail, queues, sessions, cookies, logging, config, authentication, and guards. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. Pest expectation extensions (`toHaveDispatched`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`) are included for fluent assertions.
+Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, mail, queues, sessions, cookies, logging, config, authentication, guards, and HTTP clients. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. Pest expectation extensions (`toHaveDispatched`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`) are included for fluent assertions.
 
-Available fakes: `FakeEventDispatcher`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`.
+Available fakes: `FakeEventDispatcher`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`.
 
 ## Installation
 
@@ -173,6 +173,53 @@ $provider->updateRememberToken($user, 'new-token');
 expect($provider->lastRememberTokenUpdate['token'])->toBe('new-token');
 ```
 
+### FakeHttpClient
+
+`FakeHttpClient` implements `HttpClientInterface` from [`marko/http`](/docs/packages/http/), so any service that takes the interface can be tested without a live server or Guzzle internals.
+
+```php
+use Marko\Http\Exceptions\ConnectionException;
+use Marko\Http\HttpResponse;
+use Marko\Testing\Fake\FakeHttpClient;
+use Marko\Testing\Fake\Http\RecordedRequest;
+
+$http = new FakeHttpClient();
+
+// Exact URL, or * as a wildcard
+$http->stub('https://api.example.com/orders/*', new HttpResponse(200, '{"id":1}', ['Content-Type' => 'application/json']));
+$http->stub('https://api.example.com/fail', new HttpResponse(500, 'boom'));
+
+// Simulate a network failure
+$http->stub('https://api.example.com/slow', new ConnectionException('timeout'));
+
+// Sequential responses for requests that match no stub, whatever their URL
+$http->queue(new HttpResponse(201, ''), new HttpResponse(200, ''));
+
+$service = new OrderSync($http);
+$service->push($order);
+
+$http->assertSent(fn (RecordedRequest $r) => $r->method === 'POST' && $r->json()['id'] === 1);
+$http->assertSentCount(1);
+$http->assertNotSent(fn (RecordedRequest $r) => str_contains($r->url, '/fail'));
+```
+
+Each request is resolved in this order: the first registered stub whose pattern matches the URL, then the next queued response. A request that matches neither is a **stray request** and throws `AssertionFailedException`, so a test never silently talks to an unexpected endpoint. Call `$http->preventStrayRequests(false)` to answer stray requests with an empty `200` response instead.
+
+The fake applies the same rules as a real driver:
+
+- Options are validated with `RequestOptions::validate()`, so an unknown key such as `form_param` (or the Guzzle-only `guzzle` key) throws `InvalidRequestOptionException`.
+- A stubbed 4xx/5xx response throws `HttpException` with the response attached, unless the request passes `'http_errors' => false`, in which case the `HttpResponse` is returned.
+
+Every sent request is recorded as a readonly `RecordedRequest` in `$http->requests`, with `method` (uppercased), `url` and `options`, plus helpers:
+
+```php
+$request = $http->requests[0];
+
+$request->header('authorization'); // case-insensitive, null when absent
+$request->json();                  // the 'json' option
+$request->body();                  // raw 'body', encoded 'json', or encoded 'form_params'
+```
+
 ### KnownDriversValidator
 
 `KnownDriversValidator` is a static utility for package authors to assert that a package's `known-drivers.php` file is well-formed and stays in sync with the skeleton's `suggest` block. See [Known Drivers](/concepts/known-drivers/) for the file format and description-string conventions.
@@ -211,6 +258,8 @@ expect($mailer)->toHaveSent(fn (Message $m) => $m->to === 'user@example.com');
 expect($queue)->toHavePushed(SendEmailJob::class);
 expect($logger)->toHaveLogged('Payment failed');
 expect($logger)->toHaveLogged('Payment failed', LogLevel::Error);
+expect($http)->toHaveSentRequest();
+expect($http)->toHaveSentRequest(fn (RecordedRequest $r) => $r->url === 'https://api.example.com/orders');
 ```
 
 ## API Reference
@@ -359,6 +408,35 @@ public function assertLoggedOut(): void;
 public function clear(): void;
 ```
 
+### FakeHttpClient
+
+```php
+public array $requests; // array<RecordedRequest>, read-only from outside
+public function stub(string $urlPattern, HttpResponse|HttpException $response): self;
+public function queue(HttpResponse|HttpException ...$responses): self;
+public function preventStrayRequests(bool $prevent = true): self;
+public function request(string $method, string $url, array $options = []): HttpResponse;
+public function get(string $url, array $options = []): HttpResponse;
+public function post(string $url, array $options = []): HttpResponse;
+public function put(string $url, array $options = []): HttpResponse;
+public function patch(string $url, array $options = []): HttpResponse;
+public function delete(string $url, array $options = []): HttpResponse;
+public function assertSent(?callable $callback = null): void;
+public function assertNotSent(callable $callback): void;
+public function assertSentCount(int $expected): void;
+public function assertNothingSent(): void;
+public function clear(): void;
+```
+
+### RecordedRequest
+
+```php
+public function __construct(string $method, string $url, array $options = []);
+public function header(string $name): ?string;
+public function json(): mixed;
+public function body(): string;
+```
+
 ### KnownDriversValidator
 
 ```php
@@ -376,4 +454,5 @@ public static function expectedContains(string $type, string $needle): self;
 public static function unexpectedContains(string $type, string $needle): self;
 public static function expectedEmpty(string $type): self;
 public static function unexpectedEmpty(string $type): self;
+public static function strayRequest(string $method, string $url): self;
 ```

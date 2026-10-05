@@ -69,17 +69,42 @@ try {
 }
 ```
 
-### Supported Options
+Pass `'http_errors' => false` to receive 4xx/5xx responses as a normal `HttpResponse` instead of an exception. See [Error Responses](/docs/packages/http/#error-responses).
 
-The following request options are forwarded to Guzzle:
+### Request Options and Validation
 
-| Option | Description |
+`GuzzleHttpClient` accepts the portable option set documented in [`marko/http`](/docs/packages/http/#request-options) and validates it with `RequestOptions::validate()` before sending. An unknown key, conflicting body options, or a malformed value throws `InvalidRequestOptionException` --- nothing is silently dropped.
+
+Portable options map to Guzzle as follows:
+
+| Option | Sent to Guzzle as |
 |---|---|
-| `headers` | Associative array of HTTP headers |
-| `body` | Raw request body |
-| `json` | Data to send as JSON (automatically sets `Content-Type`) |
-| `query` | Query string parameters |
-| `timeout` | Request timeout in seconds |
+| `headers`, `body`, `json`, `form_params`, `multipart`, `query`, `timeout`, `connect_timeout`, `verify`, `proxy` | The Guzzle option of the same name |
+| `auth` `['user', 'pass']` | Guzzle `auth` (HTTP basic) |
+| `auth` `['bearer' => $token]` | An `Authorization: Bearer $token` header |
+| `allow_redirects` `true`/`false` | Guzzle `allow_redirects` |
+| `allow_redirects` `int` | Guzzle `allow_redirects` with `['max' => $int]` |
+| `http_errors` | Guzzle `http_errors` (default `true`) |
+
+### The `guzzle` Escape Hatch
+
+For a Guzzle feature outside the portable set (`cert`, `ssl_key`, `sink`, `on_stats`, `decode_content`, `debug`, ...), pass a `guzzle` array. It is merged verbatim over the options above, so it wins on conflict:
+
+```php
+$response = $this->httpClient->get('https://internal.example.com/report.csv', [
+    'timeout' => 30,
+    'guzzle' => [
+        'cert' => '/etc/ssl/client.pem',
+        'sink' => '/tmp/report.csv',
+    ],
+]);
+```
+
+The `guzzle` key is **not portable**: any other `HttpClientInterface` driver, and `FakeHttpClient`, reject it with `InvalidRequestOptionException`. Keeping it at the call site makes the reach past the interface explicit. The constant `GuzzleHttpClient::GUZZLE_OPTIONS` holds the key name.
+
+### Response Headers
+
+Guzzle exposes each response header as a list of values. `HttpResponse::headers()` returns one string per header, so repeated values are joined with `", "`. This is lossy for `Set-Cookie`, whose values can themselves contain commas (for example in `Expires`). If you need each cookie separately, read the raw response through a custom `createClient()` middleware.
 
 ## Customization
 
@@ -122,4 +147,4 @@ Implements `HttpClientInterface`. See [`marko/http`](/docs/packages/http/) for t
 | `delete(string $url, array $options = []): HttpResponse` | Send a DELETE request |
 | `createClient(): GuzzleClientInterface` | Protected --- override via Preference to customize the Guzzle client |
 
-All methods throw `ConnectionException` on network failures and `HttpException` on HTTP error responses (4xx, 5xx). The `HttpException` carries the `HttpResponse` when available.
+All methods throw `InvalidRequestOptionException` for invalid options, `ConnectionException` on network failures, and `HttpException` on HTTP error responses (4xx, 5xx) unless `http_errors` is `false`. The `HttpException` carries the `HttpResponse` when available.
