@@ -188,7 +188,7 @@ public function create(string $title, int $count): Response
 $title = $request->input('title', 'Untitled');
 ```
 
-A malformed JSON body throws `MalformedJsonException` when it is read, never silently returning an empty payload. When it is hit while binding controller parameters, the router answers with a `400`. `wantsJson()` checks the `Accept` header, so you can pick a response format for the client:
+A malformed JSON body throws `MalformedJsonException` when it is read, never silently returning an empty payload. It implements `HttpExceptionInterface`, so the pipeline renders it as a `400` wherever it is thrown --- while binding controller parameters or inside your controller. `wantsJson()` checks the `Accept` header, so you can pick a response format for the client:
 
 ```php
 if ($request->wantsJson()) {
@@ -620,4 +620,4 @@ protected function renderHtml(int $statusCode, array $data): Response;
 
 ### Parameter Resolution
 
-The router resolves controller method parameters in priority order: route path params → request body (the JSON body for JSON requests, form data otherwise, via `Request::input()`) → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; the pipeline renders both as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
+The router resolves controller method parameters in priority order: route path params → request body (the JSON body for JSON requests, form data otherwise, via `Request::input()`) → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; both implement `HttpExceptionInterface` and the pipeline renders them as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
