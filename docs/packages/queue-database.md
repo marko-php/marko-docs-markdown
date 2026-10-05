@@ -17,23 +17,19 @@ Requires [`marko/database`](/docs/packages/database/) for the database connectio
 
 ## Usage
 
-### Binding the Driver
+### Wiring
 
-Register the database queue in your module bindings:
+Installing the package is enough. Its `module.php` binds `QueueInterface` to a `DatabaseQueue` built from your queue config, and binds `FailedJobRepositoryInterface` to `DatabaseFailedJobRepository`. `marko/queue` binds `WorkerInterface`, so `marko queue:work` runs with no extra bindings.
 
-```php title="module.php"
-use Marko\Queue\QueueInterface;
-use Marko\Queue\Database\DatabaseQueue;
-use Marko\Queue\FailedJobRepositoryInterface;
-use Marko\Queue\Database\DatabaseFailedJobRepository;
+The factory reads these keys from `config/queue.php`:
 
-return [
-    'bindings' => [
-        QueueInterface::class => DatabaseQueue::class,
-        FailedJobRepositoryInterface::class => DatabaseFailedJobRepository::class,
-    ],
-];
-```
+| Key | Effect on the database driver |
+|---|---|
+| `queue.queue` | Queue name used by `push()`, `later()` and `pop()` when none is given |
+| `queue.retry_after` | Seconds before a reserved job that was neither deleted nor released is reclaimed |
+| `queue.max_attempts` | Default attempt limit for jobs that don't set their own `maxAttempts` |
+
+Jobs are always stored in the `jobs` table that the bundled migration creates.
 
 ### Running Migrations
 
@@ -77,11 +73,34 @@ Process jobs with the worker:
 marko queue:work
 ```
 
+### Retries and Attempt Counting
+
+The `jobs.attempts` column is the authoritative attempt count. Every reservation increments it, so it counts attempts that were *started*:
+
+- **A job that throws** is released by the worker. `release()` rewrites the stored payload with the current attempt count. The job is retried until it has been attempted `maxAttempts` times, then moved to `failed_jobs` and deleted from `jobs`.
+- **A job whose worker dies** (fatal error, OOM, `SIGKILL`) is never released. Once its reservation is older than `queue.retry_after`, the next `pop()` reclaims it, and the lost run still counts as an attempt. If the reclaimed job has already used all its attempts, `pop()` moves it to `failed_jobs` with the message "exceeded max attempts after worker crash or timeout" and moves on to the next job. A job that always crashes its worker can't loop forever.
+
+`marko queue:retry` resets the attempt count, so a retried job gets its full `maxAttempts` again.
+
+### PostgreSQL and Payload Encoding
+
+Payloads use the base64 [envelope format](/docs/packages/queue/#payload-envelope-format). Jobs with private or protected properties therefore store safely in PostgreSQL `TEXT` columns, which reject the NUL bytes that `serialize()` emits. Rows written in the legacy raw format are still read correctly.
+
 ## API Reference
 
 ### DatabaseQueue
 
-Implements `QueueInterface`. Constructor accepts a `ConnectionInterface` connection, a `JobEnvelope`, an optional table name (defaults to `jobs`), an optional default queue name (defaults to `default`), and an optional `retryAfter` timeout in seconds (defaults to `90` — overridden at runtime via `queue.retry_after` config).
+Implements `QueueInterface`. The constructor accepts:
+
+- a `ConnectionInterface` connection
+- a `JobEnvelope`
+- a `FailedJobRepositoryInterface`, used to fail jobs that exhaust their attempts through crashed reservations
+- an optional table name (`jobs`)
+- an optional default queue name
+- an optional `retryAfter` timeout in seconds
+- an optional default `maxAttempts`
+
+The module factory sets the last three from `queue.queue`, `queue.retry_after` and `queue.max_attempts`.
 
 On MySQL and PostgreSQL, `pop()` uses `FOR UPDATE SKIP LOCKED` inside a transaction to atomically claim the next available job, making it safe to run multiple concurrent workers. Jobs whose `reserved_at` timestamp is older than `retry_after` seconds are treated as crashed and become eligible for re-reservation.
 
@@ -89,11 +108,11 @@ On MySQL and PostgreSQL, `pop()` uses `FOR UPDATE SKIP LOCKED` inside a transact
 |---|---|
 | `push(JobInterface $job, ?string $queue = null): string` | Insert a job for immediate processing. Returns the job ID. |
 | `later(int $delay, JobInterface $job, ?string $queue = null): string` | Insert a job with a delay in seconds. Returns the job ID. |
-| `pop(?string $queue = null): ?JobInterface` | Retrieve and reserve the next available job, or `null` if empty. Uses transactions when the connection supports `TransactionInterface`. |
+| `pop(?string $queue = null): ?JobInterface` | Retrieve and reserve the next available job, or `null` if empty. Increments the `attempts` column, syncs the job's attempt count with earlier unreleased reservations, and moves crash-exhausted jobs to `failed_jobs`. Uses transactions when the connection supports `TransactionInterface`. |
 | `size(?string $queue = null): int` | Count pending (unreserved, available) jobs. |
 | `clear(?string $queue = null): int` | Delete all jobs in a queue. Returns the number of deleted rows. |
 | `delete(string $jobId): bool` | Delete a specific job by ID. |
-| `release(string $jobId, int $delay = 0): bool` | Release a reserved job back to the queue with an optional delay. |
+| `release(string $jobId, int $delay = 0): bool` | Release a reserved job back to the queue with an optional delay. Rewrites the payload with the persisted attempt count. |
 
 ### DatabaseFailedJobRepository
 

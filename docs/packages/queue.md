@@ -27,6 +27,12 @@ return [
 ];
 ```
 
+### Payload Envelope Format
+
+`JobEnvelope` wraps every stored payload as `{hmac}.b64:{base64(serialize(job))}`. The 64-character hex HMAC-SHA256 covers everything after the `.` separator, including the `b64:` marker. PHP's `serialize()` writes NUL bytes for private and protected properties. Base64 keeps the payload 7-bit clean, so it fits in a PostgreSQL `TEXT` column, which can't store `\0`.
+
+The legacy format, `{hmac}.{raw serialized bytes}`, is still accepted when unwrapping. Jobs queued before the base64 format was introduced keep working after an upgrade. New payloads are always written in the base64 format. The same envelope is used for queued jobs, failed-job payloads and `AsyncObserverJob` event data, and by every driver.
+
 ## Usage
 
 ### Creating Jobs
@@ -49,14 +55,14 @@ readonly class SendWelcomeEmail extends Job
 }
 ```
 
-Set `maxAttempts` to control retry behavior (defaults to 3):
+By default a job is attempted `queue.max_attempts` times (see [Configuration](#configuration)). Override `maxAttempts` on a job to give it its own limit. The property is `?int`: `null` (the default on `Job`) means "use the config value".
 
 ```php
 use Marko\Queue\Job;
 
 class ImportProducts extends Job
 {
-    protected(set) int $maxAttempts = 5;
+    public protected(set) ?int $maxAttempts = 5;
 
     public function handle(): void
     {
@@ -65,7 +71,9 @@ class ImportProducts extends Job
 }
 ```
 
-When a job fails and has remaining attempts, the worker releases it back to the queue with exponential backoff (`2^attempts * 10` seconds). Once all attempts are exhausted, the job is stored in the failed job repository.
+When a job fails and has remaining attempts, the worker releases it back to the queue with exponential backoff (`2^attempts * 10` seconds). Once all attempts are exhausted, the job is stored in the failed job repository and removed from the queue.
+
+Attempts persist across releases: the driver stores the updated count with the job, so a job that always throws is attempted exactly `maxAttempts` times. Drivers that track reservations (such as [`marko/queue-database`](/docs/packages/queue-database/)) also count an attempt whose worker died mid-run, so a job that crashes its worker cannot be retried forever.
 
 ### Jobs That Need Container Services
 
@@ -153,6 +161,8 @@ marko queue:work --queue=emails
 marko queue:work --once
 ```
 
+`marko/queue` binds `WorkerInterface` to the built-in `Worker`, so `queue:work` resolves once a driver is installed. You don't need to bind it yourself. To replace the worker, bind `WorkerInterface` to your own class in your module's `module.php`, or use a Preference on `Worker`.
+
 ### Managing Failed Jobs
 
 | Command | Description |
@@ -180,9 +190,9 @@ return [
 |-----|---------|-------------|
 | `driver` | `sync` | Queue backend: `sync`, `database`, or `rabbitmq` |
 | `connection` | `default` | Named connection passed to the driver |
-| `queue` | `default` | Default queue name |
-| `retry_after` | `90` | Seconds after which a reserved job that has not been deleted or released is considered crashed and becomes eligible for re-reservation |
-| `max_attempts` | `3` | How many times a job is attempted before it is moved to the failed-job store |
+| `queue` | `default` | Default queue name, used by `push()`, `later()` and `pop()` when no queue is given |
+| `retry_after` | `90` | Seconds after which a reserved job that has not been deleted or released is considered crashed and becomes eligible for re-reservation. The reclaimed reservation still counts as an attempt |
+| `max_attempts` | `3` | How many times a job is attempted before it is moved to the failed-job store. A job's own `maxAttempts`, when set, takes precedence |
 
 The `QueueConfig` class provides typed access to these values:
 
@@ -230,7 +240,7 @@ use Marko\Queue\JobInterface;
 
 public ?string $id { get; }
 public int $attempts { get; }
-public int $maxAttempts { get; }
+public ?int $maxAttempts { get; } // null = use queue.max_attempts
 public function handle(): void;
 public function setId(string $id): void;
 public function incrementAttempts(): void;
@@ -294,3 +304,4 @@ Implement this interface on any job class that needs to resolve services from th
 | `QueueException` | Base exception for all queue errors --- includes `getContext()` and `getSuggestion()` methods |
 | `JobFailedException` | Thrown when a job fails during execution |
 | `SerializationException` | Thrown when a job payload cannot be serialized or deserialized, when `encryption.key` is empty, or when an HMAC signature does not match (tampered payload) |
+| `NoDriverException` | Thrown when a queue interface can't be resolved. For `QueueInterface` and `FailedJobRepositoryInterface` it lists the driver packages to install. For any other queue interface it names the interface that has no binding and tells you to bind it in `module.php` |
