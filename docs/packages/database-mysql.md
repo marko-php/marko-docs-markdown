@@ -110,7 +110,7 @@ class MyService
 | `prepare(string $sql): StatementInterface` | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Get the last auto-increment ID |
 | `connect(): void` | Explicitly open the database connection |
-| `disconnect(): void` | Close the connection |
+| `disconnect(): void` | Close the connection and discard the transaction depth and pending callbacks |
 | `isConnected(): bool` | Check whether the connection is open |
 
 ### Transactions
@@ -119,12 +119,21 @@ class MyService
 
 | Method | Description |
 |---|---|
-| `beginTransaction(): void` | Start a transaction (throws on nested transactions) |
-| `commit(): void` | Commit the current transaction |
-| `rollback(): void` | Roll back the current transaction |
+| `beginTransaction(): void` | Start a transaction, or `SAVEPOINT marko_sp_N` when one is open |
+| `commit(): void` | Commit the innermost level (`RELEASE SAVEPOINT` when nested); throws `TransactionException` when none is open |
+| `rollback(): void` | Roll back the innermost level (`ROLLBACK TO SAVEPOINT` when nested); throws `TransactionException` when none is open |
 | `inTransaction(): bool` | Check whether a transaction is active |
-| `transaction(callable $callback): mixed` | Execute a callback inside a transaction --- auto-commits on success, rolls back on exception |
-| `reset(): void` | Roll back a transaction left open by a failed request; never opens a connection |
+| `transactionLevel(): int` | Number of open levels (0 outside a transaction) |
+| `transaction(callable $callback): mixed` | Execute a callback inside a transaction (a savepoint when nested) --- auto-commits on success, rolls back on exception |
+| `afterCommit(callable $callback): void` | Run the callback after the outermost commit (immediately outside a transaction) |
+| `afterRollback(callable $callback): void` | Run the callback if its level rolls back |
+| `reset(): void` | Roll back every level left open by a failed request and drop pending callbacks; never opens a connection |
+
+See [Nested Transactions](/docs/packages/database/#nested-transactions) and [After-Commit Callbacks](/docs/packages/database/#after-commit-callbacks).
+
+:::caution
+MySQL commits implicitly before any DDL statement (`CREATE`, `ALTER`, `DROP`, `TRUNCATE`, ...). Running one inside a transaction ends it on the server while Marko still counts it as open, and the next `commit()` or `rollback()` fails. Keep schema changes out of transactions.
+:::
 
 ### Query Builder
 
@@ -167,6 +176,17 @@ class MyService
 | `whereJsonExists(string $path): static` | WHERE JSON key/path exists |
 | `whereJsonMissing(string $path): static` | WHERE JSON key/path does not exist |
 | `raw(string $sql, array $bindings = []): array` | Execute raw SQL |
+| `lockForUpdate(): static` | Append `FOR UPDATE` (requires an open transaction) |
+| `sharedLock(): static` | Append `LOCK IN SHARE MODE`, or `FOR SHARE` with a modifier (requires an open transaction) |
+| `skipLocked(): static` | Append `SKIP LOCKED` to the lock |
+| `noWait(): static` | Append `NOWAIT` to the lock |
+| `upsert(array $rows, array $uniqueBy, ?array $update = null): int` | `INSERT ... ON DUPLICATE KEY UPDATE col = VALUES(col)`; returns the affected-row count (2 per updated row) |
+
+#### Locking and upsert on MySQL and MariaDB
+
+- `sharedLock()` compiles to `LOCK IN SHARE MODE`, which MySQL and MariaDB both accept. `LOCK IN SHARE MODE` takes no modifiers, so `sharedLock()->skipLocked()` / `->noWait()` compiles to `FOR SHARE SKIP LOCKED` / `FOR SHARE NOWAIT`, which needs MySQL 8.0+. MariaDB does not support `FOR SHARE`. `SKIP LOCKED` needs MariaDB 10.6+.
+- `upsert()` resolves a conflict against **any** unique index or primary key the row violates, not only the `$uniqueBy` columns, which shape only the default update list. An empty update list compiles to a no-op assignment (`col = col`) instead of `INSERT IGNORE`, so unrelated errors still surface.
+- `upsert()` uses `VALUES(col)` rather than the row alias added in MySQL 8.0.19, because MariaDB supports only `VALUES()`. MySQL 8.0.20+ reports `VALUES()` as deprecated but still runs it.
 
 ### MySqlExceptionTranslator
 

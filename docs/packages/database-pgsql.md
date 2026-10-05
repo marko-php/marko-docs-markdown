@@ -104,7 +104,11 @@ $connection->transaction(function () use ($connection): void {
 });
 ```
 
-Nested transactions are not supported --- calling `beginTransaction()` while already in a transaction throws `TransactionException`.
+Transactions nest: a `beginTransaction()` (or `transaction()`) inside an open transaction issues `SAVEPOINT marko_sp_N`, and the matching `commit()` / `rollback()` issues `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT`. Rolling back to a savepoint also clears PostgreSQL's "current transaction is aborted" state, so the outer transaction can carry on after a failed statement in a nested one. See [Nested Transactions](/docs/packages/database/#nested-transactions) and [After-Commit Callbacks](/docs/packages/database/#after-commit-callbacks).
+
+Row locks compile to `FOR UPDATE` / `FOR SHARE`, with optional `SKIP LOCKED` / `NOWAIT`, appended after `LIMIT`/`OFFSET`. PostgreSQL rejects `FOR UPDATE` together with `DISTINCT`, `GROUP BY` or `HAVING`, and on the nullable side of an outer join.
+
+`upsert()` compiles to `INSERT ... ON CONFLICT (...) DO UPDATE SET col = EXCLUDED.col`, or `DO NOTHING` when there is nothing to update. PostgreSQL requires a unique index or constraint on exactly the `$uniqueBy` columns, and rejects a batch that contains the same conflict key twice (`ON CONFLICT DO UPDATE command cannot affect row a second time`). A statement can bind at most 65,535 values, so split very large batches.
 
 ## Driver-Specific Notes
 
@@ -172,18 +176,21 @@ Implements `ConnectionInterface`, `TransactionInterface` and `ResettableInterfac
 | Method | Description |
 |---|---|
 | `connect(): void` | Establish the PDO connection (called automatically) |
-| `disconnect(): void` | Close the connection |
+| `disconnect(): void` | Close the connection and discard the transaction depth and pending callbacks |
 | `isConnected(): bool` | Check if currently connected |
 | `query(string $sql, array $bindings = []): array` | Execute a query and return rows as associative arrays |
 | `execute(string $sql, array $bindings = []): int` | Execute a statement and return the affected row count |
 | `prepare(string $sql): StatementInterface` | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Get the last inserted ID |
-| `beginTransaction(): void` | Start a transaction |
-| `commit(): void` | Commit the current transaction |
-| `rollback(): void` | Roll back the current transaction |
+| `beginTransaction(): void` | Start a transaction, or a savepoint when one is open |
+| `commit(): void` | Commit the innermost level (`RELEASE SAVEPOINT` when nested); throws `TransactionException` when none is open |
+| `rollback(): void` | Roll back the innermost level (`ROLLBACK TO SAVEPOINT` when nested); throws `TransactionException` when none is open |
 | `inTransaction(): bool` | Check if a transaction is active |
-| `transaction(callable $callback): mixed` | Execute a callback inside an auto-managed transaction |
-| `reset(): void` | Roll back a transaction left open by a failed request; never opens a connection |
+| `transactionLevel(): int` | Number of open levels (0 outside a transaction) |
+| `transaction(callable $callback): mixed` | Execute a callback inside an auto-managed transaction (a savepoint when nested) |
+| `afterCommit(callable $callback): void` | Run the callback after the outermost commit (immediately outside a transaction) |
+| `afterRollback(callable $callback): void` | Run the callback if its level rolls back |
+| `reset(): void` | Roll back every level left open by a failed request and drop pending callbacks; never opens a connection |
 
 ### PgSqlStatement
 
@@ -245,6 +252,11 @@ Implements `QueryBuilderInterface`. Fluent builder for PostgreSQL queries.
 | `whereJsonExists(string $path): static` | WHERE JSON key/path exists |
 | `whereJsonMissing(string $path): static` | WHERE JSON key/path does not exist |
 | `raw(string $sql, array $bindings = []): array` | Execute a raw SQL query |
+| `lockForUpdate(): static` | Append `FOR UPDATE` (requires an open transaction) |
+| `sharedLock(): static` | Append `FOR SHARE` (requires an open transaction) |
+| `skipLocked(): static` | Append `SKIP LOCKED` to the lock |
+| `noWait(): static` | Append `NOWAIT` to the lock |
+| `upsert(array $rows, array $uniqueBy, ?array $update = null): int` | `INSERT ... ON CONFLICT (...) DO UPDATE` / `DO NOTHING`; returns the affected-row count |
 
 ### PgSqlConnectionFactory
 

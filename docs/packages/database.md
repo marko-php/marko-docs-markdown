@@ -932,7 +932,136 @@ class CheckoutService
 
 The entity hydrator is shared the same way. An entity loaded by one repository and saved by another is still recognised as an existing entity, and only its changed columns are written.
 
-Under a long-running worker, the connection's `reset()` (from `ResettableInterface`) runs between requests. It rolls back any transaction a failed request left open, so the next request never inherits it.
+Under a long-running worker, the connection's `reset()` (from `ResettableInterface`) runs between requests. It rolls back any transaction a failed request left open, every nested level included, and drops its pending callbacks, so the next request never inherits it.
+
+### Nested Transactions
+
+Transactions nest, so a service that wraps its work in `transaction()` can be called from another service that does the same. The outermost call opens a real transaction (`BEGIN`). Each nested call opens a savepoint (`SAVEPOINT marko_sp_1`, `marko_sp_2`, ...). An inner `commit()` releases its savepoint, and only the outermost `commit()` makes the data durable. An inner `rollback()` returns to its savepoint, which undoes only the inner work:
+
+```php title="app/billing/Service/CheckoutService.php"
+public function checkout(Invoice $invoice, Payment $payment): void
+{
+    $this->transaction->transaction(function () use ($invoice, $payment): void {
+        $this->invoices->save($invoice);
+
+        try {
+            // LoyaltyService::award() runs its own transaction(); here it becomes a savepoint.
+            $this->loyalty->award($invoice);
+        } catch (LoyaltyException) {
+            // Only the loyalty writes are rolled back; the invoice is still saved.
+        }
+
+        $this->payments->save($payment);
+    });
+}
+```
+
+An exception that escapes the outer callback rolls back everything, inner work included. `transactionLevel()` reports the depth: `0` outside a transaction, `1` inside the outermost one, `2` inside the first savepoint. `commit()` or `rollback()` with no open transaction throws `TransactionException`.
+
+### After-Commit Callbacks
+
+Side effects such as pushing a job, sending mail, invalidating a cache or broadcasting must not happen until the data they refer to is committed. A worker could otherwise pick up the job before the row is visible, or after it was rolled back. Register them with `afterCommit()`:
+
+```php title="app/billing/Service/CheckoutService.php"
+$this->transaction->transaction(function () use ($invoice): void {
+    $this->invoices->save($invoice);
+
+    $this->transaction->afterCommit(
+        fn () => $this->queue->push(new SendReceipt($invoice->id)),
+    );
+});
+```
+
+- Inside a transaction, the callback is queued and runs once the **outermost** transaction commits, after `COMMIT` has returned.
+- Outside a transaction, it runs immediately, so code that registers callbacks works whether or not a caller opened a transaction.
+- A callback registered inside a level that rolls back never runs. This includes a savepoint that is rolled back while the outer transaction later commits.
+- An exception thrown by a callback propagates to the code that called the outermost `commit()` or `transaction()`, and the remaining callbacks do not run. **The data is already committed when this happens**, so handle the failure in the callback (retry, log, or queue it) rather than treating it as a rollback.
+
+`afterRollback()` is the counterpart. Its callback runs when the level it was registered in rolls back, either directly or because an enclosing level rolls back. Outside a transaction there is nothing to roll back, so the callback is discarded. Pending callbacks are dropped without running when the connection is reset or disconnected.
+
+:::note
+`DatabaseTestHelper` (and any test that wraps each case in a transaction that is rolled back afterwards) never commits, so after-commit callbacks registered inside such a test never run. Assert on them by committing a real transaction, or by calling the code outside the test transaction.
+:::
+
+### Row Locks
+
+Read-modify-write sequences, such as counters, inventory or state machines, need the rows they read to stay put until they write. Lock them from the query builder inside a transaction:
+
+```php title="app/inventory/Service/StockService.php"
+public function reserve(int $productId, int $quantity): void
+{
+    $this->transaction->transaction(function () use ($productId, $quantity): void {
+        $stock = $this->stockRepository->query()
+            ->where('product_id', '=', $productId)
+            ->lockForUpdate()
+            ->firstEntity();
+
+        if ($stock === null || $stock->available < $quantity) {
+            throw StockException::insufficient($productId, $quantity);
+        }
+
+        $stock->available -= $quantity;
+        $this->stockRepository->save($stock);
+    });
+}
+```
+
+| Method | PostgreSQL | MySQL / MariaDB |
+|--------|------------|-----------------|
+| `lockForUpdate()` | `FOR UPDATE` | `FOR UPDATE` |
+| `sharedLock()` | `FOR SHARE` | `LOCK IN SHARE MODE` (`FOR SHARE` when combined with a modifier) |
+| `skipLocked()` | `SKIP LOCKED` | `SKIP LOCKED` |
+| `noWait()` | `NOWAIT` | `NOWAIT` |
+
+`lockForUpdate()` blocks other transactions from updating, deleting or locking the rows. `sharedLock()` lets other transactions read and share-lock them but not change them. Add `skipLocked()` to return only the rows nobody else holds, which is useful for work queues. Add `noWait()` to fail immediately with a database error instead of waiting.
+
+These misuses throw `LockException`:
+
+- **Outside a transaction.** A locked `get()` or `first()` with no open transaction (or on a connection that does not implement `TransactionInterface`) throws. The lock would be released as soon as the `SELECT` finished, which is almost always a bug.
+- **A modifier without a lock.** `skipLocked()` or `noWait()` without `lockForUpdate()` / `sharedLock()` throws. So does combining `skipLocked()` with `noWait()`.
+- **Aggregates and unions.** A lock cannot be combined with `count()`, `min()`, `max()`, `sum()`, `avg()` or `union()` / `unionAll()`. Lock the rows with `get()` and aggregate them afterwards.
+
+Locks apply to the rows the query itself selects. Relationships loaded with `with()` are fetched by separate, unlocked queries. On PostgreSQL, `FOR UPDATE` also cannot be combined with `DISTINCT`, `GROUP BY` or `HAVING`, and the database rejects the query.
+
+## Upsert
+
+`upsert()` inserts rows, or updates the existing row when one already has the same values in the conflict columns, in a single statement. Use it instead of "select, then insert or update", which races.
+
+```php
+$affected = $this->queryBuilderFactory->create()
+    ->table('subscribers')
+    ->upsert(
+        rows: [
+            ['email' => 'ada@example.com', 'name' => 'Ada', 'visits' => 1],
+            ['email' => 'alan@example.com', 'name' => 'Alan', 'visits' => 1],
+        ],
+        uniqueBy: ['email'],
+        update: ['name', 'visits'],
+    );
+```
+
+- Every row must have the same columns in the same order. Each `$uniqueBy` and `$update` column must be one of them.
+- `$update` defaults to `null`, which updates every inserted column except the `$uniqueBy` ones. Pass a list to update only those columns. Pass `[]` to insert new rows and leave existing ones untouched.
+- The return value is the affected-row count as the driver reports it. MySQL counts an updated row as 2 and an unchanged one as 0, so don't compare counts across drivers.
+- `UpsertException` is thrown for empty rows, an empty `$uniqueBy`, rows with different columns, or a `$uniqueBy`/`$update` column that isn't in the rows.
+
+Conflict detection differs by driver:
+
+- **PostgreSQL** compiles to `INSERT ... ON CONFLICT (unique columns) DO UPDATE SET col = EXCLUDED.col` (`DO NOTHING` for an empty update list). It needs a unique index or constraint on exactly the `$uniqueBy` columns. It rejects a batch that contains the same conflict key twice.
+- **MySQL / MariaDB** compiles to `INSERT ... ON DUPLICATE KEY UPDATE col = VALUES(col)`. MySQL resolves a conflict against **any** unique index or primary key the row violates, so `$uniqueBy` only shapes the default update list. An empty update list becomes a no-op assignment, never `INSERT IGNORE`, so other errors still surface.
+
+### Repository Upsert
+
+`Repository::upsert(array $entities, array $uniqueBy, ?array $update = null): int` upserts entities through the query builder. It requires a configured query builder factory, which the container provides. `$uniqueBy` and `$update` name entity **properties**, never columns. The conflict properties are always given explicitly and are never inferred:
+
+```php
+$postRepository->upsert($posts, uniqueBy: ['slug']);
+```
+
+- With `$update = null`, every property except the `$uniqueBy` ones, the primary key and the `#[Timestamps]` created-at property is updated.
+- `#[Timestamps]` are applied first: created-at is filled when unset, and updated-at is set to now.
+- The batch rules of `insertBatch()` apply: the same entity class, no companions, and identical column sets. An auto-increment key must be either set on every entity or on none.
+- Upsert does not fire lifecycle events, set generated ids or register entities for dirty tracking, because it can't tell which rows were inserted and which were updated. Load the entities again with `findBy()` when you need them.
 
 :::caution
 Depend on `ConnectionInterface` or `TransactionInterface`, never on `MySqlConnection` or `PgSqlConnection` directly. Only the interfaces are shared. Requesting a concrete connection class builds a new, separate connection that is outside every transaction. It also bypasses `marko/database-readwrite` when that package is enabled.
@@ -1056,7 +1185,7 @@ try {
 
 ## Bulk Insert
 
-`Repository::insertBatch(array $entities): void` inserts multiple entities in a single multi-row `INSERT` statement, wrapped in a transaction. It fires `EntityCreating` and `EntityCreated` events for each entity.
+`Repository::insertBatch(array $entities): void` inserts multiple entities in a single multi-row `INSERT` statement, run through `transaction()` (a savepoint when a transaction is already open). It fires `EntityCreating` and `EntityCreated` events for each entity.
 
 ```php
 use App\Blog\Entity\Post;

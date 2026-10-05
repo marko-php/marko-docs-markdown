@@ -119,7 +119,7 @@ The sticky flag is set by:
 
 - `execute()` — any INSERT, UPDATE, DELETE, or DDL statement
 - `beginTransaction()` — entering a transaction
-- `transaction(callable $callback)` — the entire callback runs on the primary; the sticky flag is cleared automatically when the callback completes
+- `transaction(callable $callback)` — the entire callback runs on the primary; when the callback completes, the sticky flag goes back to what it was before the call. A nested `transaction()` therefore leaves the outer transaction's reads on the primary.
 
 ```php
 use Marko\Database\Connection\ConnectionInterface;
@@ -147,6 +147,8 @@ class OrderService
     }
 }
 ```
+
+Row-locking reads (`lockForUpdate()`, `sharedLock()`) must run inside a transaction, so they always reach the primary. `upsert()` is an `INSERT` and is routed to the primary too.
 
 The sticky flag persists until `resetStickyState()` is called. In a PHP-FPM application this happens automatically because each request runs in a fresh process. In long-running processes you must call it manually (see [Long-Running Processes](#long-running-processes)).
 
@@ -183,7 +185,7 @@ In PHP-FPM the sticky flag is cleared automatically at the end of each request b
 
 `ReadWriteConnection` also implements `Marko\Core\Contracts\ResettableInterface`, so a worker that resets every registered `ResettableInterface` implementation between requests will clear the sticky flag automatically via `reset()`. Calling `resetStickyState()` directly remains supported for callers that don't go through the contract.
 
-Beyond clearing the sticky flag, `reset()` also rolls back any transaction left open by a request that called `beginTransaction()` directly and then threw before `commit()`/`rollback()`. Without this, the underlying write connection stays mid-transaction on the pooled connection, and the next request's writes would silently land inside the previous request's abandoned transaction. The rollback only runs when a transaction is actually open; if the rollback itself throws, the sticky flag is still cleared before the exception propagates, so the connection is never left permanently sticky even when a reset only partially succeeds.
+Beyond clearing the sticky flag, `reset()` also rolls back any transaction left open by a request that called `beginTransaction()` directly and then threw before `commit()`/`rollback()`. When the write connection is itself resettable (the MySQL and PostgreSQL drivers are), `reset()` delegates to it, which rolls back every nested level and drops pending after-commit callbacks. Otherwise it calls `rollback()` once per open level, innermost first. Without this, the underlying write connection stays mid-transaction on the pooled connection, and the next request's writes would silently land inside the previous request's abandoned transaction. The rollback only runs when a transaction is actually open; if the rollback itself throws, the sticky flag is still cleared before the exception propagates, so the connection is never left permanently sticky even when a reset only partially succeeds.
 
 ```php
 use Marko\Database\ReadWrite\Connection\ReadWriteConnection;
@@ -255,10 +257,13 @@ Implements `ConnectionInterface`, `TransactionInterface`, and `ResettableInterfa
 | `commit(): void` | Write | Commit the current transaction |
 | `rollback(): void` | Write | Roll back the current transaction |
 | `inTransaction(): bool` | Write | Check if a transaction is active |
-| `transaction(callable $callback): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction; sticky flag is set for the callback duration and cleared on completion |
+| `transactionLevel(): int` | Write | Number of open transaction levels (savepoints included) |
+| `transaction(callable $callback): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction (a savepoint when nested); the sticky flag is set for the callback duration and restored to its previous value afterwards |
+| `afterCommit(callable $callback): void` | Write | Run the callback after the write connection's outermost commit |
+| `afterRollback(callable $callback): void` | Write | Run the callback if its transaction level rolls back |
 | `driverName(): string` | Write (delegates) | Return the write connection's driver name (e.g. `'mysql'`, `'pgsql'`) |
 | `resetStickyState(): void` | — | Clear the sticky flag; subsequent reads route to replicas again |
-| `reset(): void` | — | `ResettableInterface` contract method; rolls back an open transaction (if any) and clears the sticky flag |
+| `reset(): void` | — | `ResettableInterface` contract method; rolls back every open transaction level (delegating to a resettable write connection) and clears the sticky flag |
 
 ### ReadException
 
