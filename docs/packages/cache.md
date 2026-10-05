@@ -157,7 +157,7 @@ public function increment(string $key, int $ttl): int;
 
 All methods that accept keys throw `InvalidKeyException` for empty or invalid keys.
 
-`increment()` atomically increments the integer stored at `$key` and returns the new value. If the key does not exist it is created with value `1` and the TTL is applied at that moment. On subsequent increments the TTL is **not** reset --- resetting on every call would turn a fixed rate-limit window into a never-closing window.
+`increment()` atomically increments the integer stored at `$key` and returns the new value. If the key does not exist it is created with value `1` and the TTL is applied at that moment. On subsequent increments the TTL is **not** reset --- resetting on every call would turn a fixed rate-limit window into a never-closing window. The counter is a plain integer: on every driver, `get()`, `getItem()` and `getMultiple()` return an incremented key as an `int`.
 
 ### CacheItemInterface
 

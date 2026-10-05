@@ -111,7 +111,7 @@ Implements all methods from `CacheInterface`. See [`marko/cache`](/docs/packages
 | `getMultiple(array $keys, mixed $default = null): iterable` | Retrieve multiple values at once |
 | `setMultiple(array $values, ?int $ttl = null): bool` | Store multiple key-value pairs at once |
 | `deleteMultiple(array $keys): bool` | Remove multiple entries at once |
-| `increment(string $key, int $ttl): int` | Atomically increment an integer counter; TTL applied only on first increment |
+| `increment(string $key, int $ttl): int` | Atomically increment an integer counter and apply its TTL in one step; an existing TTL is never reset |
 
 ### RedisConnection
 
@@ -126,5 +126,6 @@ Implements all methods from `CacheInterface`. See [`marko/cache`](/docs/packages
 
 - Values are serialized with PHP's `serialize()`, wrapped in an HMAC-SHA256 envelope, and stored as Redis strings. Reads verify the HMAC before deserializing; tampered or corrupted entries throw `TamperedCacheValueException`.
 - A `null` TTL falls back to `default_ttl` from config. A TTL greater than `0` uses Redis `SETEX` for native expiration. A TTL of `0` or less means the entry never expires.
-- `increment()` uses Redis `INCR` (atomic). The TTL is set only when the key is first created (count reaches `1`); subsequent increments do not reset it.
+- `increment()` runs `INCR` and `EXPIRE` together in one Lua script (`EVAL`), so a crash can never leave a counter without an expiry. The TTL is set when the key is created (count reaches `1`), and is restored if the key somehow has none. Subsequent increments do not reset it, so the window stays fixed.
+- Counters are plain integers, not signed envelopes, because Redis writes them itself. `get()`, `getItem()` and `getMultiple()` return them as `int`, which is what [`marko/ratelimiter`](/docs/packages/ratelimiter/) relies on. Only values that are entirely an optional `-` followed by digits are read this way. They are never passed to `unserialize()`, and every other value must still carry a valid HMAC.
 - `clear()` removes only keys matching the configured prefix --- other Redis data is not affected.
