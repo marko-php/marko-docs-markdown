@@ -44,7 +44,7 @@ The error page will display:
 - **Production** --- Generic "An error occurred" page with no file paths, source code, trace, or request data
 - **CLI** --- Plain text output via the text formatter
 
-The module binds `ErrorHandlerInterface` with a closure that passes the container's `Environment` (from [marko/errors-simple](/docs/packages/errors-simple/)) to `AdvancedErrorHandler`, which builds its `PrettyHtmlFormatter` for that environment --- so the production page is the one actually served when `MARKO_ENV` (or `APP_ENV`) is `production`.
+Detection uses core's [`AppEnvironment`](/docs/packages/core/#application-environment), exactly like [marko/errors-simple](/docs/packages/errors-simple/#setting-environment-mode): `MARKO_ENV` (falling back to `APP_ENV`) set to `development`, `dev` or `local` shows full details; any other value --- `production`, `staging`, or no value at all --- renders the generic page. The module binds `ErrorHandlerInterface` with a closure that wraps the container's shared `AppEnvironment` in an errors-simple `Environment` and passes it to `AdvancedErrorHandler`, which builds its `PrettyHtmlFormatter` from the same `AppEnvironment`, so both error handlers always agree.
 
 ### Status Codes and JSON
 
@@ -67,6 +67,7 @@ These appear as `********` in the error output. Masking is handled by `RequestDa
 
 ```php title="app/web/module.php"
 use Marko\Core\Container\ContainerInterface;
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Errors\Contracts\ErrorHandlerInterface;
 use Marko\ErrorsAdvanced\AdvancedErrorHandler;
 use Marko\ErrorsSimple\Environment;
@@ -75,12 +76,12 @@ use App\Web\Errors\CustomHtmlFormatter;
 return [
     'bindings' => [
         ErrorHandlerInterface::class => function (ContainerInterface $container): ErrorHandlerInterface {
-            $environment = $container->get(Environment::class);
+            $appEnvironment = $container->get(AppEnvironment::class);
 
             return new AdvancedErrorHandler(
-                environment: $environment,
+                environment: new Environment(appEnvironment: $appEnvironment),
                 prettyHtmlFormatter: new CustomHtmlFormatter(
-                    environment: $environment->isProduction() ? 'production' : 'development',
+                    environment: $appEnvironment,
                 ),
             );
         },
@@ -88,7 +89,7 @@ return [
 ];
 ```
 
-Pass the real environment to any `PrettyHtmlFormatter` subclass --- its `environment` parameter defaults to `'development'`.
+A `PrettyHtmlFormatter` subclass takes the same `AppEnvironment`. When none is passed it builds one that reads the real `MARKO_ENV`/`APP_ENV`, so an unconfigured formatter fails safe to the generic page.
 
 ## API Reference
 
@@ -120,11 +121,19 @@ class AdvancedErrorHandler implements ErrorHandlerInterface
 Renders the rich HTML error page in development and a safe generic page in production. Implements `FormatterInterface` from [marko/errors](/docs/packages/errors/).
 
 ```php
+use Marko\Core\Environment\AppEnvironment;
 use Marko\Errors\Contracts\FormatterInterface;
 use Marko\Errors\ErrorReport;
 
 class PrettyHtmlFormatter implements FormatterInterface
 {
+    public function __construct(
+        ?SyntaxHighlighter $highlighter = null,
+        AppEnvironment $environment = new AppEnvironment(), // details only for development, dev or local
+        ?RequestDataCollector $requestCollector = null,
+        int $contextLines = 3,
+    );
+
     public function format(ErrorReport $report): string;
 }
 ```

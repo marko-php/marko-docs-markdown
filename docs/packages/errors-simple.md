@@ -191,14 +191,22 @@ class SimpleErrorHandler implements ErrorHandlerInterface
 ### Environment
 
 ```php
+use Marko\Core\Environment\AppEnvironment;
+
 class Environment
 {
-    public function __construct(?string $sapi = null, ?array $envVars = null, ?array $server = null);
+    public function __construct(
+        ?string $sapi = null,
+        ?array $envVars = null,
+        ?array $server = null,
+        ?AppEnvironment $appEnvironment = null, // defaults to an AppEnvironment built from $envVars
+    );
 
     public function isCli(): bool;
     public function isWeb(): bool;
-    public function isDevelopment(): bool;
-    public function isProduction(): bool;
+    public function isDevelopment(): bool; // delegates to AppEnvironment::isDevelopment()
+    public function isProduction(): bool; // !isDevelopment(): unset, staging, etc. hide details
+    public function appEnvironment(): AppEnvironment;
     public function acceptsJson(): bool; // reads $server, defaulting to $_SERVER
 }
 ```
