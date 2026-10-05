@@ -115,7 +115,7 @@ class MyService
 
 ### Transactions
 
-`MySqlConnection` also implements `TransactionInterface`:
+`MySqlConnection` also implements `TransactionInterface` and `ResettableInterface`. The driver module registers one shared instance per request (per worker under a long-running runtime), and `TransactionInterface` resolves to that same instance. See [Transactions](/docs/packages/database/#transactions).
 
 | Method | Description |
 |---|---|
@@ -124,6 +124,7 @@ class MyService
 | `rollback(): void` | Roll back the current transaction |
 | `inTransaction(): bool` | Check whether a transaction is active |
 | `transaction(callable $callback): mixed` | Execute a callback inside a transaction --- auto-commits on success, rolls back on exception |
+| `reset(): void` | Roll back a transaction left open by a failed request; never opens a connection |
 
 ### Query Builder
 

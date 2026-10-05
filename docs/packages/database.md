@@ -735,6 +735,53 @@ class PublishedWithAuthorSpec implements QuerySpecification
 
 The caller does not need to know which relationships the spec requires --- they are encapsulated inside it.
 
+## Transactions
+
+The database driver (`marko/database-mysql` or `marko/database-pgsql`) registers `ConnectionInterface` as a shared instance: one connection, and one PDO handle, per request. Under a long-running worker such as `marko/roadrunner`, the same connection is reused for every request the worker serves. Every repository, the query builder, `marko/queue-database` and any service that injects `ConnectionInterface` all use that one connection. As a result, a transaction covers every write made through any of them.
+
+Inject `TransactionInterface` to run a unit of work atomically. It resolves to the same shared connection:
+
+```php title="app/billing/Service/CheckoutService.php"
+<?php
+
+declare(strict_types=1);
+
+namespace App\Billing\Service;
+
+use App\Billing\Entity\Invoice;
+use App\Billing\Entity\Payment;
+use App\Billing\Repository\InvoiceRepository;
+use App\Billing\Repository\PaymentRepository;
+use Marko\Database\Connection\TransactionInterface;
+
+class CheckoutService
+{
+    public function __construct(
+        private TransactionInterface $transaction,
+        private InvoiceRepository $invoices,
+        private PaymentRepository $payments,
+    ) {}
+
+    public function checkout(Invoice $invoice, Payment $payment): void
+    {
+        $this->transaction->transaction(function () use ($invoice, $payment): void {
+            $this->invoices->save($invoice);
+            $this->payments->save($payment);
+        });
+    }
+}
+```
+
+`transaction()` commits when the callback returns and rolls back, then rethrows, when it throws. Both saves above are committed together or not at all. Use `beginTransaction()`, `commit()` and `rollback()` when you need to manage the boundaries yourself.
+
+The entity hydrator is shared the same way. An entity loaded by one repository and saved by another is still recognised as an existing entity, and only its changed columns are written.
+
+Under a long-running worker, the connection's `reset()` (from `ResettableInterface`) runs between requests. It rolls back any transaction a failed request left open, so the next request never inherits it.
+
+:::caution
+Depend on `ConnectionInterface` or `TransactionInterface`, never on `MySqlConnection` or `PgSqlConnection` directly. Only the interfaces are shared. Requesting a concrete connection class builds a new, separate connection that is outside every transaction. It also bypasses `marko/database-readwrite` when that package is enabled.
+:::
+
 ## Bulk Insert
 
 `Repository::insertBatch(array $entities): void` inserts multiple entities in a single multi-row `INSERT` statement, wrapped in a transaction. It fires `EntityCreating` and `EntityCreated` events for each entity.

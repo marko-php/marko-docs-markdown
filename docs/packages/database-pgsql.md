@@ -167,7 +167,7 @@ $article = $articleRepository->find('018e2b3c-d1a2-7000-a1b2-c3d4e5f60708');
 
 ### PgSqlConnection
 
-Implements `ConnectionInterface` and `TransactionInterface`. Connects lazily on first query.
+Implements `ConnectionInterface`, `TransactionInterface` and `ResettableInterface`. Connects lazily on first query. The driver module registers one shared instance per request (per worker under a long-running runtime), and `TransactionInterface` resolves to that same instance. See [Transactions](/docs/packages/database/#transactions).
 
 | Method | Description |
 |---|---|
@@ -183,6 +183,7 @@ Implements `ConnectionInterface` and `TransactionInterface`. Connects lazily on 
 | `rollback(): void` | Roll back the current transaction |
 | `inTransaction(): bool` | Check if a transaction is active |
 | `transaction(callable $callback): mixed` | Execute a callback inside an auto-managed transaction |
+| `reset(): void` | Roll back a transaction left open by a failed request; never opens a connection |
 
 ### PgSqlStatement
 
