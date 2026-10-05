@@ -194,13 +194,15 @@ KnownDriversValidator::assertSkeletonSuggestContainsAll(
 
 ## Pest Expectations
 
-Load the expectations file in your `Pest.php` to enable fluent assertions:
+The expectations register automatically. `marko/testing` declares a Pest plugin (`Marko\Testing\Pest\ExpectationsPlugin`) under `extra.pest.plugins` in its `composer.json`, and Pest boots it once `expect()` exists, including in `--parallel` workers. There is nothing to add to `Pest.php`.
 
-```php title="Pest.php"
-require_once __DIR__ . '/../vendor/marko/testing/src/Pest/Expectations.php';
-```
+The expectations need Pest 4 (`composer require --dev pestphp/pest`). The fakes and their `assert*()` methods work with plain PHPUnit.
 
-Then use in tests:
+:::note
+If an expectation such as `toHavePushed` is reported as an undefined method, Pest's plugin list is stale. Run `composer dump-autoload` to regenerate `vendor/pest-plugins.json`, and make sure `pestphp/pest-plugin` is allowed under `config.allow-plugins`.
+:::
+
+Use them in tests:
 
 ```php
 expect($dispatcher)->toHaveDispatched(OrderPlaced::class);
