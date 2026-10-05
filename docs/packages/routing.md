@@ -55,7 +55,38 @@ Route parameters, POST body values, and query string values are automatically re
 #[Put('/path')]
 #[Patch('/path')]
 #[Delete('/path')]
+#[Head('/path')]
+#[Options('/path')]
 ```
+
+You rarely need `#[Head]` or `#[Options]` --- the router answers both automatically (see [HEAD and OPTIONS](#head-and-options)). Declare them only when a route needs custom behaviour.
+
+### Route Precedence
+
+Which route handles a URL never depends on registration order, module order or file layout. For each HTTP method the router tries routes in this order:
+
+1. **Static paths** (no parameters), matched by exact lookup. `/shows/live` always beats `/shows/{id}`.
+2. **Dynamic paths with more static segments.** `/a/{x}/c` (2 static segments) beats `/a/{x}/{y}` (1).
+3. **Dynamic paths with a longer static prefix** (the text before the first `{`). `/api/{version}/list` beats `/{tenant}/users/list`.
+4. **Registration order** breaks any remaining tie.
+
+A trailing slash is ignored (`/shows/live/` matches `/shows/live`). `marko route:list` prints routes in this effective order.
+
+### Unmatched Requests: 404 and 405
+
+A request that matches no route still runs through every **global** middleware (session, CORS, security headers, logging, ...), then the router responds with:
+
+- **`405 Method Not Allowed`** when the path matches a route of another method. The `Allow` header lists the methods that would work, e.g. `Allow: GET, HEAD, OPTIONS`.
+- **`404 Not Found`** otherwise.
+
+Both are thrown as `HttpException` and rendered by `ExceptionRenderer` --- JSON when the client asks for it, a minimal HTML page otherwise (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Global middleware can decorate them like any other response.
+
+Route middleware (`#[Middleware]`) only runs when a route matched. In global middleware, `$request->controller()` and `$request->action()` are `null` for unmatched requests --- handle that case if your middleware reads them.
+
+### HEAD and OPTIONS
+
+- **HEAD**: when no `#[Head]` route matches, the GET route for the same path handles the request. The response keeps its status, headers and cookies, but the router always removes the body of a response to a HEAD request (including 404/405 pages). `Response::withoutBody()` does this and preserves the concrete response class; a `StreamingResponse` sends its headers and never opens the stream.
+- **OPTIONS**: when no `#[Options]` route matches but the path matches other routes, the router answers `204 No Content` with an `Allow` header (always including `HEAD` when `GET` is allowed, and `OPTIONS`). This automatic response goes through global middleware, so [`marko/cors`](/docs/packages/cors/) turns a browser preflight into a full CORS response. An OPTIONS request to an unknown path gets a 404.
 
 ### Adding Middleware
 
@@ -409,10 +440,13 @@ marko route:list
 METHOD  PATH            ACTION                    MIDDLEWARE
 GET     /               HelloController::index
 GET     /blog           PostController::index
-GET     /blog/{id}      PostController::show
 GET     /products       ProductController::index
+GET     /blog/{id}      PostController::show
 GET     /products/{id}  ProductController::show
+POST    /products       ProductController::store
 ```
+
+Routes are grouped by method (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, then any others) and listed in the order the router tries them --- see [Route Precedence](#route-precedence). Automatic HEAD and OPTIONS responses are not listed.
 
 Filter by HTTP method or path:
 
@@ -432,6 +466,8 @@ marko route:list --method=GET --path=blog
 #[Put(path: '/path')]
 #[Patch(path: '/path')]
 #[Delete(path: '/path')]
+#[Head(path: '/path')]
+#[Options(path: '/path')]
 #[DisableRoute]
 #[Middleware(MiddlewareClass::class)]
 ```
@@ -532,8 +568,12 @@ class Response
     public function withHeaders(array $headers): static;
     public function withStatus(int $statusCode): static;
     public function withCookie(Cookie $cookie): static;
+    public function withoutBody(): static;
+    public function isBodyOmitted(): bool;
 }
 ```
+
+`withoutBody()` empties the body and marks it omitted, keeping status, headers, cookies and the concrete class; the router applies it to every HEAD response. A subclass that writes its own output in `send()` should check `isBodyOmitted()` and send headers only.
 
 `cookies()` returns the `Cookie` instances attached to the response; `headerLines()` returns the raw `"Name: value"` lines followed by one `Set-Cookie:` line per cookie, without making any SAPI calls --- `send()` uses it internally, and it's also useful for testing. `withHeader()` and `withHeaders()` merge into the existing headers (`withHeaders()` merges its argument over the current set). `withCookie()` replaces an existing cookie that matches on `(name, path, domain)`, or appends a new one otherwise. Every `with*()` method is marked `#[\NoDiscard]` and returns a clone via PHP's `clone` operator rather than `new static(...)`, so a `Response` subclass such as `StreamingResponse` survives decoration intact --- see [Decorating Responses](#decorating-responses). `Response` is deliberately not a `readonly class` for this reason: immutability is enforced by API design (private properties, no setters) rather than the `readonly` keyword.
 

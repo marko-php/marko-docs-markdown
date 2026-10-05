@@ -1,9 +1,11 @@
 ---
 title: marko/security
-description: CSRF protection, CORS handling, and security headers middleware -- secure your routes with drop-in middleware.
+description: CSRF protection and security headers middleware -- secure your routes with drop-in middleware.
 ---
 
-CSRF protection, CORS handling, and security headers middleware --- secure your routes with drop-in middleware. Three middleware classes cover the most common web security needs: `CsrfMiddleware` validates tokens on state-changing requests, `CorsMiddleware` handles preflight and cross-origin headers, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). All are configured via `config/security.php`.
+CSRF protection and security headers middleware --- secure your routes with drop-in middleware. Two middleware classes cover the most common web security needs: `CsrfMiddleware` validates tokens on state-changing requests, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). Both are configured via `config/security.php`.
+
+For cross-origin requests, install [marko/cors](/docs/packages/cors/). `marko/security` used to ship its own `CorsMiddleware` with `security.cors.*` config; it was removed so there is a single CORS implementation. Replace any `#[Middleware]` reference to the old class with `marko/cors` (which registers itself globally) and move the `cors` block of `config/security.php` to `config/cors.php`.
 
 ## Installation
 
@@ -15,18 +17,12 @@ Requires [marko/session](/docs/packages/session/) and [marko/encryption](/docs/p
 
 ## Configuration
 
-All three middleware classes read from `config/security.php`:
+Both middleware classes read from `config/security.php`:
 
 ```php title="config/security.php"
 return [
     'csrf' => [
         'session_key' => '_csrf_token',
-    ],
-    'cors' => [
-        'allowed_origins' => [],
-        'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        'allowed_headers' => ['Content-Type', 'X-Requested-With', 'X-CSRF-TOKEN'],
-        'max_age' => 86400,
     ],
     'headers' => [
         'x_content_type_options' => 'nosniff',
@@ -82,28 +78,6 @@ readonly class ContactController
     }
 }
 ```
-
-### CORS Middleware
-
-Handle cross-origin requests and preflight `OPTIONS` responses:
-
-```php
-use Marko\Routing\Attributes\Get;
-use Marko\Routing\Attributes\Middleware;
-use Marko\Security\Middleware\CorsMiddleware;
-
-class ApiController
-{
-    #[Get('/api/products')]
-    #[Middleware(CorsMiddleware::class)]
-    public function list(): Response
-    {
-        return new Response('Products');
-    }
-}
-```
-
-Configure allowed origins, methods, and headers in `config/security.php` under the `cors` key (see [Configuration](#configuration) above). When a request includes an `Origin` header that matches the allowed origins list, the middleware adds the appropriate CORS headers. For preflight `OPTIONS` requests, it short-circuits with a `204` response containing `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`, and `Access-Control-Max-Age` headers. Use `'*'` in `allowed_origins` to permit any origin.
 
 ### Security Headers Middleware
 
@@ -189,14 +163,6 @@ use Marko\Security\Middleware\CsrfMiddleware;
 public function handle(Request $request, callable $next): Response;
 ```
 
-### CorsMiddleware
-
-```php
-use Marko\Security\Middleware\CorsMiddleware;
-
-public function handle(Request $request, callable $next): Response;
-```
-
 ### SecurityHeadersMiddleware
 
 ```php
@@ -211,10 +177,6 @@ public function handle(Request $request, callable $next): Response;
 use Marko\Security\Config\SecurityConfig;
 
 public function csrfSessionKey(): string;
-public function corsAllowedOrigins(): array;
-public function corsAllowedMethods(): array;
-public function corsAllowedHeaders(): array;
-public function corsMaxAge(): int;
 public function headerXContentTypeOptions(): string;
 public function headerXFrameOptions(): string;
 public function headerXXssProtection(): string;
