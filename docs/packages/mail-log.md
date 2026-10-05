@@ -33,23 +33,21 @@ return [
 Or conditionally bind for development only:
 
 ```php title="module.php"
-use Marko\Container\Contracts\ContainerInterface;
+use Marko\Core\Container\ContainerInterface;
 use Marko\Mail\Contracts\MailerInterface;
 use Marko\Mail\Log\LogMailer;
-use Marko\Mail\Smtp\SmtpMailer;
+use Marko\Mail\Smtp\SmtpMailerFactory;
 
 return [
     'bindings' => [
-        MailerInterface::class => SmtpMailer::class,
+        MailerInterface::class => function (ContainerInterface $container): MailerInterface {
+            if (($_ENV['APP_ENV'] ?? 'production') === 'development') {
+                return $container->get(LogMailer::class);
+            }
+
+            return $container->get(SmtpMailerFactory::class)->create();
+        },
     ],
-    'boot' => function (ContainerInterface $container): void {
-        if (($_ENV['APP_ENV'] ?? 'production') === 'development') {
-            $container->bind(
-                MailerInterface::class,
-                LogMailer::class,
-            );
-        }
-    },
 ];
 ```
 

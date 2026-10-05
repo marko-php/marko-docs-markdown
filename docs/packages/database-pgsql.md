@@ -29,7 +29,6 @@ return [
     'database' => $_ENV['DB_DATABASE'] ?? 'marko',
     'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
     'password' => $_ENV['DB_PASSWORD'] ?? '',
-    'schema' => 'public',
 ];
 ```
 
@@ -115,11 +114,7 @@ This driver supports PostgreSQL 14+. Older versions may work but are not tested.
 
 ### Schema
 
-The default schema is `public`. You can specify a different schema in the configuration:
-
-```php
-'schema' => 'my_schema',
-```
+Connections use the database role's default `search_path` (normally `public`). There is no `schema` configuration key; to work in a different schema, set the role's `search_path` in PostgreSQL (for example, `ALTER ROLE app SET search_path TO my_schema;`).
 
 ### Native Types
 

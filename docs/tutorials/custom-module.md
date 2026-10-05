@@ -49,7 +49,7 @@ Marko uses entity-driven schemas --- define your database structure with attribu
 
 declare(strict_types=1);
 
-namespace Marko\Analytics\Entity;
+namespace Acme\Analytics\Entity;
 
 use Marko\Database\Attributes\Column;
 use Marko\Database\Attributes\Index;
@@ -100,7 +100,7 @@ Always start with the contract:
 
 declare(strict_types=1);
 
-namespace Marko\Analytics;
+namespace Acme\Analytics;
 
 interface AnalyticsInterface
 {
@@ -117,7 +117,7 @@ interface AnalyticsInterface
 
 declare(strict_types=1);
 
-namespace Marko\Analytics;
+namespace Acme\Analytics;
 
 use Marko\Database\Query\QueryBuilderInterface;
 
@@ -152,8 +152,8 @@ readonly class DatabaseAnalytics implements AnalyticsInterface
 
 declare(strict_types=1);
 
-use Marko\Analytics\AnalyticsInterface;
-use Marko\Analytics\DatabaseAnalytics;
+use Acme\Analytics\AnalyticsInterface;
+use Acme\Analytics\DatabaseAnalytics;
 
 return [
     'bindings' => [
@@ -169,7 +169,7 @@ return [
 
 ```json title="composer.json"
 {
-    "name": "marko/analytics",
+    "name": "acme/analytics",
     "description": "Page view analytics for Marko applications",
     "type": "marko-module",
     "require": {
@@ -179,7 +179,7 @@ return [
     },
     "autoload": {
         "psr-4": {
-            "Marko\\Analytics\\": "src/"
+            "Acme\\Analytics\\": "src/"
         }
     },
     "extra": {
@@ -197,9 +197,9 @@ return [
 
 declare(strict_types=1);
 
-namespace Marko\Analytics\Middleware;
+namespace Acme\Analytics\Middleware;
 
-use Marko\Analytics\AnalyticsInterface;
+use Acme\Analytics\AnalyticsInterface;
 use Marko\Authentication\AuthManager;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
@@ -238,7 +238,7 @@ readonly class TrackPageViewMiddleware implements MiddlewareInterface
 
 declare(strict_types=1);
 
-use Marko\Analytics\DatabaseAnalytics;
+use Acme\Analytics\DatabaseAnalytics;
 
 test('tracks a page view', function () {
     $connection = createTestConnection();
