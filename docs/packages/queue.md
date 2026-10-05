@@ -157,7 +157,7 @@ Use the CLI command to process jobs:
 
 ```bash
 marko queue:work
-marko queue:work --queue=emails
+marko queue:work --queue emails     # or --queue=emails
 marko queue:work --once
 ```
 

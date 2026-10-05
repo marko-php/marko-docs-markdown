@@ -241,6 +241,34 @@ foreach ($container->resolvedInstances(ResettableInterface::class) as $resettabl
 
 Current implementors: `Session` ([marko/session](/docs/packages/session/)), `SessionGuard` ([marko/authentication](/docs/packages/authentication/)), and `ReadWriteConnection` ([marko/database-readwrite](/docs/packages/database-readwrite/)).
 
+### Registering Console Commands
+
+Mark a class implementing `CommandInterface` with `#[Command]` and it is discovered automatically. Declare value-less boolean options in `flags` so they never swallow the positional argument that follows them:
+
+```php title="app/billing/src/Command/RefundCommand.php"
+use Marko\Core\Attributes\Command;
+use Marko\Core\Command\CommandInterface;
+use Marko\Core\Command\Input;
+use Marko\Core\Command\Output;
+
+#[Command(name: 'billing:refund', description: 'Refund an order', flags: ['force'])]
+class RefundCommand implements CommandInterface
+{
+    public function execute(Input $input, Output $output): int
+    {
+        $orderId = $input->getArgument(0);           // positional --- options are never included
+        $reason = $input->getOption('reason');       // --reason "late" or --reason=late
+        $force = $input->hasOption('force');         // declared flag
+
+        // ...
+
+        return 0;
+    }
+}
+```
+
+`marko billing:refund --force 1001 --reason late` and `marko billing:refund 1001 --reason=late --force` are equivalent. Arguments and options can come in any order, `--` ends option parsing, and repeated options are read with `getOptionValues()`. See [marko/cli](/docs/packages/cli/#arguments-and-options) for the full option syntax.
+
 ### Discovery Cache
 
 On every boot, Marko scans all module PHP files to discover `#[Preference]`, `#[Plugin]`, `#[Observer]`, and `#[Command]` attributes. In production this scan can be eliminated by compiling its results into a single PHP file --- the discovery cache.
@@ -319,6 +347,8 @@ marko discovery:cache
 
 Serving stale discovery results in missing preferences, plugins, observers, or commands until the cache is recompiled.
 
+Recompiling on every deploy also covers framework upgrades that change the cache format. A cache written by an older version fails boot with a version-mismatch `DiscoveryCacheException` rather than loading incomplete data (for example, command `flags` were added in cache version 2).
+
 #### Not the same as the code index
 
 Marko has **two separate caches** that are easy to confuse --- different files, different commands, different consumers:
@@ -355,7 +385,7 @@ throw new MarkoException(
 #[After]                                        // Run after target method
 #[Observer(event: EventClass::class)]           // React to events (synchronous)
 #[Observer(event: EventClass::class, async: true)] // Push to queue and handle in background
-#[Command(name: 'cmd:name', description: '')] // Register CLI command
+#[Command(name: 'cmd:name', description: '', aliases: [], flags: [])] // Register CLI command; flags never take a value
 ```
 
 ### Container

@@ -147,7 +147,8 @@ return [
 | Command | Description |
 |---|---|
 | `marko page-cache:clear` | Clear all cached pages |
-| `marko page-cache:purge <target> [--tag]` | Purge a URL or all entries for a tag |
+| `marko page-cache:purge <url>` | Purge a single URL |
+| `marko page-cache:purge --tag <tag>` | Purge all entries for a tag |
 | `marko page-cache:status` | Show active driver and storage path |
 
 ### Examples
@@ -163,7 +164,7 @@ marko page-cache:clear
 marko page-cache:purge https://example.com/products/42
 
 # Purge all entries tagged with a given tag
-marko page-cache:purge products --tag
+marko page-cache:purge --tag products
 ```
 
 ## API Reference
