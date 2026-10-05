@@ -3,9 +3,9 @@ title: marko/testing
 description: Reusable fakes with built-in assertions that eliminate test boilerplate.
 ---
 
-Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, mail, queues, sessions, cookies, logging, config, authentication, guards, and HTTP clients. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. Pest expectation extensions (`toHaveDispatched`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`) are included for fluent assertions.
+Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, and the clock. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. Pest expectation extensions (`toHaveDispatched`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`) are included for fluent assertions.
 
-Available fakes: `FakeEventDispatcher`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`.
+Available fakes: `FakeEventDispatcher`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`.
 
 ## Installation
 
@@ -153,6 +153,26 @@ $guard->logout();
 $guard->assertLoggedOut();
 $guard->assertGuest();
 ```
+
+### FakeClock
+
+`FakeClock` implements the PSR-20 `Psr\Clock\ClockInterface`, so it drops into anything that takes the injected clock from [`marko/clock`](/docs/packages/clock/). It is frozen: time never moves on its own, so expiry, TTL and freshness checks can be tested at exact boundaries without `sleep()` or loose time ranges.
+
+```php
+use Marko\Testing\Fake\FakeClock;
+
+$clock = new FakeClock('2026-01-01 12:00:00 UTC');
+$guard = new TokenGuard($repository, $request, $clock);
+
+$clock->now();                         // always 2026-01-01 12:00:00
+$clock->travel('+59 minutes');         // relative move
+$clock->travelTo('2026-01-02 00:00');  // absolute jump
+$clock->setNow(new DateTimeImmutable('2026-06-01 09:00:00 UTC'));
+
+$clock->assertNowIs('2026-06-01 09:00:00 UTC');
+```
+
+`travel()` accepts any `DateTimeImmutable::modify()` string; a malformed modifier throws `DateMalformedStringException`. With no argument, the fake is frozen at the moment it was created.
 
 ### FakeAuthenticatable and FakeUserProvider
 
@@ -435,6 +455,17 @@ public function __construct(string $method, string $url, array $options = []);
 public function header(string $name): ?string;
 public function json(): mixed;
 public function body(): string;
+```
+
+### FakeClock
+
+```php
+public function __construct(DateTimeImmutable|string $now = 'now');
+public function now(): DateTimeImmutable;
+public function setNow(DateTimeImmutable|string $now): void;
+public function travel(string $modifier): void;
+public function travelTo(DateTimeImmutable|string $now): void;
+public function assertNowIs(DateTimeImmutable|string $expected): void;
 ```
 
 ### KnownDriversValidator
