@@ -219,6 +219,25 @@ $worker->work(queues: ['high', 'default', 'low']);
 
 `marko/queue` binds `WorkerInterface` to the built-in `Worker`, so `queue:work` resolves once a driver is installed. You don't need to bind it yourself. To replace the worker, bind `WorkerInterface` to your own class in your module's `module.php`, or use a Preference on `Worker`.
 
+### Async Observers
+
+`marko/queue` binds `Marko\Core\Event\AsyncObserverDispatcherInterface` to `QueueAsyncObserverDispatcher`. Installing the package and a driver is all it takes for `#[Observer(async: true)]` observers to be queued instead of run during the request:
+
+```php
+use Marko\Core\Attributes\Observer;
+
+#[Observer(event: OrderShipped::class, async: true)]
+class SendShippingEmail
+{
+    public function handle(OrderShipped $event): void
+    {
+        // Runs when queue:work processes the AsyncObserverJob
+    }
+}
+```
+
+When an async observer fires, `QueueAsyncObserverDispatcher` serializes the event, wraps it in a `JobEnvelope` and pushes an `AsyncObserverJob` onto the default queue. The worker verifies the envelope, resolves the observer from the container and calls `handle()` with the event. The binding is resolved the first time an async observer fires, so requests that dispatch none never open a queue connection. An event that can't be serialized throws `SerializationException` at dispatch time. Without `marko/queue`, an async observer throws an `EventException` rather than running inline. See [Events](/docs/concepts/events/#async-observers).
+
 ### Managing Failed Jobs
 
 | Command | Description |
@@ -359,7 +378,18 @@ public function setContainer(ContainerInterface $container): void;
 public function setJobEnvelope(JobEnvelope $jobEnvelope): void;
 ```
 
-Implement this interface on any job class that needs to resolve services from the container when `handle()` runs. The `Worker` detects the interface and calls both setters before invoking `handle()`. Keep job constructor arguments to scalars and IDs only --- resolve services inside `handle()`.
+Implement this interface on any job class that needs to resolve services from the container when `handle()` runs. The `Worker` detects the interface and calls both setters before invoking `handle()`. The [sync driver](/docs/packages/queue-sync/) does the same when it runs a job on `push()`. Keep job constructor arguments to scalars and IDs only --- resolve services inside `handle()`.
+
+### QueueAsyncObserverDispatcher
+
+```php
+use Marko\Core\Event\Event;
+use Marko\Queue\QueueAsyncObserverDispatcher;
+
+public function dispatch(string $observerClass, Event $event): void;
+```
+
+Implements `Marko\Core\Event\AsyncObserverDispatcherInterface` and is bound to it in `module.php`. Pushes an `AsyncObserverJob` whose event data is the serialized event wrapped in a `JobEnvelope`. Throws `SerializationException` when the event can't be serialized.
 
 ### Exceptions
 
@@ -367,5 +397,5 @@ Implement this interface on any job class that needs to resolve services from th
 |-----------|-------------|
 | `QueueException` | Base exception for all queue errors --- includes `getContext()` and `getSuggestion()` methods |
 | `JobFailedException` | Thrown when a job fails during execution |
-| `SerializationException` | Thrown when a job payload cannot be serialized or deserialized, when `encryption.key` is empty, or when an HMAC signature does not match (tampered payload) |
+| `SerializationException` | Thrown when a job payload cannot be serialized or deserialized, when an async observer's event cannot be serialized, when `encryption.key` is empty, or when an HMAC signature does not match (tampered payload) |
 | `NoDriverException` | Thrown when a queue interface can't be resolved. For `QueueInterface` and `FailedJobRepositoryInterface` it lists the driver packages to install. For any other queue interface it names the interface that has no binding and tells you to bind it in `module.php` |

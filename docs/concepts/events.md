@@ -129,6 +129,28 @@ class SendPostNotification
 
 Async observers require [`marko/queue`](/docs/packages/queue/) and a configured queue driver. The worker must be running (`marko queue:work`) for async observers to execute. Retry and failure behavior follow the same `max_attempts` and `retry_after` config as regular jobs.
 
+### How the Queue Is Wired
+
+Core doesn't depend on the queue. It defines `Marko\Core\Event\AsyncObserverDispatcherInterface`, and `marko/queue` binds it to `QueueAsyncObserverDispatcher`, which pushes the `AsyncObserverJob`. The dispatcher resolves that binding the first time an async observer fires, not at boot. A request that dispatches no async observers never builds the queue or opens its connection.
+
+Async and sync observers share one priority order. An async observer is queued at its position in that order. It can't stop propagation, because it hasn't run yet when the next observer is called.
+
+### No Queue Installed
+
+An async observer never falls back to running inline. If one fires and nothing binds `AsyncObserverDispatcherInterface`, `dispatch()` throws an `EventException`:
+
+```
+Observer App\Blog\Observer\SendPostNotification is marked async but no queue is installed
+```
+
+The exception's suggestion lists the fixes: install `marko/queue` with a driver, or remove `async: true` to run the observer during the request. With [`marko/queue-sync`](/docs/packages/queue-sync/) as the driver, the job is pushed and run straight away, still through the queue. Exceptions from the observer come back out of `dispatch()` as a `JobFailedException`.
+
+### Event Serializability
+
+An async observer receives a copy of the event that was serialized when it was queued, not the original object. Keep async events to plain data: IDs, strings, numbers, arrays and other serializable value objects. Closures, resources and live connections can't be serialized. Dispatching such an event to an async observer throws a `SerializationException` that names the observer and the event class. Changes an async observer makes to its event aren't visible to the code that dispatched it.
+
+Queued event data is signed with the same HMAC envelope as every other job, so `encryption.key` must be set when the event is dispatched, not only when the worker runs.
+
 ## Built-in Events
 
 Marko packages dispatch events at meaningful points:

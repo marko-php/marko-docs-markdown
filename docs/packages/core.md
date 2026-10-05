@@ -384,7 +384,7 @@ throw new MarkoException(
 #[Before]                                       // Run before target method
 #[After]                                        // Run after target method
 #[Observer(event: EventClass::class)]           // React to events (synchronous)
-#[Observer(event: EventClass::class, async: true)] // Push to queue and handle in background
+#[Observer(event: EventClass::class, async: true)] // Queue it (needs marko/queue; throws EventException without it)
 #[Command(name: 'cmd:name', description: '', aliases: [], flags: [])] // Register CLI command; flags never take a value
 ```
 
@@ -400,6 +400,8 @@ interface ContainerInterface extends PsrContainerInterface
     public function call(Closure $callable): mixed;
 }
 ```
+
+`has()` returns `true` for existing classes, interface bindings and instances registered with `instance()`, so it works for an interface that only has a pre-built instance and no binding.
 
 The concrete `Container` class additionally provides `resolvedInstances(?string $interface = null): array` --- not part of `ContainerInterface`. It returns only instances already built, optionally filtered to those implementing `$interface`, and never triggers resolution as a side effect. See [Resetting Request-Scoped State](#resetting-request-scoped-state-in-long-running-processes) above.
 
