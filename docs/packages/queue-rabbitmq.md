@@ -15,76 +15,60 @@ composer require marko/queue-rabbitmq
 
 This automatically installs `marko/queue` and `php-amqplib/php-amqplib`. A non-empty `encryption.key` (via [`marko/encryption`](/docs/packages/encryption/)) is also required because job payloads are HMAC-signed --- see [`marko/queue`](/docs/packages/queue/) for details.
 
-## Usage
+## Configuration
 
-### Binding the Driver
+Installing the package binds `QueueInterface`, `FailedJobRepositoryInterface`, a shared `RabbitmqConnection` and the `ExchangeConfig` from `config/queue-rabbitmq.php`. No hand-written bindings are needed. Set the environment variables, or override the file in your app:
 
-Register the RabbitMQ queue in your module bindings:
-
-```php title="module.php"
-use Marko\Queue\QueueInterface;
-use Marko\Queue\Rabbitmq\RabbitmqQueue;
-use Marko\Queue\FailedJobRepositoryInterface;
-use Marko\Queue\Rabbitmq\RabbitmqFailedJobRepository;
-
+```php title="config/queue-rabbitmq.php"
 return [
-    'bindings' => [
-        QueueInterface::class => RabbitmqQueue::class,
-        FailedJobRepositoryInterface::class => RabbitmqFailedJobRepository::class,
+    'host' => $_ENV['RABBITMQ_HOST'] ?? 'localhost',
+    'port' => (int) ($_ENV['RABBITMQ_PORT'] ?? 5672),
+    'user' => $_ENV['RABBITMQ_USER'] ?? 'guest',
+    'password' => $_ENV['RABBITMQ_PASSWORD'] ?? 'guest',
+    'vhost' => $_ENV['RABBITMQ_VHOST'] ?? '/',
+    'tls' => null,
+    'exchange' => [
+        'name' => $_ENV['RABBITMQ_EXCHANGE'] ?? 'marko',
+        'type' => $_ENV['RABBITMQ_EXCHANGE_TYPE'] ?? 'direct',
+        'durable' => true,
+        'auto_delete' => false,
     ],
 ];
 ```
 
-### Configuring the Connection
+| Key | Env var | Default | Description |
+|---|---|---|---|
+| `host` | `RABBITMQ_HOST` | `localhost` | RabbitMQ server host |
+| `port` | `RABBITMQ_PORT` | `5672` | AMQP port (usually `5671` with TLS) |
+| `user` | `RABBITMQ_USER` | `guest` | AMQP user |
+| `password` | `RABBITMQ_PASSWORD` | `guest` | AMQP password |
+| `vhost` | `RABBITMQ_VHOST` | `/` | Virtual host |
+| `tls` | --- | `null` | SSL stream context options as an array, or `null` for plain TCP |
+| `exchange.name` | `RABBITMQ_EXCHANGE` | `marko` | Exchange that jobs are published to |
+| `exchange.type` | `RABBITMQ_EXCHANGE_TYPE` | `direct` | One of `direct`, `fanout`, `topic`, `headers` |
+| `exchange.durable` | --- | `true` | Whether the exchange survives a broker restart |
+| `exchange.auto_delete` | --- | `false` | Whether the exchange is deleted when no queues are bound |
 
-`RabbitmqConnection` manages the AMQP connection. It lazily connects on the first call to `channel()`:
+The default queue name comes from `queue.queue` in [`marko/queue`](/docs/packages/queue/).
 
-```php
-use Marko\Queue\Rabbitmq\RabbitmqConnection;
+To enable TLS, override `tls` with SSL context options:
 
-$rabbitmqConnection = new RabbitmqConnection(
-    host: 'localhost',
-    port: 5672,
-    user: 'guest',
-    password: 'guest',
-    vhost: '/',
-);
-```
-
-TLS is supported via the `tlsOptions` parameter:
-
-```php
-use Marko\Queue\Rabbitmq\RabbitmqConnection;
-
-$rabbitmqConnection = new RabbitmqConnection(
-    host: 'rabbitmq.example.com',
-    port: 5671,
-    user: 'app',
-    password: 'secret',
-    tlsOptions: [
+```php title="config/queue-rabbitmq.php"
+return [
+    // ...
+    'port' => 5671,
+    'tls' => [
         'verify_peer' => true,
         'cafile' => '/path/to/ca.pem',
     ],
-);
+];
 ```
 
-### Configuring the Exchange
+For `direct` and `topic` exchanges, the queue name is used as the routing key. `fanout` and `headers` exchanges use an empty routing key.
 
-Set up the exchange type and behavior:
+The connection opens on the first call to `channel()`. If the broker refuses it, a `RabbitmqException` names the host and port and points back to this config file. An unknown `exchange.type` also throws `RabbitmqException`, listing the valid types.
 
-```php
-use Marko\Queue\Rabbitmq\Exchange\ExchangeConfig;
-use Marko\Queue\Rabbitmq\Exchange\ExchangeType;
-
-$exchangeConfig = new ExchangeConfig(
-    name: 'marko_jobs',
-    type: ExchangeType::Direct,
-);
-```
-
-Available exchange types: `Direct`, `Fanout`, `Topic`, `Headers`.
-
-For `Direct` and `Topic` exchanges, the queue name is used as the routing key. `Fanout` and `Headers` exchanges use an empty routing key.
+## Usage
 
 ### Dispatching Jobs
 
@@ -126,16 +110,15 @@ readonly class OrderProcessor
 | `delete(string $jobId): bool` | Acknowledge a consumed message by job ID |
 | `release(string $jobId, int $delay = 0): bool` | Reject and requeue a message --- with optional delay via dead-letter exchange |
 
-Constructor:
+Constructor (the module binding supplies every argument from config, with `defaultQueue` taken from `queue.queue`):
 
 ```php
 use Marko\Queue\Rabbitmq\RabbitmqQueue;
-use Marko\Queue\Rabbitmq\RabbitmqConnection;
-use Marko\Queue\Rabbitmq\Exchange\ExchangeConfig;
 
 $rabbitmqQueue = new RabbitmqQueue(
     connection: $rabbitmqConnection,
     exchangeConfig: $exchangeConfig,
+    jobEnvelope: $jobEnvelope,
     defaultQueue: 'default',
 );
 ```
@@ -145,7 +128,7 @@ $rabbitmqQueue = new RabbitmqQueue(
 | Method | Description |
 |---|---|
 | `__construct(string $host, int $port, string $user, string $password, string $vhost, ?array $tlsOptions)` | Create a connection --- defaults: host `localhost`, port `5672`, user `guest`, password `guest`, vhost `/`, no TLS |
-| `channel(): AMQPChannel` | Get the AMQP channel --- lazily connected on first call |
+| `channel(): AMQPChannel` | Get the AMQP channel --- connected on first call; throws `RabbitmqException` if the connection fails |
 | `disconnect(): void` | Disconnect and release the channel and connection |
 | `isConnected(): bool` | Check whether the connection is currently active |
 

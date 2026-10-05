@@ -33,28 +33,27 @@ return [
 ];
 ```
 
-Redis connection is configured via `RedisConnection`:
+The package ships `config/cache-redis.php`, and its module binding builds a single shared `RedisConnection` from it. No hand-written binding is needed. Set the environment variables, or override the file in your app:
 
-```php title="module.php"
-use Marko\Cache\Redis\RedisConnection;
-use Psr\Container\ContainerInterface;
-
-'bindings' => [
-    RedisConnection::class => RedisConnection::class,
-],
-'boot' => function (ContainerInterface $container): void {
-    $container->bind(
-        RedisConnection::class,
-        fn () => new RedisConnection(
-            host: $_ENV['REDIS_HOST'] ?? '127.0.0.1',
-            port: (int) ($_ENV['REDIS_PORT'] ?? 6379),
-            password: $_ENV['REDIS_PASSWORD'] ?? null,
-            database: (int) ($_ENV['REDIS_DATABASE'] ?? 0),
-            prefix: 'marko:cache:',
-        ),
-    );
-},
+```php title="config/cache-redis.php"
+return [
+    'host' => $_ENV['REDIS_HOST'] ?? '127.0.0.1',
+    'port' => (int) ($_ENV['REDIS_PORT'] ?? 6379),
+    'password' => $_ENV['REDIS_PASSWORD'] ?? null,
+    'database' => (int) ($_ENV['REDIS_CACHE_DATABASE'] ?? 0),
+    'prefix' => $_ENV['CACHE_PREFIX'] ?? 'marko:cache:',
+];
 ```
+
+| Key | Env var | Default | Description |
+|---|---|---|---|
+| `host` | `REDIS_HOST` | `127.0.0.1` | Redis server host |
+| `port` | `REDIS_PORT` | `6379` | Redis server port |
+| `password` | `REDIS_PASSWORD` | `null` | Password for `AUTH`; `null` or empty means no authentication |
+| `database` | `REDIS_CACHE_DATABASE` | `0` | Redis database index |
+| `prefix` | `CACHE_PREFIX` | `marko:cache:` | Prefix added to every cache key |
+
+The connection opens on first use. If Redis refuses it, a `RedisConnectionException` names the host and port and points back to this config file.
 
 ## Usage
 
@@ -93,7 +92,7 @@ class SessionStore
 
 ### Key Prefixing
 
-All keys are automatically prefixed (default: `marko:cache:`) to prevent collisions with other Redis data. The prefix is configurable via the `RedisConnection` constructor.
+All keys are automatically prefixed (default: `marko:cache:`) to prevent collisions with other Redis data. Change it with the `prefix` key in `config/cache-redis.php` (or `CACHE_PREFIX`).
 
 ## API Reference
 
@@ -119,7 +118,7 @@ Implements all methods from `CacheInterface`. See [`marko/cache`](/docs/packages
 | Method | Description |
 |---|---|
 | `__construct(string $host, int $port, ?string $password, int $database, string $prefix)` | Create a connection with host (`127.0.0.1`), port (`6379`), optional password, database index (`0`), and key prefix (`marko:cache:`) |
-| `client(): ClientInterface` | Get the Predis client instance --- lazily connected on first call |
+| `client(): ClientInterface` | Get the Predis client instance --- connected on first call; throws `RedisConnectionException` if the connection is refused |
 | `disconnect(): void` | Disconnect and release the client instance |
 | `isConnected(): bool` | Check whether a client instance is currently active |
 
