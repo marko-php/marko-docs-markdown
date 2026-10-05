@@ -152,6 +152,91 @@ Read cookies sent by the client with `Request::cookie()`, which mirrors `query()
 $sessionId = $request->cookie('session');
 ```
 
+### Reading JSON Bodies
+
+A request whose `Content-Type` is `application/json` (or any `+json` type, such as `application/vnd.api+json`) has its body decoded once, when the `Request` is built. Read it with `json()`, using dot-notation for nested keys:
+
+```php
+use Marko\Routing\Attributes\Post;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+
+#[Post('/api/users')]
+public function store(Request $request): Response
+{
+    $email = $request->json('user.email');
+    $roles = $request->json('user.roles', []);
+
+    return Response::json(['email' => $email], 201);
+}
+```
+
+JSON fields also bind straight to typed controller parameters, the same way form fields do:
+
+```php
+#[Post('/api/shows')]
+public function create(string $title, int $count): Response
+{
+    // POST {"title": "Live at Five", "count": 7}
+    return Response::json(['title' => $title, 'count' => $count], 201);
+}
+```
+
+`input()` reads from whichever body the request carries (the JSON body for JSON requests, form data otherwise) and falls back to the query string, so one controller can serve both kinds of client:
+
+```php
+$title = $request->input('title', 'Untitled');
+```
+
+A malformed JSON body throws `MalformedJsonException` when it is read, never silently returning an empty payload. When it is hit while binding controller parameters, the router answers with a `400`. `wantsJson()` checks the `Accept` header, so you can pick a response format for the client:
+
+```php
+if ($request->wantsJson()) {
+    return Response::json(['ok' => true]);
+}
+```
+
+### Handling File Uploads
+
+Uploaded files arrive as `Marko\Routing\Http\UploadedFile` objects, keyed like the form fields that sent them. `file()` returns one file, `files()` returns a list for multi-file inputs (`name="photos[]"`), and nested fields use dot-notation (`user.avatar`):
+
+```php
+use Marko\Routing\Attributes\Post;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+
+#[Post('/profile/avatar')]
+public function upload(Request $request): Response
+{
+    $avatar = $request->file('avatar');
+
+    if ($avatar === null || !$avatar->isValid()) {
+        return new Response('Upload an image', 422);
+    }
+
+    $extension = $avatar->guessExtension() ?? 'bin';
+    $avatar->moveTo("/var/app/storage/avatars/" . bin2hex(random_bytes(16)) . ".$extension");
+
+    return new Response('Saved', 201);
+}
+```
+
+The client filename and media type are untrusted: `mimeType()` and `guessExtension()` inspect the file contents with `finfo` instead. Inputs submitted without a file are left out, so `hasFile()` is `false` for them. An upload that failed (for example, larger than `upload_max_filesize`) is still present but not valid; moving it, or moving any file twice, throws `UploadedFileException` naming the reason. Calling `file()` on a multi-file input also throws --- use `files()` there.
+
+To store an upload through [`marko/media`](/docs/packages/media/), build a `Marko\Media\Value\UploadedFile` from it:
+
+```php
+use Marko\Media\Value\UploadedFile as MediaUpload;
+
+$media = $mediaManager->upload(new MediaUpload(
+    name: $avatar->clientFilename(),
+    tmpPath: $avatar->tempPath(),
+    mimeType: $avatar->mimeType(),
+    size: $avatar->size(),
+    extension: $avatar->guessExtension() ?? 'bin',
+));
+```
+
 ### Overriding Vendor Routes
 
 Use [Preferences](/docs/packages/core/) to replace a vendor's controller:
@@ -360,6 +445,13 @@ class Request
     public function post(?string $key = null, mixed $default = null): mixed;
     public function cookie(?string $key = null, mixed $default = null): mixed;
     public function body(): string;
+    public function isJson(): bool;
+    public function wantsJson(): bool;
+    public function json(?string $key = null, mixed $default = null): mixed;
+    public function input(?string $key = null, mixed $default = null): mixed;
+    public function file(string $key): ?UploadedFile;
+    public function files(?string $key = null): array;
+    public function hasFile(string $key): bool;
     public function header(string $name, ?string $default = null): ?string;
     public function headers(): array;
     public function server(string $key): ?string;
@@ -371,7 +463,48 @@ class Request
 }
 ```
 
-`ip()` returns `REMOTE_ADDR` from the server bag (equivalent to `server('REMOTE_ADDR')`). `cookie()` reads from the request's `$_COOKIE` bag and mirrors the signature of `query()` and `post()`. `withRoute()` returns a new immutable `Request` with the matched controller class and action method attached; `controller()` and `action()` retrieve them. The router attaches route context before invoking middleware, which allows middleware (such as `AdminAuthMiddleware`) to inspect which controller method is handling the request.
+`ip()` returns `REMOTE_ADDR` from the server bag (equivalent to `server('REMOTE_ADDR')`). `cookie()` reads from the request's `$_COOKIE` bag and mirrors the signature of `query()` and `post()`. `withRoute()` returns a new immutable `Request` with the matched controller class and action method attached; `controller()` and `action()` retrieve them. The router attaches route context before invoking middleware, which allows middleware (such as `AdminAuthMiddleware`) to inspect which controller method is handling the request. `withRoute()` carries the uploaded files and the decoded JSON body through unchanged.
+
+| Method | Description |
+| --- | --- |
+| `isJson()` | `true` when `Content-Type` is `application/json` or ends in `+json` (e.g. `application/vnd.api+json`) |
+| `wantsJson()` | `true` when the `Accept` header lists `application/json` or a `+json` type |
+| `json($key, $default)` | The decoded JSON body, or one value from it by dot-notation key (`user.email`). Returns `[]` / `$default` for non-JSON requests and empty bodies. Throws `MalformedJsonException` for a malformed body |
+| `input($key, $default)` | The JSON body for JSON requests, form data otherwise, then the query string. With no key, the query string merged with the body (body values win) |
+| `file($key)` | One `UploadedFile`, or `null`. Dot-notation for nested fields. Throws `UploadedFileException` when the field holds several files |
+| `files($key)` | With no key, every uploaded file keyed like its form field. With a key, that field's files as a list |
+| `hasFile($key)` | Whether at least one file was uploaded for the field (check `isValid()` before using it) |
+
+The constructor accepts a `files` argument (`array<string, UploadedFile|array>`), so a request with uploads can be built without superglobals. `fromGlobals()` normalizes `$_FILES`, including PHP's inverted `name[]` / `name[key]` layout for multi-file and nested inputs, and leaves out inputs submitted without a file (`UPLOAD_ERR_NO_FILE`).
+
+### UploadedFile
+
+```php
+use Marko\Routing\Http\UploadedFile;
+
+public function __construct(
+    string $tempPath,
+    string $clientFilename,
+    string $clientMediaType,
+    int $size,
+    int $error = UPLOAD_ERR_OK,
+)
+
+public function clientFilename(): string;
+public function clientMediaType(): string;
+public function size(): int;
+public function error(): int;
+public function tempPath(): string;
+public function isValid(): bool;
+public function isMoved(): bool;
+public function moveTo(string $targetPath): void;
+public function stream(): mixed; // resource
+public function contents(): string;
+public function mimeType(): string;
+public function guessExtension(): ?string;
+```
+
+`clientFilename()` and `clientMediaType()` are whatever the client sent --- never use them as a storage path or to decide what a file is. `mimeType()` detects the real type from the contents with `finfo`, and `guessExtension()` maps it to an extension (`null` when unknown). `isValid()` is `true` only for a successful upload (`UPLOAD_ERR_OK`) that has not been moved yet. `moveTo()` uses `move_uploaded_file()` under a web SAPI (PHP-FPM, Apache) and `rename()` elsewhere (CLI, tests, RoadRunner workers), and can be called once. Moving twice, moving a failed upload, moving into a missing directory, or reading a moved file throws `UploadedFileException` with the reason and a fix (for a failed upload, the `UPLOAD_ERR_*` name and the `php.ini` setting to change).
 
 ### Response
 
@@ -487,4 +620,4 @@ protected function renderHtml(int $statusCode, array $data): Response;
 
 ### Parameter Resolution
 
-The router resolves controller method parameters in priority order: route path params → POST body → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, which the pipeline renders as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
+The router resolves controller method parameters in priority order: route path params → request body (the JSON body for JSON requests, form data otherwise, via `Request::input()`) → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; the pipeline renders both as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
