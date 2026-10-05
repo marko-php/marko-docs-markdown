@@ -15,6 +15,7 @@ You also need a driver:
 
 | Driver | Holds connections in | Best for |
 |---|---|---|
+| [`marko/broadcasting-amphp`](/docs/packages/broadcasting-amphp/) | A self-hosted PHP process (`marko broadcasting:serve`) on the amphp event loop | PHP-only, no third-party service; fans out through `marko/pubsub` (Redis or Postgres) |
 | [`marko/broadcasting-mercure`](/docs/packages/broadcasting-mercure/) | A Mercure hub (built into FrankenPHP/Caddy, or standalone) | Zero extra infrastructure on FrankenPHP; Server-Sent Events in the browser |
 | [`marko/broadcasting-pusher`](/docs/packages/broadcasting-pusher/) | Hosted Pusher, Soketi, or Laravel Reverb | WebSockets, Laravel Echo / pusher-js clients |
 
@@ -212,6 +213,7 @@ A shared singleton; authorizers are discovered on first use.
 
 ## Related Packages
 
+- [`marko/broadcasting-amphp`](/docs/packages/broadcasting-amphp/) --- self-hosted async SSE server driver
 - [`marko/broadcasting-mercure`](/docs/packages/broadcasting-mercure/) --- Mercure hub driver
 - [`marko/broadcasting-pusher`](/docs/packages/broadcasting-pusher/) --- Pusher-protocol driver (Pusher, Soketi, Laravel Reverb)
 - [`marko/sse`](/docs/packages/sse/) --- in-process Server-Sent Events for low-concurrency streams

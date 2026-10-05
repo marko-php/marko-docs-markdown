@@ -19,12 +19,12 @@ composer require marko/sse
 |---|---|
 | Admin dashboards, job progress, a few dozen viewers | Live updates to large audiences |
 | Concurrent streams comfortably below your FPM workers minus headroom for regular traffic | Anything that could exceed `pm.max_children` |
-| No extra infrastructure | A Mercure hub (built into FrankenPHP) or a Pusher-protocol server (Pusher, Soketi, Laravel Reverb) holds the connections; PHP makes one short HTTP call per event |
+| No extra infrastructure | A self-hosted PHP server ([`marko/broadcasting-amphp`](/docs/packages/broadcasting-amphp/)), a Mercure hub (built into FrankenPHP) or a Pusher-protocol server (Pusher, Soketi, Laravel Reverb) holds the connections; publishing an event costs one pub/sub message or one short HTTP call |
 
 Rule of thumb: keep concurrent SSE streams at or below *(FPM workers − the workers your regular traffic needs)*, and set [`max_connections`](#configuration) so a burst of viewers gets a `503` instead of exhausting the pool and taking the rest of the site down.
 
 :::caution
-`marko/sse` is not compatible with [`marko/roadrunner`](/docs/packages/roadrunner/): a long-lived stream would block the worker for every other request. RoadRunner refuses the package by default, and if acknowledged, SSE routes return a 500. Use `marko/broadcasting` instead.
+`marko/sse` is not compatible with [`marko/roadrunner`](/docs/packages/roadrunner/): a long-lived stream would block the worker for every other request. RoadRunner refuses the package by default, and if acknowledged, SSE routes return a 500. Use `marko/broadcasting` instead --- [`marko/broadcasting-amphp`](/docs/packages/broadcasting-amphp/) is the self-hosted, PHP-only option.
 :::
 
 ## Configuration

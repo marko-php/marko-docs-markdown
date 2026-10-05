@@ -207,5 +207,6 @@ Readonly value object built from `config/broadcasting-mercure.php` by the module
 ## Related Packages
 
 - [`marko/broadcasting`](/docs/packages/broadcasting/) --- the interfaces and channel authorization
+- [`marko/broadcasting-amphp`](/docs/packages/broadcasting-amphp/) --- self-hosted async SSE server driver
 - [`marko/broadcasting-pusher`](/docs/packages/broadcasting-pusher/) --- Pusher-protocol driver
 - [`marko/http-guzzle`](/docs/packages/http-guzzle/) --- HTTP client driver used to reach the hub
