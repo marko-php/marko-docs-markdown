@@ -76,6 +76,10 @@ public ?array $settings = null;
 
 Values are serialized and deserialized automatically. The root value must be an array --- top-level JSON scalars are not supported. See [marko/database](/docs/packages/database/) for JSON query operators (`whereJsonContains`, arrow-path syntax, etc.) and indexing guidance.
 
+### Partial Indexes
+
+MySQL has no partial indexes. Generating SQL for an `#[Index]` with `where:` throws a `MigrationException` naming the index instead of silently creating a full index. Create the index you need by hand in a migration and list it in `#[Table(unmanagedIndexes: [...])]` (see [Hand-Made Indexes](/docs/packages/database/#hand-made-indexes)).
+
 ## Usage
 
 Once configured, the MySQL driver is automatically used when you interact with the database. See [`marko/database`](/docs/packages/database/) for entity definition and repository usage.

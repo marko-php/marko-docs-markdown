@@ -94,6 +94,8 @@ marko db:reset
 marko db:status
 ```
 
+`db:migrate` generates migrations only when `APP_ENV` is `development`, `dev` or `local`. In every other environment, including an unset `APP_ENV`, it applies the committed files and warns about drift; `db:rollback`, `db:reset`, `db:rebuild` and `db:seed` refuse to run in production. See [Environment Behaviour](/docs/packages/database/#environment-behaviour).
+
 ## Querying
 
 ### Query Builder

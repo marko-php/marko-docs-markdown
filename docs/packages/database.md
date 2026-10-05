@@ -68,9 +68,9 @@ class Post extends Entity
 
 | Attribute | Purpose |
 |-----------|---------|
-| `#[Table]` | Defines table name (`name:`) or marks an extender (`extends:`) |
+| `#[Table]` | Defines table name (`name:`) or marks an extender (`extends:`); `unmanagedIndexes:` lists hand-made indexes the diff never drops (see [Hand-Made Indexes](#hand-made-indexes)) |
 | `#[Column]` | Column configuration (name, primaryKey, autoIncrement, length, type, unique, default, references, onDelete, onUpdate) |
-| `#[Index]` | Composite indexes |
+| `#[Index]` | Composite and unique indexes; `where:` makes a partial index (see [Partial Indexes](#partial-indexes)) |
 | `#[Cast]` | Converts a property with a custom cast class (see [Casts](#casts)) |
 | `#[Encrypted]` | Stores a property encrypted (see [Encrypted Columns](#encrypted-columns)) |
 | `#[Timestamps]` | Fills `createdAt`/`updatedAt` automatically (see [Automatic Timestamps](#automatic-timestamps)) |
@@ -1263,11 +1263,97 @@ Place seeders in your module's `Seed/` directory. The `order` parameter controls
 |---------|-------------|
 | `marko db:status` | Show migration status |
 | `marko db:diff` | Preview changes between entities and database |
-| `marko db:migrate` | Generate and apply migrations |
-| `marko db:rollback` | Revert last migration batch (development only) |
-| `marko db:reset` | Rollback all migrations (development only) |
-| `marko db:rebuild` | Reset + re-run all migrations (development only) |
-| `marko db:seed` | Run seeders (development only) |
+| `marko db:migrate` | Apply migrations; in development, also generate them from entity changes |
+| `marko db:rollback` | Revert last migration batch (refused in production) |
+| `marko db:reset` | Rollback all migrations (refused in production) |
+| `marko db:rebuild` | Reset + re-run all migrations (refused in production) |
+| `marko db:seed` | Run seeders (refused in production) |
+
+### Environment Behaviour
+
+The commands read the environment from core's [`AppEnvironment`](/docs/packages/core/#application-environment) (`MARKO_ENV`, then `APP_ENV`). When neither is set the environment is `production`, so a deployment that forgets to set it fails safe.
+
+| Environment | `db:migrate` | `db:rollback`, `db:reset`, `db:rebuild`, `db:seed` |
+|-------------|--------------|----------------------------------------------------|
+| `development`, `dev`, `local` | Applies pending files, then generates and applies a migration for any entity change | Allowed |
+| `production`, `prod`, or unset | Applies pending files only, and warns about drift | Refused with exit code 1 |
+| Anything else (`staging`, `testing`, ...) | Applies pending files only, and warns about drift | Allowed |
+
+Generation runs only in development: staging is stricter than "not production" and never writes migration files on its own. When `db:migrate` skips generation because of the environment and the entities differ from the database, it prints the SQL it would have generated:
+
+```
+Warning: Entity schema differs from database.
+Migrations are not generated in the 'production' environment. Differences:
+  CREATE INDEX "shows_live_idx" ON "shows" ("status") WHERE status = 'live'
+Run db:migrate in development to generate a migration, then commit and deploy it.
+```
+
+### db:migrate Options
+
+| Option | Effect |
+|--------|--------|
+| `--generate` | Generate migrations from the entity diff even outside development |
+| `--no-generate` | Never generate; only apply committed migration files |
+| `--force` | Generate destructive changes without asking |
+| `--verbose`, `-v` | Show the SQL statements |
+
+`--generate` and `--no-generate` cannot be combined.
+
+### Destructive Changes
+
+The entity is the source of truth for the tables it owns, so a column, index or foreign key the entity no longer declares is dropped. Before generating a migration that drops anything, `db:migrate` lists each destructive statement and asks for confirmation:
+
+```
+This migration would remove existing database objects:
+  ALTER TABLE "shows" DROP COLUMN "legacy_rating"
+  DROP INDEX "shows_old_idx"
+
+Generate a migration with these changes? [y/N]
+```
+
+Answering anything other than `y` cancels generation. When nobody can answer (CI, a deploy script, piped input), the command exits with code 1 and generates nothing unless you pass `--force`. Tables no entity owns (sessions, jobs, ...) are never touched.
+
+### Partial Indexes
+
+Add `where:` to `#[Index]` to create a partial index. The predicate is raw SQL, copied into the `CREATE INDEX` statement:
+
+```php title="app/catalog/Entity/Show.php"
+#[Table('shows')]
+#[Index('shows_live_idx', ['status'], where: "status = 'live'")]
+class Show extends Entity
+{
+    // ...
+}
+```
+
+On PostgreSQL this generates `CREATE INDEX "shows_live_idx" ON "shows" ("status") WHERE status = 'live'`, and introspection reads the predicate back, so the next diff is empty. MySQL has no partial indexes: generating SQL for an index with `where:` throws a `MigrationException` naming the index.
+
+Indexes are matched by name. Changing an existing index's `where:` (or columns) does not alter it; give the changed index a new name so the old one is dropped and the new one created.
+
+### Hand-Made Indexes
+
+Indexes the entity cannot express (expression, GIN/GiST, covering indexes) belong in a hand-written migration. Tell the diff to leave them alone, per table:
+
+```php title="app/catalog/Entity/Show.php"
+#[Table('shows', unmanagedIndexes: ['shows_search_gin_idx'])]
+class Show extends Entity
+{
+    // ...
+}
+```
+
+or project-wide, in `config/database.php`:
+
+```php title="config/database.php"
+return [
+    // ...driver, host, port, database, username, password
+    'migrations' => [
+        'ignore_indexes' => ['shows_search_gin_idx', '*_trgm_idx'],
+    ],
+];
+```
+
+Both lists accept exact names and `fnmatch()` patterns. A listed index is never dropped. An entity extender may declare `unmanagedIndexes` too; its list merges into the parent table's. `ignore_indexes` must be a list of strings, or `ConfigurationException` is thrown.
 
 ### Development Workflow
 
@@ -1279,7 +1365,7 @@ marko db:diff
 # 3. Generate migration and apply it
 marko db:migrate
 
-# 4. If mistake, rollback (development only)
+# 4. If mistake, rollback (refused in production)
 marko db:rollback
 ```
 
@@ -1291,7 +1377,7 @@ marko db:rollback
 marko db:migrate
 ```
 
-In production, `db:migrate` only applies existing migration files — it never generates new ones.
+In production, `db:migrate` only applies existing migration files — it never generates new ones unless you pass `--generate`.
 
 ## Switching Database Drivers
 
