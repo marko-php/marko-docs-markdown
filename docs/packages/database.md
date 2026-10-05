@@ -56,10 +56,10 @@ class Post extends Entity
     #[Column(references: 'users.id', onDelete: 'cascade')]
     public int $authorId;
 
-    #[Column(default: 'CURRENT_TIMESTAMP')]
+    #[Column(type: 'timestamp', default: 'CURRENT_TIMESTAMP')]
     public DateTimeImmutable $createdAt;
 
-    #[Column]
+    #[Column(type: 'timestamp')]
     public ?DateTimeImmutable $updatedAt = null;
 }
 ```
@@ -71,6 +71,9 @@ class Post extends Entity
 | `#[Table]` | Defines table name (`name:`) or marks an extender (`extends:`) |
 | `#[Column]` | Column configuration (name, primaryKey, autoIncrement, length, type, unique, default, references, onDelete, onUpdate) |
 | `#[Index]` | Composite indexes |
+| `#[Cast]` | Converts a property with a custom cast class (see [Casts](#casts)) |
+| `#[Encrypted]` | Stores a property encrypted (see [Encrypted Columns](#encrypted-columns)) |
+| `#[Timestamps]` | Fills `createdAt`/`updatedAt` automatically (see [Automatic Timestamps](#automatic-timestamps)) |
 | `#[HasOne]` | Declares a has-one relationship to another entity |
 | `#[HasMany]` | Declares a has-many relationship to another entity |
 | `#[BelongsTo]` | Declares a belongs-to relationship to another entity |
@@ -89,7 +92,7 @@ Marko infers database types from PHP types:
 | `bool` | BOOLEAN |
 | `float` | DECIMAL or FLOAT |
 | `?type` | Column is NULLABLE |
-| `DateTimeImmutable` | TIMESTAMP |
+| `DateTimeImmutable` | VARCHAR unless declared --- use `type: 'timestamp'` or `type: 'datetime'` |
 | `BackedEnum` | ENUM with cases as values |
 | `array` or `?array` with `type: 'json'` | JSON (MySQL) / JSONB (PostgreSQL) |
 | Union type (e.g. `int\|string`) | No inference — requires an explicit `type:` |
@@ -221,6 +224,159 @@ ALTER TABLE posts
         GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.status'))) STORED,
     ADD INDEX idx_posts_metadata_status (metadata_status);
 ```
+
+## Value Conversion
+
+Every value moving between an entity property and a column goes through one pipeline in `EntityHydrator`: `toPhpValue()` on read, `toDatabaseValue()` on write. Inserts, batch inserts, updates and `findBy()`/`findOneBy()`/`existsBy()` criteria all use it, so an insert and an update of the same value always bind the same database value.
+
+Each property is converted by a cast, chosen in this order:
+
+| Property | Cast |
+|----------|------|
+| `#[Cast(SomeCast::class)]` | `SomeCast` |
+| `array` (or `type: 'json'`) | `JsonCast` --- JSON encode/decode |
+| `BackedEnum` | `EnumCast` --- stored as the backing value |
+| `DateTimeImmutable` | `DateTimeCast` --- see [Datetimes and Timezones](#datetimes-and-timezones) |
+| `int`, `float`, `bool`, `string` | `ScalarCast` --- coerced to the declared type on read |
+
+`NULL` never reaches a cast: SQL `NULL` hydrates to PHP `null`, and `null` is written as `NULL`.
+
+### Datetimes and Timezones
+
+`DateTimeImmutable` values are converted to the database timezone before they are formatted, and read back in that timezone. The stored instant never depends on the PHP default timezone or on the timezone of the object you assigned:
+
+```php
+$appointment->startsAt = new DateTimeImmutable('2026-07-04 09:30:00', new DateTimeZone('America/New_York'));
+$appointmentRepository->save($appointment); // stored as '2026-07-04 13:30:00'
+
+$loaded = $appointmentRepository->find($appointment->id);
+$loaded->startsAt->getTimestamp() === $appointment->startsAt->getTimestamp(); // true
+$loaded->startsAt->getTimezone()->getName(); // 'UTC'
+```
+
+The database timezone defaults to UTC. Set the optional `timezone` key to change it:
+
+```php title="config/database.php"
+return [
+    // ...driver, host, port, database, username, password
+    'timezone' => 'UTC',
+];
+```
+
+An invalid identifier fails loudly (a `ConfigurationException` naming the value) the first time a datetime is converted.
+
+> **Behaviour change:** before casts were introduced, datetimes were formatted in whatever timezone the object carried and read back in the PHP default timezone, so a value saved from a non-UTC object came back as a different instant. Rows written that way by a non-UTC application hold local wall-clock times; convert them to UTC (or set `timezone` to the zone they were written in) when upgrading.
+
+Datetimes are stored to the second (`Y-m-d H:i:s`). Declare the column type explicitly --- `#[Column(type: 'timestamp')]` or `#[Column(type: 'datetime')]` --- because a `DateTimeImmutable` property does not infer one.
+
+### Casts
+
+A cast converts a value object to and from its column. Implement `CastInterface` and point `#[Cast]` at it:
+
+```php title="app/billing/Cast/MoneyCast.php"
+<?php
+
+declare(strict_types=1);
+
+namespace App\Billing\Cast;
+
+use App\Billing\Money;
+use Marko\Database\Entity\Cast\CastInterface;
+use Marko\Database\Entity\PropertyMetadata;
+
+class MoneyCast implements CastInterface
+{
+    public function toPhp(
+        mixed $value,
+        PropertyMetadata $meta,
+    ): Money {
+        return Money::fromCents((int) $value);
+    }
+
+    public function toDatabase(
+        mixed $value,
+        PropertyMetadata $meta,
+    ): int {
+        return $value->cents;
+    }
+}
+```
+
+```php title="app/billing/Entity/Invoice.php"
+use App\Billing\Cast\MoneyCast;
+use App\Billing\Money;
+use Marko\Database\Attributes\Cast;
+use Marko\Database\Attributes\Column;
+
+#[Column(type: 'integer')]
+#[Cast(MoneyCast::class)]
+public Money $total;
+```
+
+- **Container-resolved.** Casts are built through the container, so they can take constructor dependencies and can be replaced with a Preference. The class must implement `CastInterface`, or metadata parsing throws `EntityException`.
+- **Column type.** A cast property uses the `#[Column(type:)]` you declare, otherwise the type inferred from the PHP type (`varchar` for value objects). A cast may also back a `type: 'json'` column with a non-array property.
+- **Dirty checking.** A cast property is dirty when its database representation changes, so assigning an equal value object --- or mutating a mutable one in place --- is handled correctly. To decide equality yourself, implement `EquatableCastInterface::equals(mixed $a, mixed $b, PropertyMetadata $meta): bool`.
+- **Criteria.** `findBy(['total' => Money::fromCents(500)])` converts the value through the cast before binding it.
+
+### Automatic Timestamps
+
+`#[Timestamps]` on an entity fills its creation and update times:
+
+```php title="app/blog/Entity/Comment.php"
+use DateTimeImmutable;
+use Marko\Database\Attributes\Column;
+use Marko\Database\Attributes\Table;
+use Marko\Database\Attributes\Timestamps;
+use Marko\Database\Entity\Entity;
+
+#[Table('comments')]
+#[Timestamps]
+class Comment extends Entity
+{
+    #[Column(primaryKey: true, autoIncrement: true)]
+    public ?int $id = null;
+
+    #[Column(type: 'text')]
+    public string $body;
+
+    #[Column(type: 'timestamp')]
+    public ?DateTimeImmutable $createdAt = null;
+
+    #[Column(type: 'timestamp')]
+    public ?DateTimeImmutable $updatedAt = null;
+}
+```
+
+- **Insert** (`save()` on a new entity and `insertBatch()`) sets both properties. A value you set yourself is kept.
+- **Update** sets `updatedAt` only when something else changed. Saving an unchanged entity writes nothing, and an `updatedAt` you changed yourself is kept.
+- **Property names** default to `createdAt` and `updatedAt`. Rename them, or pass `null` to manage one yourself: `#[Timestamps(createdAt: 'publishedAt', updatedAt: null)]`. Each named property must be a `DateTimeImmutable` `#[Column]`, or metadata parsing throws `EntityException`. Passing `null` for both, or using `#[Timestamps]` on a `#[Table(extends:)]` extender, also throws.
+- The time comes from the protected `Repository::now()` (UTC); override it in a repository to supply a different clock.
+
+### Encrypted Columns
+
+`#[Encrypted]` stores a property encrypted with [`marko/encryption`](/docs/packages/encryption/) and decrypts it on hydration:
+
+```php
+use Marko\Database\Attributes\Column;
+use Marko\Database\Attributes\Encrypted;
+
+#[Column]
+#[Encrypted]
+public ?string $refreshToken = null;
+```
+
+`marko/database` does not require `marko/encryption`. Install a driver first:
+
+```bash
+composer require marko/encryption-openssl
+```
+
+- **Any PHP type.** The property is converted by its normal cast first (an `array` becomes JSON, an enum its backing value, a datetime its database-timezone string), then the string is encrypted. Reads decrypt first, then convert. `#[Encrypted]` cannot be combined with `#[Cast]` on the same property (`EntityException`).
+- **Schema.** The column is always `text`, whatever the PHP type. Declaring any other `type:` throws `EntityException`.
+- **Loud setup errors.** `#[Encrypted]` without `marko/encryption` installed, or without an `EncryptorInterface` binding, throws `EntityException` when the entity metadata is parsed --- not on the first save.
+- **Not queryable.** Ciphertext changes on every write, so encrypted columns cannot be searched, indexed or unique. `findBy()`/`findOneBy()`/`existsBy()` on an encrypted property throws `EntityException`, as does marking an encrypted column as a primary key, `unique: true`, or including it in an `#[Index]` (thrown when the entity metadata is parsed).
+- **`NULL` is not encrypted.** A nullable encrypted column reveals whether a value is set.
+- **Decryption failures** (wrong key, a row written before encryption was enabled) throw `EntityException` naming the entity, property and column.
 
 ## Table Extension
 
