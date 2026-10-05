@@ -74,6 +74,14 @@ readonly class RegistrationService
 marko queue:work
 ```
 
+To keep urgent jobs ahead of bulk work, list queues in priority order. The worker drains `high` before it touches `default`:
+
+```bash
+marko queue:work --queue=high,default
+```
+
+Failed jobs are retried after a backoff delay that you can set per job or in `config/queue.php`. See [Retry Backoff](/docs/packages/queue/#retry-backoff).
+
 ## Available Backends
 
 | Package | Backend | Best For |

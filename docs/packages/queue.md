@@ -71,9 +71,38 @@ class ImportProducts extends Job
 }
 ```
 
-When a job fails and has remaining attempts, the worker releases it back to the queue with exponential backoff (`2^attempts * 10` seconds). Once all attempts are exhausted, the job is stored in the failed job repository and removed from the queue.
+When a job fails and has remaining attempts, the worker releases it back to the queue after a backoff delay (see [Retry Backoff](#retry-backoff)). Once all attempts are exhausted, the job is stored in the failed job repository and removed from the queue.
 
 Attempts persist across releases: the driver stores the updated count with the job, so a job that always throws is attempted exactly `maxAttempts` times. Drivers that track reservations (such as [`marko/queue-database`](/docs/packages/queue-database/)) also count an attempt whose worker died mid-run, so a job that crashes its worker cannot be retried forever.
+
+### Retry Backoff
+
+The backoff is how many seconds the worker waits before a failed job runs again. Set it per job with the `backoff` property, or for every job with `queue.backoff` in [Configuration](#configuration). The worker uses the job's value first, then the config value, then the built-in curve.
+
+| Value | Meaning |
+|-------|---------|
+| `int` | A fixed delay for every retry, e.g. `30` |
+| `list<int>` | The delay per attempt: the first entry after attempt 1 fails, the second after attempt 2, and so on. The last value repeats once the list runs out |
+| `null` | Fall through: a job with `null` uses `queue.backoff`, and `queue.backoff => null` uses `2^attempts * 10` seconds (20, 40, 80, ...) |
+
+```php
+use Marko\Queue\Job;
+
+class DeliverPartnerWebhook extends Job
+{
+    public protected(set) ?int $maxAttempts = 5;
+
+    // 5s after attempt 1, 30s after attempt 2, 120s after attempts 3 and 4
+    public protected(set) array|int|null $backoff = [5, 30, 120];
+
+    public function handle(): void
+    {
+        // Call a slow partner API...
+    }
+}
+```
+
+Declare the property with exactly the type `array|int|null`, since PHP requires a redeclared property to keep its parent's type. A negative delay, an empty list, or a list with non-int entries throws `QueueException` when the worker computes the delay.
 
 ### Jobs That Need Container Services
 
@@ -159,6 +188,33 @@ Use the CLI command to process jobs:
 marko queue:work
 marko queue:work --queue emails     # or --queue=emails
 marko queue:work --once
+marko queue:work --queue=high,default,low --sleep=1
+```
+
+| Option | Description |
+|--------|-------------|
+| `--queue` | Queue names to work, in priority order, separated by commas. Defaults to the `queue.queue` config value |
+| `--sleep` | Seconds to wait when every queue is empty (default `3`) |
+| `--once` | Process at most one job, then exit |
+
+### Queue Priority
+
+Give `--queue` several names to work them in priority order from one worker process:
+
+```bash
+marko queue:work --queue=high,default,low
+```
+
+On every pass the worker pops `high` first, then `default`, then `low`, and processes the first job it finds. After each job it starts again at `high`, so a lower queue only runs when every queue ahead of it is empty. The worker sleeps only when all listed queues are empty. With `--once`, it processes at most one job across all the queues.
+
+A failed job is recorded with the queue it was popped from, so `queue:failed` shows `low` for a job that failed on the `low` queue.
+
+To work queues from code, pass the list to the worker:
+
+```php
+use Marko\Queue\WorkerInterface;
+
+$worker->work(queues: ['high', 'default', 'low']);
 ```
 
 `marko/queue` binds `WorkerInterface` to the built-in `Worker`, so `queue:work` resolves once a driver is installed. You don't need to bind it yourself. To replace the worker, bind `WorkerInterface` to your own class in your module's `module.php`, or use a Preference on `Worker`.
@@ -183,6 +239,7 @@ return [
     'queue'        => 'default',
     'retry_after'  => 90,           // seconds before a reserved-but-unfinished job is reclaimed
     'max_attempts' => 3,
+    'backoff'      => null,         // int, list<int>, or null for 2^attempts * 10 seconds
 ];
 ```
 
@@ -193,6 +250,7 @@ return [
 | `queue` | `default` | Default queue name, used by `push()`, `later()` and `pop()` when no queue is given |
 | `retry_after` | `90` | Seconds after which a reserved job that has not been deleted or released is considered crashed and becomes eligible for re-reservation. The reclaimed reservation still counts as an attempt |
 | `max_attempts` | `3` | How many times a job is attempted before it is moved to the failed-job store. A job's own `maxAttempts`, when set, takes precedence |
+| `backoff` | `null` | Seconds to wait before retrying a failed job that sets no `backoff` of its own: an `int` (fixed), a `list<int>` (per attempt; the last value repeats), or `null` for `2^attempts * 10` seconds. See [Retry Backoff](#retry-backoff) |
 
 The `QueueConfig` class provides typed access to these values:
 
@@ -212,6 +270,7 @@ class MyService
         $defaultQueue = $this->queueConfig->queue();
         $retryAfter = $this->queueConfig->retryAfter();
         $maxAttempts = $this->queueConfig->maxAttempts();
+        $backoff = $this->queueConfig->backoff();
     }
 }
 ```
@@ -241,6 +300,7 @@ use Marko\Queue\JobInterface;
 public ?string $id { get; }
 public int $attempts { get; }
 public ?int $maxAttempts { get; } // null = use queue.max_attempts
+public array|int|null $backoff { get; } // int, list<int>, or null = use queue.backoff
 public function handle(): void;
 public function setId(string $id): void;
 public function incrementAttempts(): void;
@@ -254,9 +314,12 @@ public static function unserialize(string $data): static;
 ```php
 use Marko\Queue\WorkerInterface;
 
-public function work(?string $queue = null, bool $once = false, int $sleep = 3): void;
+/** @param list<string>|null $queues Priority order; null = the default queue */
+public function work(?array $queues = null, bool $once = false, int $sleep = 3): void;
 public function stop(): void;
 ```
+
+The built-in `Worker` also exposes `backoffFor(JobInterface $job): int`, which returns the retry delay for a job whose latest attempt failed.
 
 ### FailedJobRepositoryInterface
 
@@ -282,6 +345,7 @@ public function connection(): string;
 public function queue(): string;
 public function retryAfter(): int;
 public function maxAttempts(): int;
+public function backoff(): array|int|null; // int, list<int>, or null
 ```
 
 ### ContainerAwareJobInterface
