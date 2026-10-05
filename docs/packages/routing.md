@@ -336,6 +336,8 @@ These framework exceptions implement `HttpExceptionInterface`, so they render wi
 | `Marko\Security\Exceptions\CsrfTokenMismatchException` | `419` | `{"message": "CSRF token mismatch."}` |
 | `Marko\Validation\Exceptions\ValidationException` | `422` | `{"message": "The given data was invalid.", "errors": {"email": ["..."]}}` |
 | `Marko\Database\Exceptions\EntityNotFoundException` | `404` | `{"message": "Not found."}` (never the entity class or ID) |
+| `Marko\Database\Exceptions\UniqueConstraintViolationException` | `409` | `{"message": "Conflict."}` (never the constraint, SQL or values) |
+| `Marko\Database\Exceptions\ForeignKeyConstraintViolationException` | `409` | `{"message": "Conflict."}` (never the constraint, SQL or values) |
 
 Your own exceptions can implement the interface too --- useful for domain exceptions in packages that should not depend on `marko/routing`:
 

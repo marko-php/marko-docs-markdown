@@ -938,6 +938,122 @@ Under a long-running worker, the connection's `reset()` (from `ResettableInterfa
 Depend on `ConnectionInterface` or `TransactionInterface`, never on `MySqlConnection` or `PgSqlConnection` directly. Only the interfaces are shared. Requesting a concrete connection class builds a new, separate connection that is outside every transaction. It also bypasses `marko/database-readwrite` when that package is enabled.
 :::
 
+## Query and Constraint Exceptions
+
+When the database rejects a statement, the driver turns the `PDOException` into a typed exception from `Marko\Database\Exceptions`. This applies to repositories, the query builder, `ConnectionInterface::query()`/`execute()` and prepared statements alike. Unique and foreign key violations are normal events (double submits, races, deleting a row that is still referenced), and you can handle them without knowing which driver is installed:
+
+| Exception | Raised when | PostgreSQL | MySQL / MariaDB | HTTP |
+|-----------|-------------|------------|-----------------|------|
+| `UniqueConstraintViolationException` | A duplicate value hits a unique column or index | `23505` | `1062` | `409` |
+| `ForeignKeyConstraintViolationException` | A row references a missing parent, or a referenced row is deleted or updated | `23503` | `1451`, `1452` (and legacy `1216`, `1217`) | `409` |
+| `NotNullConstraintViolationException` | `NULL` (or no value) is written to a `NOT NULL` column | `23502` | `1048`, `1364` | --- |
+| `CheckConstraintViolationException` | A row fails a `CHECK` constraint | `23514` | `3819` (MySQL), `4025` (MariaDB) | --- |
+| `QueryException` | Any other driver error | anything else | anything else | --- |
+
+PostgreSQL is matched on the SQLSTATE and MySQL on the server error number, because MySQL reports every integrity violation as SQLSTATE `23000`.
+
+The hierarchy is:
+
+```
+DatabaseException
+└── QueryException                      sql(), bindings(), sqlState()
+    └── ConstraintViolationException    constraintName(), table(), column()
+        ├── UniqueConstraintViolationException
+        ├── ForeignKeyConstraintViolationException
+        ├── NotNullConstraintViolationException
+        └── CheckConstraintViolationException
+```
+
+The original `PDOException` is always available from `getPrevious()`. `constraintName()`, `table()` and `column()` are parsed from the driver message and return `null` when the driver does not report them. `table()` is the table that owns the constraint. For a foreign key violation that is the referencing (child) table, whether the statement inserted the child or deleted the parent. For a unique violation on PostgreSQL, `column()` is the indexed column list as the server reports it, for example `email` or `tenant_id, email`.
+
+### Handle a Duplicate Email
+
+Catch `UniqueConstraintViolationException` and turn it into a validation error:
+
+```php title="app/account/Service/RegistrationService.php"
+<?php
+
+declare(strict_types=1);
+
+namespace App\Account\Service;
+
+use App\Account\Entity\User;
+use App\Account\Repository\UserRepository;
+use Marko\Database\Exceptions\UniqueConstraintViolationException;
+use Marko\Validation\Exceptions\ValidationException;
+use Marko\Validation\Validation\ValidationErrors;
+
+class RegistrationService
+{
+    public function __construct(
+        private UserRepository $userRepository,
+    ) {}
+
+    /**
+     * @throws ValidationException
+     */
+    public function register(string $email): User
+    {
+        $user = new User();
+        $user->email = $email;
+
+        try {
+            $this->userRepository->save($user);
+        } catch (UniqueConstraintViolationException $e) {
+            if ($e->constraintName() !== 'users_email_unique') {
+                throw $e;
+            }
+
+            throw ValidationException::withErrors(
+                new ValidationErrors(['email' => ['This email address is already registered.']]),
+            );
+        }
+
+        return $user;
+    }
+}
+```
+
+Checking with `existsBy(['email' => $email])` first gives a friendlier path for the common case. Keep the `catch` anyway: two requests can both pass the check before either one inserts, and only the database constraint catches that race.
+
+:::caution
+PostgreSQL aborts the current transaction after any error. If the `save()` above runs inside `transaction()`, every later statement in that transaction fails with SQLSTATE `25P02` until it is rolled back. Catch the violation outside the transaction (let `transaction()` roll back and rethrow), or roll back before you continue. MySQL does not abort the transaction, but keep the same shape so the code works on both drivers.
+:::
+
+### HTTP Status
+
+`UniqueConstraintViolationException` and `ForeignKeyConstraintViolationException` implement `Marko\Core\Exceptions\HttpExceptionInterface`. If one escapes a controller, the routing pipeline renders a **`409 Conflict`** with the body `{"message": "Conflict."}`. The constraint name, SQL and bound values are never sent to the client. Not-null and check violations usually point at a missing validation rule, so they are not mapped and surface as a `500`. See [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
+
+`marko/database` depends only on `marko/core` for this interface. It does not require `marko/routing` or an errors package.
+
+### Messages and Redaction
+
+Exception messages are built from the parsed constraint, table and column, never copied from the driver. PostgreSQL's `DETAIL:` line (`Key (email)=(ada@example.com) already exists`) and MySQL's `Duplicate entry 'ada@example.com'` both contain row data. For example:
+
+```
+Unique constraint 'users_email_unique' violated on table 'users'
+```
+
+The exception context holds the SQL with its placeholders. It never holds the bound values. A plain `QueryException` uses the first line of the driver message, with any string binding the driver echoes replaced by `[redacted]`. The raw values stay available to your own code through `bindings()`, and the untouched driver message through `getPrevious()`. Be careful what you log from either one.
+
+### Upgrading From `catch (PDOException)`
+
+Before this change the raw `PDOException` escaped from `query()`, `execute()` and the repositories. Code that catches `PDOException` around those calls no longer matches. Catch `QueryException` (or a constraint subclass) instead, and read `sqlState()` or `getPrevious()` where you used to inspect the PDO error. This includes retry loops for deadlocks and serialization failures (SQLSTATE `40001` / `40P01`, MySQL `1213`):
+
+```php
+use Marko\Database\Exceptions\QueryException;
+
+try {
+    $this->transaction->transaction($work);
+} catch (QueryException $e) {
+    if (!in_array($e->sqlState(), ['40001', '40P01'], true)) {
+        throw $e;
+    }
+
+    // retry $work
+}
+```
+
 ## Bulk Insert
 
 `Repository::insertBatch(array $entities): void` inserts multiple entities in a single multi-row `INSERT` statement, wrapped in a transaction. It fires `EntityCreating` and `EntityCreated` events for each entity.
@@ -960,6 +1076,7 @@ $postRepository->insertBatch($posts);
 
 - Relationships are **not** auto-persisted. Persist related entities separately before calling `insertBatch()`.
 - `EntityCreating` / `EntityCreated` events fire synchronously for every entity in the batch. For high-throughput imports, mark observers async via `marko/queue` or drop to the raw query builder to avoid the per-row overhead.
+- A constraint violation on any row rolls back the whole batch and rethrows the typed exception (for example `UniqueConstraintViolationException`, with the `PDOException` as `getPrevious()`). It is not wrapped in `BatchInsertException`, so the same `catch` works for `save()` and `insertBatch()`. See [Query and Constraint Exceptions](#query-and-constraint-exceptions).
 - All entities must be of the same type and have identical column sets. `BatchInsertException` is thrown for empty input, mixed types, mismatched columns, or (on PostgreSQL) when the number of rows returned by `RETURNING` does not equal the number of inserted entities.
 
 **ID assignment after batch insert:**

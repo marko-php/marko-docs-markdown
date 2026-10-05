@@ -196,6 +196,14 @@ Implements `StatementInterface`. Wraps a prepared PDO statement.
 | `fetch(): ?array` | Fetch the next row, or `null` if none |
 | `rowCount(): int` | Get the number of affected rows |
 
+### PgSqlExceptionTranslator
+
+Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `PgSqlStatement::execute()` into a typed exception from `marko/database`, keyed on the SQLSTATE: `23505` unique, `23503` foreign key, `23502` not null, `23514` check, anything else `QueryException`. The constraint, table and column are parsed from the server message, and the `DETAIL:` line (which echoes row data) is never copied. `PgSqlConnection` and `PgSqlStatement` take it as an optional last constructor argument. See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions).
+
+| Method | Description |
+|---|---|
+| `translate(PDOException $exception, string $sql, array $bindings): QueryException` | Map a driver error to the typed exception, keeping the `PDOException` as `getPrevious()` |
+
 ### PgSqlQueryBuilder
 
 Implements `QueryBuilderInterface`. Fluent builder for PostgreSQL queries.

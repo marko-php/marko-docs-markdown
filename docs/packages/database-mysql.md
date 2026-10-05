@@ -168,6 +168,14 @@ class MyService
 | `whereJsonMissing(string $path): static` | WHERE JSON key/path does not exist |
 | `raw(string $sql, array $bindings = []): array` | Execute raw SQL |
 
+### MySqlExceptionTranslator
+
+Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `MySqlStatement::execute()` into a typed exception from `marko/database`, keyed on the server error number (MySQL reports every integrity violation as SQLSTATE `23000`): `1062` unique; `1451`, `1452`, `1216`, `1217` foreign key; `1048`, `1364` not null; `3819` (MySQL) and `4025` (MariaDB) check; anything else `QueryException`. The constraint, table and column are parsed from the server message. The duplicate value in a `1062` message is never copied. `MySqlConnection` and `MySqlStatement` take it as an optional last constructor argument. See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions).
+
+| Method | Description |
+|---|---|
+| `translate(PDOException $exception, string $sql, array $bindings): QueryException` | Map a driver error to the typed exception, keeping the `PDOException` as `getPrevious()` |
+
 ### MySqlConnectionFactory
 
 Implements `ConnectionFactoryInterface`. Creates `MySqlConnection` instances from a `DatabaseConfig`. Used by `marko/database-readwrite` to build per-connection instances for the write primary and each read replica.
