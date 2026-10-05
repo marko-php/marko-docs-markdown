@@ -3,7 +3,7 @@ title: marko/scheduler
 description: Fluent task scheduler with cron expression support — define recurring tasks in PHP and run them with a single cron entry.
 ---
 
-Fluent task scheduler with cron expression support --- define recurring tasks in PHP and run them with a single cron entry. Register closures on the `Schedule` with human-readable frequency methods (`daily()`, `hourly()`, `everyFiveMinutes()`) or raw cron expressions. A single system cron entry runs `schedule:run` every minute, and the scheduler determines which tasks are due. No per-task crontab entries needed.
+Fluent task scheduler with cron expression support --- define recurring tasks in PHP and run them with a single cron entry. Register closures on the `Schedule` with human-readable frequency methods (`daily()`, `hourly()`, `everyFiveMinutes()`) or raw cron expressions. A single system cron entry runs `schedule:run` every minute, and the scheduler determines which tasks are due. No per-task crontab entries needed. Long-running tasks can be protected from overlapping runs, and `schedule:work` runs the scheduler in the foreground where no cron daemon is available.
 
 ## Installation
 
@@ -32,6 +32,10 @@ return [
     },
 ];
 ```
+
+`Schedule` is registered as a singleton by `marko/scheduler`, so the instance your boot callback fills is the same one `schedule:run` and `schedule:work` read from. Boot callbacks run at the end of application initialization, before any command executes.
+
+Give every task a `description()`. It labels the task in command output and is required for overlap protection (see below).
 
 ### Frequency Methods
 
@@ -70,6 +74,28 @@ Supports standard 5-field cron: `minute hour day-of-month month day-of-week`. Fi
 
 **Day-of-week:** Both `0` and `7` represent Sunday. When both day-of-month and day-of-week are restricted (neither is `*`), a day matches if *either* field matches (standard cron OR semantics). An invalid or malformed expression throws `InvalidCronExpressionException` loudly.
 
+### Preventing Overlapping Runs
+
+A task that can take longer than its interval --- for example a 90-second import scheduled `everyMinute()` --- would otherwise start a second copy while the first is still running. Call `withoutOverlapping()` to skip the task while a previous run holds its mutex:
+
+```php
+$schedule->call(function () {
+    // Import the product feed...
+})->everyMinute()->description('Import product feed')->withoutOverlapping();
+```
+
+While the mutex is held, the run prints `Skipped (still running): Import product feed` and moves on. The mutex is released when the task finishes, including when it throws.
+
+`withoutOverlapping()` takes the number of minutes after which a held mutex is considered stale, for when its holder hung. It defaults to `1440` (24 hours):
+
+```php
+$schedule->call($callback)->hourly()->description('Rebuild search index')->withoutOverlapping(90);
+```
+
+The mutex is keyed on the task's expression and description, because closures have no stable identity. A task that uses `withoutOverlapping()` without a `description()` makes `schedule:run` and `schedule:work` throw `SchedulerException` before any task runs, whether or not that task is due. An expiry below 1 minute also throws `SchedulerException`.
+
+The default `FileTaskMutex` holds an exclusive `flock()` on `storage/framework/schedule-{hash}` under the project root while the task runs, and records the expiry time in that file. If the process crashes, the operating system releases the lock. A lock that is still held past its expiry is reclaimed by the next run. File locks only protect processes on the same server --- see [Customization](#customization) for multi-server setups.
+
 ### Running the Scheduler
 
 Add a single cron entry to your system:
@@ -78,7 +104,26 @@ Add a single cron entry to your system:
 * * * * * cd /path/to/project && marko schedule:run
 ```
 
-The `schedule:run` command checks all registered tasks and executes those that are due. Tasks that fail throw their exception message to the output without halting the remaining tasks.
+The `schedule:run` command checks all registered tasks and executes those that are due. A task that throws is reported as `Failed: {description} - {message}` and the remaining due tasks still run.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Every due task succeeded or was skipped as still running (or no tasks were due) |
+| `1` | At least one task threw an exception |
+
+The non-zero exit code makes failures visible to cron mail and monitoring tools.
+
+### Running in the Foreground
+
+For local development, or containers without a cron daemon, run the scheduler as a long-lived foreground process:
+
+```bash
+marko schedule:work
+```
+
+`schedule:work` sleeps until the top of each minute, then runs the tasks due at that minute, using the same logic as `schedule:run`. A failing task is reported and the loop keeps going. Tasks run sequentially in the same process, so if a run takes longer than a minute, the scheduler waits for the next minute boundary rather than catching up on the minutes it missed.
+
+Stop it with `Ctrl+C` (SIGINT) or SIGTERM. With the `pcntl` extension installed, the signal is handled gracefully: the current task finishes, the command prints `Scheduler stopped.` and exits `0`. Without `pcntl`, the signal terminates the process immediately.
 
 ### Querying Due Tasks
 
@@ -97,6 +142,44 @@ public function pending(): array
     return $this->schedule->dueTasksAt(new DateTimeImmutable());
 }
 ```
+
+### Running Due Tasks Programmatically
+
+`ScheduleRunner` is the service both commands use. Call it directly to run the tasks due at a specific time:
+
+```php
+use DateTimeImmutable;
+use Marko\Core\Command\Output;
+use Marko\Scheduler\ScheduleRunner;
+
+public function __construct(
+    private readonly ScheduleRunner $scheduleRunner,
+) {}
+
+public function runNow(Output $output): bool
+{
+    $result = $this->scheduleRunner->run(new DateTimeImmutable(), $output);
+
+    return !$result->hasFailures();
+}
+```
+
+## Customization
+
+Overlap protection depends on `TaskMutexInterface`, which `marko/scheduler` binds to `FileTaskMutex`. To share the mutex across several servers, implement the interface on a shared store such as Redis and bind it from your application module, which takes priority over the vendor binding:
+
+```php title="app/scheduling/module.php"
+use App\Scheduling\RedisTaskMutex;
+use Marko\Scheduler\Mutex\TaskMutexInterface;
+
+return [
+    'bindings' => [
+        TaskMutexInterface::class => RedisTaskMutex::class,
+    ],
+];
+```
+
+`acquire()` must be atomic and non-blocking, and must treat a mutex older than `$expiresAfterSeconds` as free.
 
 ## API Reference
 
@@ -122,11 +205,45 @@ public function weekly(): self;
 public function monthly(): self;
 public function cron(string $expression): self;
 public function description(string $description): self;
+public function withoutOverlapping(int $expiresAfterMinutes = 1440): self;
+public function preventsOverlapping(): bool;
+public function getOverlapExpiresAfterMinutes(): ?int;
+public function mutexName(): string;
 public function getDescription(): ?string;
 public function getExpression(): string;
 public function getCallback(): Closure;
 public function isDue(DateTimeInterface $now): bool;
 public function run(): mixed;
+```
+
+`mutexName()` throws `SchedulerException` when the task has no description. `withoutOverlapping()` throws `SchedulerException` when the expiry is below 1 minute.
+
+### ScheduleRunner
+
+```php
+use Marko\Core\Command\Output;
+use Marko\Scheduler\ScheduleRunResult;
+
+public function run(DateTimeInterface $now, Output $output): ScheduleRunResult;
+```
+
+### ScheduleRunResult
+
+```php
+public int $executed;
+public int $failed;
+public int $skipped;
+public function hasFailures(): bool;
+```
+
+### TaskMutexInterface
+
+```php
+use Marko\Scheduler\ScheduledTask;
+
+public function acquire(ScheduledTask $task, int $expiresAfterSeconds): bool;
+public function release(ScheduledTask $task): void;
+public function exists(ScheduledTask $task): bool;
 ```
 
 ### CronExpression
@@ -139,3 +256,10 @@ public static function matches(string $expression, DateTimeInterface $time): boo
 ```
 
 Throws `InvalidCronExpressionException` if the expression does not have exactly 5 fields or contains characters that cannot be parsed. All fields are validated before any matching occurs.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `marko schedule:run` | Run the tasks due this minute; exits `1` if any task failed |
+| `marko schedule:work` | Run due tasks at the top of every minute in the foreground until stopped |

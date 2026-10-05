@@ -17,7 +17,9 @@ Add a single cron entry to your system that runs every minute:
 * * * * * cd /path/to/project && marko schedule:run
 ```
 
-The `schedule:run` command checks all registered tasks and executes those that are due. Tasks that fail throw their exception message to the output without halting the remaining tasks.
+The `schedule:run` command checks all registered tasks and executes those that are due. A task that throws is reported in the output, the remaining due tasks still run, and the command exits `1` so cron and monitoring see the failure.
+
+For local development, or a container with no cron daemon, run `marko schedule:work` instead. It stays in the foreground and runs due tasks at the top of every minute until you stop it with `Ctrl+C`.
 
 ## Defining Scheduled Tasks
 
@@ -70,6 +72,20 @@ $schedule->call(function () {
 ```
 
 The expression follows the standard 5-field cron format: `minute hour day-of-month month day-of-week`. Fields support wildcards (`*`), steps (`*/5`), ranges (`1-5`), and lists (`1,15,30`).
+
+## Preventing Overlapping Runs
+
+If a task can run longer than its interval, call `withoutOverlapping()` so a new run is skipped while the previous one is still going:
+
+```php
+use Marko\Scheduler\Schedule;
+
+$schedule->call(function () {
+    // Import the product feed...
+})->everyMinute()->description('Import product feed')->withoutOverlapping();
+```
+
+The task must have a `description()`, which keys its mutex. A held mutex is considered stale after 24 hours by default; pass a number of minutes to change that, such as `withoutOverlapping(90)`. The default mutex is a local file lock, so it only protects processes on one server --- see the [package reference](/docs/packages/scheduler/#customization) for swapping in a shared mutex.
 
 ## Querying Due Tasks
 
