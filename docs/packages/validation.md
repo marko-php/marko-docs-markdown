@@ -56,6 +56,19 @@ $this->validator->validateOrFail($input, [
 
 The `ValidationException` includes rich context --- call `errors()` to get the `ValidationErrors` bag, or `getContext()` and `getSuggestion()` for diagnostic details.
 
+`ValidationException` implements `Marko\Core\Exceptions\HttpExceptionInterface`. When it escapes a controller, the routing pipeline renders it as **`422 Unprocessable Content`** with the field errors:
+
+```json
+{
+    "message": "The given data was invalid.",
+    "errors": {
+        "email": ["The email field must be a valid email address."]
+    }
+}
+```
+
+API clients get JSON; browsers get a minimal HTML page with the message. See [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions). Redirecting back to an HTML form with errors and old input is not built in --- catch the exception in the controller for that.
+
 ### Quick Boolean Check
 
 ```php
@@ -216,11 +229,14 @@ class ValidationErrors implements Countable, IteratorAggregate
 ### ValidationException
 
 ```php
-class ValidationException extends Exception
+class ValidationException extends Exception implements HttpExceptionInterface
 {
     public static function withErrors(ValidationErrors $errors): self;
     public function errors(): ValidationErrors;
     public function getContext(): string;
     public function getSuggestion(): string;
+    public function getStatusCode(): int;      // 422
+    public function getHeaders(): array;       // []
+    public function getResponseData(): array;  // ['message' => ..., 'errors' => $errors->all()]
 }
 ```

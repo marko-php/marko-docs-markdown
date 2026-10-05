@@ -10,6 +10,8 @@ The default error handler --- catches exceptions and displays them with full con
 - **Development** --- Full details including suggestions from `MarkoException`
 - **Production** --- Generic message with error ID (no sensitive paths or code)
 
+In the web SAPI the handler sets the HTTP status (`500`, or the status of an `HttpExceptionInterface` that reached it) and renders JSON instead of HTML when the client asks for it (see [Status Codes and JSON](#status-codes-and-json)).
+
 Non-fatal PHP errors (warnings, notices, deprecations) are reported via `error_log` in the web SAPI rather than halting the response or replacing the page with a 500 error. Fatal errors and uncaught exceptions still replace the response.
 
 ## Installation
@@ -58,6 +60,28 @@ MARKO_ENV=production
 Also accepts: `dev`, `local`. Falls back to `APP_ENV` if `MARKO_ENV` is not set. Any other value (or no value) is treated as production.
 
 **Safe default:** No env var = production mode.
+
+### Status Codes and JSON
+
+Uncaught exceptions are sent with status `500`. Exceptions that carry an HTTP meaning --- anything implementing `Marko\Core\Exceptions\HttpExceptionInterface`, such as `HttpException::notFound()` or `ValidationException` --- are normally rendered inside the routing pipeline (see [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions)) and never reach the handler. If one is thrown outside the pipeline (for example in a boot callback during a request), the handler uses its status and headers instead of `500`.
+
+When the request `Accept` header contains `application/json` or a `+json` type (or there is no `Accept` header and the `Content-Type` is JSON), the handler responds with `Content-Type: application/json`:
+
+```json
+// Production
+{"message": "Server Error"}
+
+// Development
+{
+    "message": "Undefined variable $post",
+    "exception": "ErrorException",
+    "file": "/app/blog/src/Controller/PostController.php",
+    "line": 42,
+    "trace": ["/app/... App\\Blog\\Controller\\PostController->show()", "..."]
+}
+```
+
+The development trace is trimmed to the first 20 frames. In production the body never contains the exception message, file, or trace; an `HttpExceptionInterface` contributes only its client-safe `getResponseData()`.
 
 ### Manual Handler Access
 
@@ -167,12 +191,13 @@ class SimpleErrorHandler implements ErrorHandlerInterface
 ```php
 class Environment
 {
-    public function __construct(?string $sapi = null, ?array $envVars = null);
+    public function __construct(?string $sapi = null, ?array $envVars = null, ?array $server = null);
 
     public function isCli(): bool;
     public function isWeb(): bool;
     public function isDevelopment(): bool;
     public function isProduction(): bool;
+    public function acceptsJson(): bool; // reads $server, defaulting to $_SERVER
 }
 ```
 
@@ -201,7 +226,19 @@ class BasicHtmlFormatter
 
     public function format(ErrorReport $report): string;
 }
+
+class JsonFormatter implements FormatterInterface
+{
+    public const CONTENT_TYPE = 'application/json';
+    public const MAX_TRACE_FRAMES = 20;
+
+    public function __construct(Environment $environment);
+
+    public function format(ErrorReport $report): string;
+}
 ```
+
+`Marko\ErrorsSimple\HttpErrorStatus::statusCode(Throwable)` and `::headers(Throwable)` return the status (`500` unless the throwable implements `HttpExceptionInterface`) and headers both handlers send.
 
 ### CodeSnippetExtractor
 

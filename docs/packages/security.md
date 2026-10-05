@@ -167,6 +167,8 @@ use Marko\Security\Exceptions\CsrfTokenMismatchException;
 // suggestion: "Ensure your form includes a valid CSRF token field (_token) or X-CSRF-TOKEN header..."
 ```
 
+`CsrfTokenMismatchException` implements `Marko\Core\Exceptions\HttpExceptionInterface`, so the routing pipeline renders it as **`419 Page Expired`** with the body `{"message": "CSRF token mismatch."}` (JSON, or a minimal HTML page for browsers). The detailed message, context and suggestion above stay server-side. Because the response is rendered where the middleware threw, outer middleware such as CORS and security headers still decorate it --- see [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
+
 ## API Reference
 
 ### CsrfTokenManagerInterface
@@ -236,4 +238,7 @@ public function getSuggestion(): string;
 use Marko\Security\Exceptions\CsrfTokenMismatchException;
 
 public static function invalidToken(): self;
+public function getStatusCode(): int;       // 419
+public function getHeaders(): array;        // []
+public function getResponseData(): array;   // ['message' => 'CSRF token mismatch.']
 ```

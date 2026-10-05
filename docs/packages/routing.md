@@ -206,6 +206,106 @@ Resolution: Use #[Preference] to extend one controller,
 or use #[DisableRoute] to remove one route.
 ```
 
+### Errors and HTTP Exceptions
+
+Throw `HttpException` from a controller or middleware to respond with an error status. There is no global `abort()` helper --- throw the exception explicitly:
+
+```php title="app/blog/src/Controller/PostController.php"
+use Marko\Routing\Exceptions\HttpException;
+
+#[Get('/posts/{id}')]
+public function show(int $id): Response
+{
+    $post = $this->postRepository->findById($id)
+        ?? throw HttpException::notFound('Post not found.');
+
+    return Response::json(['title' => $post->title]);
+}
+```
+
+Named constructors cover the common cases: `badRequest()`, `unauthorized()`, `forbidden()`, `notFound()`, `methodNotAllowed(['GET', 'HEAD'])` (sets `Allow`), `conflict()`, and `tooManyRequests(retryAfter: 60)` (sets `Retry-After`). For anything else use the constructor, which accepts any `400`--`599` status plus headers and extra client-safe data:
+
+```php
+throw new HttpException(
+    statusCode: 409,
+    message: 'That slug is already taken.',
+    data: ['field' => 'slug'],
+);
+```
+
+The message is client-facing: it is sent as `message` in the response body. When omitted it defaults to the status reason phrase (`Not Found`, `Conflict`, ...).
+
+#### Where errors are rendered
+
+The middleware pipeline catches any exception implementing `Marko\Core\Exceptions\HttpExceptionInterface` **at the depth it was thrown** and turns it into a `Response`. Every middleware outside that point still runs, so CORS headers, security headers, session saving and similar decorations apply to error responses too. This works the same under PHP-FPM and [RoadRunner](/docs/packages/roadrunner/).
+
+Any other throwable is not caught: it propagates out of `Router::handle()` to the installed error handler ([`marko/errors-simple`](/docs/packages/errors-simple/) or [`marko/errors-advanced`](/docs/packages/errors-advanced/)), which renders a `500`.
+
+#### Framework exceptions
+
+These framework exceptions implement `HttpExceptionInterface`, so they render without any glue code:
+
+| Exception | Status | Body |
+|---|---|---|
+| `Marko\Routing\Exceptions\InvalidRouteParameterException` | `400` | `{"message": "Missing required parameter 'id' of type 'int'"}` |
+| `Marko\Security\Exceptions\CsrfTokenMismatchException` | `419` | `{"message": "CSRF token mismatch."}` |
+| `Marko\Validation\Exceptions\ValidationException` | `422` | `{"message": "The given data was invalid.", "errors": {"email": ["..."]}}` |
+| `Marko\Database\Exceptions\EntityNotFoundException` | `404` | `{"message": "Not found."}` (never the entity class or ID) |
+
+Your own exceptions can implement the interface too --- useful for domain exceptions in packages that should not depend on `marko/routing`:
+
+```php
+use Marko\Core\Exceptions\HttpExceptionInterface;
+
+class SubscriptionExpiredException extends RuntimeException implements HttpExceptionInterface
+{
+    public function getStatusCode(): int
+    {
+        return 402;
+    }
+
+    public function getHeaders(): array
+    {
+        return [];
+    }
+
+    public function getResponseData(): array
+    {
+        return ['message' => 'Your subscription has expired.'];
+    }
+}
+```
+
+Only `getResponseData()` reaches the client. The exception message, file, and trace are never rendered, in any environment.
+
+#### JSON or HTML
+
+`ExceptionRenderer` renders JSON when the request's `Accept` header contains `application/json` or a `+json` type (for example `application/problem+json`), or when there is no `Accept` header and the `Content-Type` is JSON. The body is the response data with a `message` key guaranteed. Otherwise it renders a minimal HTML page showing the status and message. The exception's headers are added in both cases.
+
+#### Custom error pages
+
+Replace `ExceptionRenderer` with a `#[Preference]` to render branded pages. Override `renderHtml()` to change only the HTML output, `renderJson()` for JSON, or `render()` for both:
+
+```php title="app/web/src/Http/BrandedExceptionRenderer.php"
+use Marko\Core\Attributes\Preference;
+use Marko\Routing\Http\ExceptionRenderer;
+use Marko\Routing\Http\Response;
+
+#[Preference(replaces: ExceptionRenderer::class)]
+class BrandedExceptionRenderer extends ExceptionRenderer
+{
+    protected function renderHtml(
+        int $statusCode,
+        array $data,
+    ): Response {
+        return Response::html(
+            "<h1>Oops ($statusCode)</h1><p>" . htmlspecialchars($data['message']) . '</p>',
+            $statusCode,
+        );
+    }
+}
+```
+
 ## CLI
 
 Requires [`marko/cli`](/docs/packages/cli/) for the `marko` binary.
@@ -337,6 +437,54 @@ interface MiddlewareInterface
 }
 ```
 
+### HttpException
+
+```php
+use Marko\Routing\Exceptions\HttpException;
+
+public function __construct(
+    int $statusCode,             // 400-599, otherwise InvalidArgumentException
+    string $message = '',        // defaults to the reason phrase
+    array $headers = [],
+    array $data = [],            // extra client-safe body fields
+    string $context = '',
+    string $suggestion = '',
+    ?Throwable $previous = null,
+)
+
+public static function badRequest(string $message = ''): self;
+public static function unauthorized(string $message = ''): self;
+public static function forbidden(string $message = ''): self;
+public static function notFound(string $message = ''): self;
+public static function methodNotAllowed(array $allowedMethods, string $message = ''): self;
+public static function conflict(string $message = ''): self;
+public static function tooManyRequests(?int $retryAfter = null, string $message = ''): self;
+```
+
+`HttpException` implements `Marko\Core\Exceptions\HttpExceptionInterface`:
+
+```php
+interface HttpExceptionInterface extends Throwable
+{
+    public function getStatusCode(): int;
+    public function getHeaders(): array;       // array<string, string>
+    public function getResponseData(): array;  // client-safe; `message` is the human-readable text
+}
+```
+
+### ExceptionRenderer
+
+```php
+use Marko\Routing\Http\ExceptionRenderer;
+
+public function render(HttpExceptionInterface $exception, Request $request): Response;
+public function wantsJson(Request $request): bool;
+protected function renderJson(int $statusCode, array $data): Response;
+protected function renderHtml(int $statusCode, array $data): Response;
+```
+
+`Marko\Routing\Http\HttpStatus::reasonPhrase(int $statusCode): string` returns the standard reason phrase (`419` → `Page Expired`).
+
 ### Parameter Resolution
 
-The router resolves controller method parameters in priority order: route path params → POST body → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, which the router catches and converts to a `400` response. Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
+The router resolves controller method parameters in priority order: route path params → POST body → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, which the pipeline renders as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.

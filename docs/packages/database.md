@@ -324,6 +324,22 @@ class PostRepository extends Repository
 }
 ```
 
+### Entity Not Found
+
+`findOrFail()` throws `EntityNotFoundException` when no row matches. It extends `RepositoryException`, so existing `catch (RepositoryException $e)` blocks keep working, and it carries `$e->entityClass` and `$e->id` for logging.
+
+It also implements `Marko\Core\Exceptions\HttpExceptionInterface`: if it escapes a controller, the routing pipeline renders a **`404`** with the body `{"message": "Not found."}`. The entity class and ID are never sent to the client. See [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
+
+```php
+#[Get('/posts/{id}')]
+public function show(int $id): Response
+{
+    $post = $this->postRepository->findOrFail($id); // 404 if missing
+
+    return Response::json(['title' => $post->title]);
+}
+```
+
 ### Why Data Mapper?
 
 - **Testability**: Entities are plain objects, easy to construct in tests

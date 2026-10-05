@@ -3,7 +3,7 @@ title: marko/errors-advanced
 description: Pretty error pages with syntax-highlighted code, stack traces, and request details for fast debugging during development.
 ---
 
-Pretty error pages with syntax-highlighted code, stack traces, and request details --- so you can diagnose issues at a glance during development. Errors Advanced implements `ErrorHandlerInterface` with a rich HTML error page that displays the error message, syntax-highlighted source code around the error line, full stack trace with code context, request data (headers, query, POST), and environment info. In production, it shows a safe generic error page. Sensitive data (passwords, tokens, API keys) is automatically masked in request output. CLI errors fall back to plain text.
+Pretty error pages with syntax-highlighted code, stack traces, and request details --- so you can diagnose issues at a glance during development. Errors Advanced implements `ErrorHandlerInterface` with a rich HTML error page that displays the error message, syntax-highlighted source code around the error line, full stack trace with code context, request data (headers, query, POST), and environment info. In production, it shows a safe generic error page and sends status `500`; API clients that accept JSON get a JSON body instead. Sensitive data (passwords, tokens, API keys) is automatically masked in request output. CLI errors fall back to plain text.
 
 ## Installation
 
@@ -41,8 +41,16 @@ The error page will display:
 ### Environment-Aware Display
 
 - **Development** --- Full error details with source code and stack traces
-- **Production** --- Generic "An error occurred" message with no sensitive details
+- **Production** --- Generic "An error occurred" page with no file paths, source code, trace, or request data
 - **CLI** --- Plain text output via the text formatter
+
+The module binds `ErrorHandlerInterface` with a closure that passes the container's `Environment` (from [marko/errors-simple](/docs/packages/errors-simple/)) to `AdvancedErrorHandler`, which builds its `PrettyHtmlFormatter` for that environment --- so the production page is the one actually served when `MARKO_ENV` (or `APP_ENV`) is `production`.
+
+### Status Codes and JSON
+
+In the web SAPI the handler clears any half-rendered output buffers, then sends status `500` --- or, for an `HttpExceptionInterface` thrown outside the routing pipeline, that exception's status and headers. When the client accepts JSON (`Accept` contains `application/json` or a `+json` type, or a JSON `Content-Type` with no `Accept`), it responds with `Content-Type: application/json`: `{"message": "Server Error"}` in production, or the message, exception class, location and a trace trimmed to 20 frames in development. This matches [marko/errors-simple](/docs/packages/errors-simple/#status-codes-and-json).
+
+Client errors such as `404`, `419` and `422` are rendered by the routing pipeline and never reach this handler --- see [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
 
 ### Sensitive Data Masking
 
@@ -55,24 +63,32 @@ These appear as `********` in the error output. Masking is handled by `RequestDa
 
 ## Customization
 
-Replace the formatter via [Preferences](/docs/packages/core/) to customize the error page appearance:
+`AdvancedErrorHandler` builds its formatters itself, so customize the page by passing your own formatter. Bind `ErrorHandlerInterface` in your app module (app bindings take priority over vendor ones):
 
-```php
-use Marko\Core\Attributes\Preference;
-use Marko\Errors\ErrorReport;
-use Marko\ErrorsAdvanced\PrettyHtmlFormatter;
+```php title="app/web/module.php"
+use Marko\Core\Container\ContainerInterface;
+use Marko\Errors\Contracts\ErrorHandlerInterface;
+use Marko\ErrorsAdvanced\AdvancedErrorHandler;
+use Marko\ErrorsSimple\Environment;
+use App\Web\Errors\CustomHtmlFormatter;
 
-#[Preference(replaces: PrettyHtmlFormatter::class)]
-class CustomHtmlFormatter extends PrettyHtmlFormatter
-{
-    public function format(
-        ErrorReport $report,
-    ): string {
-        // Custom formatting
-        return parent::format($report);
-    }
-}
+return [
+    'bindings' => [
+        ErrorHandlerInterface::class => function (ContainerInterface $container): ErrorHandlerInterface {
+            $environment = $container->get(Environment::class);
+
+            return new AdvancedErrorHandler(
+                environment: $environment,
+                prettyHtmlFormatter: new CustomHtmlFormatter(
+                    environment: $environment->isProduction() ? 'production' : 'development',
+                ),
+            );
+        },
+    ],
+];
 ```
+
+Pass the real environment to any `PrettyHtmlFormatter` subclass --- its `environment` parameter defaults to `'development'`.
 
 ## API Reference
 
@@ -86,6 +102,11 @@ use Marko\Errors\ErrorReport;
 
 class AdvancedErrorHandler implements ErrorHandlerInterface
 {
+    public function __construct(
+        ?Environment $environment = null,
+        ?FormatterInterface $prettyHtmlFormatter = null, // defaults to an environment-aware PrettyHtmlFormatter
+    );
+
     public function handle(ErrorReport $report): void;
     public function handleException(Throwable $exception): void;
     public function handleError(int $level, string $message, string $file, int $line): bool;
