@@ -3,7 +3,7 @@ title: marko/authorization
 description: Gates, policies, and the #[Can] attribute -- control who can do what with expressive, testable authorization checks.
 ---
 
-Gates, policies, and the `#[Can]` attribute --- control who can do what with expressive, testable authorization checks. Define abilities with closures via the Gate, or organize them into policy classes mapped to entities. Use `#[Can]` on controller methods to enforce permissions automatically via middleware. Denials throw `AuthorizationException` with clear context.
+Gates, policies, and the `#[Can]` attribute --- control who can do what with expressive, testable authorization checks. Define abilities with closures via the Gate, or organize them into policy classes mapped to entities. Use `#[Can]` on controllers or their methods to enforce permissions through middleware that runs on every route once the package is installed. Denials throw `AuthorizationException` with clear context.
 
 ## Installation
 
@@ -108,26 +108,120 @@ $this->gate->authorize('update', $post);
 
 ### The #[Can] Attribute
 
-Add `#[Can]` to controller methods to enforce authorization via middleware:
+Add `#[Can]` to a controller method to require an ability before the action runs:
+
+```php
+use Marko\Authorization\Attributes\Can;
+use Marko\Routing\Attributes\Get;
+use Marko\Routing\Attributes\Post as PostRoute;
+use Marko\Routing\Http\Response;
+
+class PostController
+{
+    #[Get('/admin/stats')]
+    #[Can('view-stats')]
+    public function stats(): Response
+    {
+        // Only reachable if the gate allows 'view-stats'
+    }
+
+    #[PostRoute('/posts')]
+    #[Can(ability: 'create', entityClass: Post::class)]
+    public function store(): Response
+    {
+        // Only reachable if PostPolicy::create() allows it
+    }
+}
+```
+
+Installing `marko/authorization` registers `AuthorizationMiddleware` as global middleware, so you don't attach it to routes yourself. For every matched route it reads `#[Can]` from the controller action and checks the Gate:
+
+- **No `#[Can]`**: the request passes through untouched.
+- **Not logged in**: returns `401 Unauthorized`.
+- **Logged in but denied**: returns `403 Forbidden`.
+
+When the request's `Accept` header contains `application/json`, both responses are JSON: `{"error":"Unauthorized"}` or `{"error":"Forbidden"}`.
+
+The middleware checks authentication with the same guard the Gate uses, so the guard named by `authorization.default_guard` decides whether the request gets a `401`. If that value is `null`, the authentication default guard is used.
+
+Don't also list `AuthorizationMiddleware` in a route's `middleware` array. It already runs globally, so it would only check the same ability a second time.
+
+#### Class-Level `#[Can]`
+
+Put `#[Can]` on the controller class to protect every action in it. A `#[Can]` on a method replaces the class-level one for that action:
 
 ```php
 use Marko\Authorization\Attributes\Can;
 use Marko\Routing\Attributes\Get;
 use Marko\Routing\Http\Response;
 
-class PostController
+#[Can('admin.access')]
+class AdminController
 {
-    #[Get('/posts/{id}/edit')]
-    #[Can(ability: 'edit', entityClass: Post::class)]
-    public function edit(
-        int $id,
-    ): Response {
-        // Only reachable if authorized
+    #[Get('/admin')]
+    public function dashboard(): Response
+    {
+        // Requires 'admin.access'
+    }
+
+    #[Get('/admin/reports')]
+    #[Can('admin.reports')]
+    public function reports(): Response
+    {
+        // Requires 'admin.reports' only
     }
 }
 ```
 
-The `AuthorizationMiddleware` reads `#[Can]` attributes and checks the Gate automatically. It returns a `401 Unauthorized` response for unauthenticated users and a `403 Forbidden` response for authenticated users who lack the required ability. JSON responses are returned when the request's `Accept` header contains `application/json`.
+PHP attributes are not inherited, so a class-level `#[Can]` applies only to the class that declares it, not to its subclasses. Repeat it on a subclass that needs the same protection.
+
+#### Ordering with Sessions
+
+The guard reads the logged-in user from the session, so authorization runs after the session middleware. `marko/authorization` declares `sequence.after` on `marko/session-file` and `marko/session-database`, the session drivers that register `SessionMiddleware` globally. Drivers that aren't installed are ignored.
+
+#### Class-String vs Instance Checks
+
+With `entityClass`, `#[Can]` passes the class name (for example `Post::class`) to the Gate, not an entity. The Gate resolves the policy from the class name, so this fits abilities that don't need a specific record, such as `create` or `viewAny`:
+
+```php
+use Marko\Authorization\AuthorizableInterface;
+
+class PostPolicy
+{
+    public function create(
+        ?AuthorizableInterface $user,
+        string $postClass,
+    ): bool {
+        return $user !== null;
+    }
+}
+```
+
+Abilities that depend on a specific record, such as `update` or `delete` on one post, need the loaded entity. Marko has no route model binding (explicit over implicit), so load the entity in the controller and call `authorize()` yourself:
+
+```php
+use Marko\Authorization\Contracts\GateInterface;
+use Marko\Routing\Attributes\Put;
+use Marko\Routing\Http\Response;
+
+readonly class PostController
+{
+    public function __construct(
+        private GateInterface $gate,
+        private PostRepository $posts,
+    ) {}
+
+    #[Put('/posts/{id}')]
+    public function update(
+        int $id,
+    ): Response {
+        $post = $this->posts->find($id);
+        $this->gate->authorize('update', $post);
+
+        // proceed with update
+    }
+}
+```
 
 ### Implementing AuthorizableInterface
 
@@ -188,11 +282,16 @@ interface AuthorizableInterface extends AuthenticatableInterface
 #[Can(ability: 'access-dashboard')]                  // Without entity
 ```
 
+Targets classes and methods. A method-level `#[Can]` overrides a class-level one.
+
 ### AuthorizationMiddleware
+
+Registered as global middleware by `module.php`. It reads the matched controller and action from the request.
 
 ```php
 class AuthorizationMiddleware implements MiddlewareInterface
 {
+    public function __construct(GateInterface $gate, GuardInterface $guard);
     public function handle(Request $request, callable $next): Response;
 }
 ```
