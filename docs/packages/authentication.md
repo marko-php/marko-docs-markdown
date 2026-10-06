@@ -168,7 +168,7 @@ public function logout(): Response
 }
 ```
 
-`logout()` removes the user from the session, clears any remember token, and regenerates the session ID (deleting the old session), so the logged-out session ID cannot be reused on a shared machine. Other session data (for example, another guard's login) is kept; call `$session->destroy()` yourself if you want to discard everything. With [marko/security](/docs/packages/security/) installed, the CSRF token is also rotated on every login and logout.
+`logout()` removes the user from the session, clears the remember token (with [per-device tokens](#per-device-tokens), only the current device's), and regenerates the session ID (deleting the old session), so the logged-out session ID cannot be reused on a shared machine. Other session data (for example, another guard's login) is kept; call `$session->destroy()` yourself if you want to discard everything. With [marko/security](/docs/packages/security/) installed, the CSRF token is also rotated on every login and logout.
 
 ### Making Users Authenticatable
 
@@ -491,7 +491,32 @@ class LoginController
 }
 ```
 
+### Per-Device Tokens
+
+When a `RememberTokenStorageInterface` implementation is bound, every session guard issues **one token per device** instead of a single token on the user. [marko/admin-auth](/docs/packages/admin-auth/#remember-me-tokens) binds one backed by a `remember_tokens` table, which serves the admin guard and your app's own session guards alike.
+
+- `login($user, remember: true)` stores a new row (guard, user ID, a random selector, the SHA-256 hash of a random validator, the expiry, and the browser's `User-Agent`) and sends a `remember_{guard}` cookie holding `{selector}:{validator}`.
+- A later request looks the row up by guard and selector and compares the validator's hash with `hash_equals()`. An unknown selector clears the cookie; a wrong validator (a tampered cookie) is rejected and the row is left alone.
+- On success only the validator is rotated, as a compare-and-swap on the stored hash: of two requests racing with the same cookie, one logs in and the other is treated as a guest. The selector and the expiry are kept, so the [lifetime is fixed](#how-it-works) from the original login.
+- An expired row, or one whose user no longer exists, is deleted along with the cookie.
+- `logout()` deletes only the current device's row. The user's other devices stay remembered, and a remember-me login on one device never rotates another device's token.
+
+Without a binding, guards fall back to the single-column token described below. A cookie issued by that path (`{user id}|{token}`) is still honored after you install per-device storage: on its next use the column token is cleared and the device moves to its own row, so remembered users are not logged out by the upgrade.
+
+#### Clearing Expired Tokens
+
+Expired rows are deleted when they are presented, but rows from devices that never return remain. Purge them on a schedule:
+
+```bash
+marko auth:clear-tokens          # delete expired remember tokens
+marko auth:clear-tokens --force  # delete every remember token (logs every remembered device out)
+```
+
+The command calls `RememberTokenStorageInterface::clearExpiredTokens()` (or `clearAllTokens()` with `--force`), so it needs a storage binding such as marko/admin-auth's.
+
 ### How It Works
+
+These steps describe the single-column fallback, used when no `RememberTokenStorageInterface` is bound:
 
 1. `login($user, remember: true)` generates a random token, stores its SHA-256 hash and an expiry (`remember.lifetime` minutes from now) through `UserProviderInterface::updateRememberToken()`, and queues a `remember_{guard}` cookie (e.g. `remember_session`) holding `{user id}|{plain token}`.
 2. `QueuedCookiesMiddleware` attaches the queued cookie to the response with `Response::withCookie()`. The package registers this middleware as global middleware and orders it after the session driver modules, so there is nothing to wire up. Cookies never go through `setcookie()`, so behavior is identical under PHP-FPM and RoadRunner.
@@ -908,6 +933,7 @@ public function delete(string $name): void;
 ```php
 public function __construct(ClockInterface $clock, ?int $lifetimeMinutes = null);
 public function generate(): string;
+public function generateSelector(): string;
 public function hash(string $token): string;
 public function validate(string $token, string $storedHash): bool;
 public function expiresAt(): DateTimeImmutable;
@@ -915,6 +941,21 @@ public function hasExpired(DateTimeImmutable $expiresAt): bool;
 public function minutesUntil(DateTimeImmutable $expiresAt): int;
 public function isExpired(DateTimeImmutable $createdAt): bool;
 ```
+
+### RememberTokenStorageInterface
+
+Per-device remember-me tokens. Bound by [marko/admin-auth](/docs/packages/admin-auth/#remember-me-tokens) (`RememberTokenRepository`); bind your own implementation to store them elsewhere. See [Per-Device Tokens](#per-device-tokens).
+
+```php
+public function store(RememberTokenRecord $token): void;
+public function findBySelector(string $guard, string $selector): ?RememberTokenRecord;
+public function rotateValidator(string $guard, string $selector, string $currentValidatorHash, string $newValidatorHash): bool;
+public function deleteBySelector(string $guard, string $selector): void;
+public function clearExpiredTokens(): int;
+public function clearAllTokens(): int;
+```
+
+`RememberTokenRecord` is a readonly value object with `guard`, `userId`, `selector`, `validatorHash`, `expiresAt` and `userAgent`.
 
 ### RequestCookieJar
 
