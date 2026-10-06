@@ -225,7 +225,7 @@ use Marko\Database\Schema\Expression;
 public DateTimeImmutable $expiresAt;
 ```
 
-When an `Expression` default differs from the stored one, `PgSqlIntrospector::matchesStoredDefault()` opens a transaction, creates `CREATE TEMP TABLE marko_default_probe` with one column of the real column's type (`format_type()`) and your expression as its default, reads back the default PostgreSQL stored, and rolls back. Inside an open transaction it uses a savepoint. If both defaults deparse to the same text, `db:diff` reports no change. If PostgreSQL rejects the expression, the diff fails with a `MigrationException` naming the column and expression. The connection's user needs the `TEMPORARY` privilege on the database, which PostgreSQL grants to everyone by default. See [Column Defaults](/docs/packages/database/#column-defaults).
+When an `Expression` default differs from the stored one, `PgSqlIntrospector::matchesStoredDefault()` opens a transaction, creates `CREATE TEMP TABLE marko_default_probe` with one column of the real column's type (`format_type()`) and your expression as its default, reads back the default PostgreSQL stored, and rolls back. Inside an open transaction it uses a savepoint. If both defaults deparse to the same text, `db:diff` reports no change. If PostgreSQL rejects the expression or the probe table, the diff fails with an `ExpressionDefaultProbeException` naming the column, expression and database error; the post-migration drift check of `db:migrate` outside development only warns. The connection's user needs the `TEMPORARY` privilege on the database, which PostgreSQL grants to everyone by default. See [Column Defaults](/docs/packages/database/#column-defaults).
 
 ### Unique Constraints
 
@@ -361,7 +361,7 @@ Implements `IntrospectorInterface` and `ExpressionDefaultMatcherInterface`. Read
 | `getIndexes(string $table): array` | Get non-primary-key indexes for a table. An index behind a unique constraint has `constraint` set |
 | `getForeignKeys(string $table): array` | Get foreign key constraints for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names |
-| `matchesStoredDefault(string $table, string $column, Expression $expression): bool` | Whether the column would store its current default if it were declared with `$expression`, checked on a temporary table that is rolled back. Throws `MigrationException` when PostgreSQL rejects the expression |
+| `matchesStoredDefault(string $table, string $column, Expression $expression): bool` | Whether the column would store its current default if it were declared with `$expression`, checked on a temporary table that is rolled back. Throws `ExpressionDefaultProbeException` when PostgreSQL rejects the expression or the probe table |
 
 ### PgSqlGenerator
 

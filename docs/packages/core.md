@@ -302,6 +302,8 @@ class RefundCommand implements CommandInterface
 
 The running command's `Input` and `Output` are also registered in the container, so a console service the command depends on reads the same options and writes to the same stream.
 
+To report a warning without mixing it into the command's regular output, inject `ErrorOutput`. It is an `Output` that writes to STDERR (`new ErrorOutput($stream)` writes elsewhere, which is how tests capture it), so the warning stays visible when STDOUT is piped or captured by a deploy script.
+
 ### Asking for Confirmation
 
 Inject `ConfirmationPrompterInterface` to ask the person running the command a yes/no question. The prompter writes the question with a `[y/N]` or `[Y/n]` hint through the command's `Output` and reads the answer from standard input:
