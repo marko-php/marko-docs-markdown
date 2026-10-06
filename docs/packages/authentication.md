@@ -282,6 +282,8 @@ Registering a driver name again replaces the earlier factory, so a later module 
 
 ### Custom Guards
 
+A guard whose credentials can be scoped to a subset of what the user may do (an API token issued with abilities, for example) implements `Marko\Authentication\Contracts\AbilityScopedGuardInterface`, which adds `hasAbility(string $ability): bool`. The [authorization Gate](/docs/packages/authorization/#api-token-abilities) denies an authenticated user any ability the guard's `hasAbility()` rejects, so `#[Can]` respects token scopes.
+
 Implement `GuardInterface` to create custom guards, then register them as a driver. A stateless guard implements `StatelessGuardInterface` instead and throws from the stateful methods:
 
 ```php title="JwtGuard.php"
