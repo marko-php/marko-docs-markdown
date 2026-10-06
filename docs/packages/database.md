@@ -1705,7 +1705,7 @@ A few things to know:
 
 `#[Column(unique: true)]` is applied through the index diff, on both drivers. A new table or a new column gets the unique index inline (`UNIQUE` in `CREATE TABLE` or `ADD COLUMN`). On a column that already exists:
 
-- **Adding `unique: true`** creates a unique index named `<table>_<column>_unique`:
+- **Adding `unique: true`** creates a unique index named `<table>_<column>_unique` (shortened when longer than 63 bytes, see [Index and Foreign Key Names](#index-and-foreign-key-names)):
 
   ```sql
   CREATE UNIQUE INDEX "users_email_unique" ON "users" ("email")
@@ -1719,6 +1719,29 @@ A few things to know:
 A column whose only difference is uniqueness is never modified, so the column diff and the index diff never both act on it.
 
 When the diff reports a change to a table but the SQL generator produces no statement for it in either direction, migration generation stops with a `MigrationException` naming the table and the reported changes, instead of writing an empty `alter_*` migration. It means the entity and the driver describe the column differently; report it.
+
+### Index and Foreign Key Names
+
+Index and constraint names are limited to 63 bytes, the lower of the two drivers' limits: PostgreSQL silently truncates a longer name to 63 bytes, and MySQL rejects names over 64 characters. The limit is in bytes, so a multibyte character counts more than once.
+
+Marko derives three names from the table and column:
+
+| Name | Used for |
+|---|---|
+| `fk_<table>_<column>` | The foreign key of every `references:` column |
+| `<table>_<column>_unique` | The unique index added when an existing column becomes `unique: true` |
+| `<table>_<column>_index` | The plain index kept on a foreign key column whose unique index is dropped |
+
+A derived name that fits in 63 bytes is used as is. A longer one keeps its prefix and suffix, cuts the middle, and adds the 8-character crc32b hash of the full name:
+
+```
+customer_subscription_events_external_billing_reference_id_unique   (65 bytes)
+customer_subscription_events_external_billing_r_5e024629_unique      (63 bytes)
+```
+
+The shortened name is the same on every run and on both drivers, and two long names that start the same still get different hashes. `ignore_indexes` and `unmanagedIndexes` patterns see the shortened name, so match against that.
+
+Names you declare with `#[Index]` are never shortened, since renaming your identifier behind your back would hide what the database holds. A declared name over 63 bytes throws `EntityException` when the schema is built (`db:diff`, `db:migrate`), naming the entity, the index and its length in bytes. Give the index a shorter name. If PostgreSQL already holds the truncated form of a name that is now rejected, the next migration after the rename drops the truncated index and creates the new one.
 
 ### Partial Indexes
 
@@ -1760,7 +1783,7 @@ return [
 ];
 ```
 
-Both lists accept exact names and `fnmatch()` patterns. A listed index is never dropped. An entity extender may declare `unmanagedIndexes` too; its list merges into the parent table's. `ignore_indexes` must be a list of strings, or `ConfigurationException` is thrown.
+Both lists accept exact names and `fnmatch()` patterns, matched against the index name the database holds (for a derived name over 63 bytes, its [shortened form](#index-and-foreign-key-names)). A listed index is never dropped. An entity extender may declare `unmanagedIndexes` too; its list merges into the parent table's. `ignore_indexes` must be a list of strings, or `ConfigurationException` is thrown.
 
 ### Development Workflow
 

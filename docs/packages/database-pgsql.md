@@ -249,7 +249,7 @@ An inline `UNIQUE` (a new table or column with `unique: true`) creates a unique 
 ALTER TABLE "users" DROP CONSTRAINT "users_email_key"
 ```
 
-and the down migration restores it with `ALTER TABLE "users" ADD CONSTRAINT "users_email_key" UNIQUE ("email")`. Adding `unique: true` to an existing column creates a unique index, `<table>_<column>_unique`, dropped with `DROP INDEX` in down. See [Unique Columns on Existing Tables](/docs/packages/database/#unique-columns-on-existing-tables).
+and the down migration restores it with `ALTER TABLE "users" ADD CONSTRAINT "users_email_key" UNIQUE ("email")`. Adding `unique: true` to an existing column creates a unique index, `<table>_<column>_unique`, dropped with `DROP INDEX` in down. PostgreSQL silently truncates identifiers to 63 bytes, so Marko [shortens a derived name over 63 bytes with a hash](/docs/packages/database/#index-and-foreign-key-names) (the `_unique`, `_index` and `fk_` names) and rejects a declared `#[Index]` name over 63 bytes, rather than let the database hold a name the entity does not. See [Unique Columns on Existing Tables](/docs/packages/database/#unique-columns-on-existing-tables).
 
 ### Partial Indexes
 
