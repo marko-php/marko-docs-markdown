@@ -60,6 +60,10 @@ class FormController
 
 The middleware checks `_token` in POST data or the `X-CSRF-TOKEN` header. Safe methods (GET, HEAD, OPTIONS) are skipped automatically.
 
+You can also register `CsrfMiddleware` as global middleware in your module's `module.php`. It still never runs on requests that match no route, because it does not carry `#[RunsOnUnmatched]` (see [Which middleware runs](/docs/packages/routing/#which-middleware-runs)). A `POST` to an unknown path gets a `404`, and a `POST` to a GET-only path gets a `405` with `Allow` --- never a `419` token mismatch. The token check applies only to routes that exist.
+
+Issuing a token (`CsrfTokenManagerInterface::get()` the first time) writes it to the session. That counts as a modification, so the session is saved and the visitor gets a session cookie even under [lazy session persistence](/docs/packages/session/#lazy-persistence). The form submission then carries the cookie that holds the token.
+
 Include the token in forms:
 
 ```php

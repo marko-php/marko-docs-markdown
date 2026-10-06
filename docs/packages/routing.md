@@ -197,19 +197,47 @@ The prefix belongs to the class that declares the method. A [`#[Preference]`](#o
 
 ### Unmatched Requests: 404 and 405
 
-A request that matches no route still runs through every **global** middleware (session, CORS, security headers, logging, ...), then the router responds with:
+When a request matches no route, the router responds with:
 
 - **`405 Method Not Allowed`** when the path matches a route of another method. The `Allow` header lists the methods that would work, e.g. `Allow: GET, HEAD, OPTIONS`.
 - **`404 Not Found`** otherwise.
 
-Both are thrown as `HttpException` and rendered by `ExceptionRenderer` --- JSON when the client asks for it, a minimal HTML page otherwise (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Global middleware can decorate them like any other response.
+Both are thrown as `HttpException` and rendered by `ExceptionRenderer` --- JSON when the client asks for it, a minimal HTML page otherwise (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)).
 
-Route middleware (`#[Middleware]`) only runs when a route matched. In global middleware, `$request->controller()` and `$request->action()` are `null` for unmatched requests --- handle that case if your middleware reads them.
+#### Which middleware runs
+
+Only global middleware marked `#[RunsOnUnmatched]` runs for unmatched requests (404, 405 and the automatic OPTIONS response). Route middleware (`#[Middleware]`) never runs, because there is no route. Every other global middleware is skipped. That means no session start, no CSRF check, no authentication and no authorization. A scanner hitting `/wp-login.php` creates no session, and a `POST` to a typo'd URL gets a 404, not a CSRF 419.
+
+| Global middleware | Runs on unmatched requests |
+|---|---|
+| `CorsMiddleware` ([`marko/cors`](/docs/packages/cors/)) | Yes --- preflights and CORS headers on 404/405 |
+| `SessionMiddleware` (`marko/session-file`, `marko/session-database`) | No |
+| `CsrfMiddleware` ([`marko/security`](/docs/packages/security/)) | No |
+| Authentication and `AuthorizationMiddleware` | No |
+| `LayoutMiddleware`, `PageCacheMiddleware` | No (they only act on matched routes anyway) |
+| Your own global middleware | No, unless it declares `#[RunsOnUnmatched]` |
+
+To run your own global middleware on 404/405 responses (request logging, security headers), opt in on the class:
+
+```php title="app/web/src/Http/Middleware/SecurityHeadersMiddleware.php"
+use Marko\Routing\Attributes\RunsOnUnmatched;
+use Marko\Routing\Middleware\MiddlewareInterface;
+
+#[RunsOnUnmatched]
+class SecurityHeadersMiddleware implements MiddlewareInterface
+{
+    // ...
+}
+```
+
+The attribute is read from the class listed under `globalMiddleware`, not from a `#[Preference]` that replaces it. Opt in only for middleware that does not depend on a route or on session state. In middleware that opts in, `$request->controller()` and `$request->action()` are `null`.
+
+Because session and auth middleware do not run, a custom error page (an `ExceptionRenderer` Preference) must not read the session, the logged-in user, flash messages or a CSRF token when rendering a 404 or 405. The session is not started there, so the read throws `SessionNotStartedException` and the 404 becomes a 500.
 
 ### HEAD and OPTIONS
 
 - **HEAD**: when no `#[Head]` route matches, the GET route for the same path handles the request. The response keeps its status, headers and cookies, but the router always removes the body of a response to a HEAD request (including 404/405 pages). `Response::withoutBody()` does this and preserves the concrete response class; a `StreamingResponse` sends its headers and never opens the stream.
-- **OPTIONS**: when no `#[Options]` route matches but the path matches other routes, the router answers `204 No Content` with an `Allow` header (always including `HEAD` when `GET` is allowed, and `OPTIONS`). This automatic response goes through global middleware, so [`marko/cors`](/docs/packages/cors/) turns a browser preflight into a full CORS response. An OPTIONS request to an unknown path gets a 404.
+- **OPTIONS**: when no `#[Options]` route matches but the path matches other routes, the router answers `204 No Content` with an `Allow` header (always including `HEAD` when `GET` is allowed, and `OPTIONS`). This automatic response goes through the global middleware marked `#[RunsOnUnmatched]`, so [`marko/cors`](/docs/packages/cors/) turns a browser preflight into a full CORS response. An OPTIONS request to an unknown path gets a 404.
 
 ### Adding Middleware
 
@@ -267,7 +295,7 @@ class WebhookController
 }
 ```
 
-The route's stack is global middleware, then route middleware, minus the excluded classes. Unmatched requests (404/405) still run every global middleware.
+The route's stack is global middleware, then route middleware, minus the excluded classes. Unmatched requests (404/405) have no route to exclude anything; they run only the global middleware marked `#[RunsOnUnmatched]` (see [Which middleware runs](#which-middleware-runs)).
 
 If a route excludes middleware that is neither global nor on the route, boot fails with a `RouteException`. That catches a typo in the class name, and it catches a driver package that isn't installed. A silent no-op would leave the middleware running. The [stateless API recipe](/docs/packages/session/#stateless-routes) shows the session case in full.
 
@@ -504,7 +532,7 @@ The message is client-facing: it is sent as `message` in the response body. When
 
 #### Where errors are rendered
 
-The middleware pipeline catches any exception implementing `Marko\Core\Exceptions\HttpExceptionInterface` **at the depth it was thrown** and turns it into a `Response`. Every middleware outside that point still runs, so CORS headers, security headers, session saving and similar decorations apply to error responses too. This works the same under PHP-FPM and [RoadRunner](/docs/packages/roadrunner/).
+The middleware pipeline catches any exception implementing `Marko\Core\Exceptions\HttpExceptionInterface` **at the depth it was thrown** and turns it into a `Response`. Every middleware outside that point still runs, so CORS headers, security headers, session saving and similar decorations apply to error responses too. (A 404 or 405 from the router itself only passes through the global middleware marked `#[RunsOnUnmatched]`; see [Which middleware runs](#which-middleware-runs).) This works the same under PHP-FPM and [RoadRunner](/docs/packages/roadrunner/).
 
 Any other throwable is not caught: it propagates out of `Router::handle()` to the installed error handler ([`marko/errors-simple`](/docs/packages/errors-simple/) or [`marko/errors-advanced`](/docs/packages/errors-advanced/)), which renders a `500`.
 
@@ -631,6 +659,7 @@ marko route:list --method=GET --path=blog
 #[Middleware(MiddlewareClass::class)]               // class or method; class-string or array
 #[WithoutMiddleware(MiddlewareClass::class)]        // class or method; class-string or array
 #[RoutePrefix(prefix: '/api', namePrefix: 'api.')] // class only
+#[RunsOnUnmatched]                                  // middleware class only; runs on 404/405/automatic OPTIONS
 ```
 
 ### UrlGeneratorInterface

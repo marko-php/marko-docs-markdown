@@ -93,6 +93,8 @@ expect($session->destroyed)->toBeTrue();
 
 `has()` returns `true` when a key is stored, even if its value is `null`. This matches the behavior of the production `Session` implementation.
 
+`isModified()` reports whether data changed since `start()` (or the ID was regenerated), and `discard()` sets the public `$discarded` flag without setting `$saved` --- the two calls `SessionMiddleware` makes for [lazy persistence](/docs/packages/session/#lazy-persistence).
+
 ### FakeCookieJar
 
 ```php
@@ -711,6 +713,8 @@ public function getId(): string;
 public function setId(string $id): void;
 public function flash(): FlashBag;
 public function save(): void;
+public function isModified(): bool; // data changed since start(), or regenerate() was called
+public function discard(): void;    // sets $discarded, never $saved
 ```
 
 ### FakeCookieJar

@@ -122,21 +122,38 @@ $this->session->destroy();
 // Save and close
 $this->session->save();
 
+// Close without writing anything
+$this->session->discard();
+
+// Did this request change the session?
+$this->session->isModified();
+
 // Get current session ID
 $id = $this->session->getId();
 ```
 
 ### Session Middleware
 
-The `SessionMiddleware` automatically starts the session at the beginning of a request and saves it when the response completes. It is registered globally by the session driver package (e.g., `marko/session-file`, `marko/session-database`) --- no manual registration is needed. Your controllers only need to inject `SessionInterface`; `start()` and `save()` are handled automatically.
+The `SessionMiddleware` automatically starts the session at the beginning of a request and closes it when the response completes. It is registered globally by the session driver package (e.g., `marko/session-file`, `marko/session-database`) --- no manual registration is needed. Your controllers only need to inject `SessionInterface`; `start()` and `save()` are handled automatically.
 
-The session cookie is attached to the `Response` rather than emitted directly by PHP --- `Session::configure()` disables PHP's built-in cookie handling, so `SessionMiddleware` reads the inbound cookie off the `Request`, seeds the session ID before `start()`, and attaches an outbound cookie only when the session ID changed (a new session, a regenerated ID, or an expired cookie after `destroy()`). A repeat visitor whose session ID is unchanged gets no `Set-Cookie` header. An invalid or tampered inbound cookie is ignored --- the middleware falls through to a fresh session rather than raising an error.
+The middleware runs on every matched route, but not on requests that match no route (404, 405, automatic OPTIONS): those never start a session. See [Which middleware runs](/docs/packages/routing/#which-middleware-runs).
+
+#### Lazy persistence
+
+A session is only stored when the request actually used it. When the response completes, the middleware:
+
+- **saves** the session when the request resumed an existing session from a valid session cookie, or when the request **modified** it (`set()`, `remove()`, `clear()`, a flash message, `regenerate()`). Saving an unmodified resumed session keeps its expiry sliding forward.
+- **discards** it otherwise: `discard()` closes the session without calling the handler's `write()`, and no `Set-Cookie` is sent.
+
+Reading never counts as a modification. A visitor without a session cookie who only views public pages gets no session row or file and no cookie, even if the page calls `get()` or `has()` or checks for a logged-in user. The first write (logging in, adding to a cart, issuing a CSRF token, flashing a message) persists the session and sends the cookie. A malformed or tampered cookie counts as no cookie. An empty session is still read from the handler at start.
+
+The session cookie is attached to the `Response` rather than emitted directly by PHP --- `Session::configure()` disables PHP's built-in cookie handling, so `SessionMiddleware` reads the inbound cookie off the `Request`, seeds the session ID before `start()`, and attaches an outbound cookie only when a saved session's ID changed (a new session that was written to, a regenerated ID, or an expired cookie after `destroy()` of a session the client already had). A repeat visitor whose session ID is unchanged gets no `Set-Cookie` header. An invalid or tampered inbound cookie is ignored --- the middleware falls through to a fresh session rather than raising an error.
 
 This matters for [`marko/page-cache`](/docs/packages/page-cache/): responses carrying any cookie are never cached, so attaching the session cookie unconditionally would silently disable page caching on every session-enabled route.
 
 ### Stateless Routes
 
-Because the session middleware is global, every route starts a session by default. It reads and writes the session file or row, and a new visitor gets a `Set-Cookie`. A JSON API, a webhook receiver or a health check doesn't need any of that. Skip the middleware with [`#[WithoutMiddleware]`](/docs/packages/routing/#skipping-middleware), on one route or on a whole controller:
+Because the session middleware is global, every matched route starts a session by default. It reads the session file or row, and writes it back for visitors who already have a session. A JSON API, a webhook receiver or a health check doesn't need any of that. Skip the middleware with [`#[WithoutMiddleware]`](/docs/packages/routing/#skipping-middleware), on one route or on a whole controller:
 
 ```php title="app/api/src/Controller/ShowApiController.php"
 use Marko\Routing\Attributes\Get;
@@ -245,7 +262,11 @@ public function getId(): string;
 public function setId(string $id): void;
 public function flash(): FlashBag;
 public function save(): void;
+public function isModified(): bool; // data or ID changed since start(); reads don't count
+public function discard(): void;    // close without writing to the handler
 ```
+
+`isModified()` and `discard()` are what `SessionMiddleware` uses for [lazy persistence](#lazy-persistence). A custom `SessionInterface` implementation must provide both.
 
 ### FlashBag
 

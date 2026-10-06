@@ -7,7 +7,7 @@ CORS middleware for Marko --- enables browser-based frontends and mobile apps to
 
 Cross-Origin Resource Sharing (CORS) headers tell browsers which origins, methods, and headers are permitted when making cross-domain requests. Without them, your API is inaccessible to JavaScript running on a different domain.
 
-Installing the package is enough: `CorsMiddleware` registers itself as **global middleware** and runs on every request, matched or not, before every other framework global middleware (page cache, sessions, authentication, authorization, layout). It does nothing unless the request carries an `Origin` header from an allowed origin and its path matches `paths`. A browser preflight is answered with a `204` before any controller, session or auth code runs, and every other cross-origin response --- including cached pages, `401`/`403` and `404`/`405` responses --- gets the CORS headers.
+Installing the package is enough: `CorsMiddleware` registers itself as **global middleware** and runs on every request, matched or not (it is marked `#[RunsOnUnmatched]`), before every other framework global middleware (page cache, sessions, authentication, authorization, layout). It does nothing unless the request carries an `Origin` header from an allowed origin and its path matches `paths`. A browser preflight is answered with a `204` before any controller, session or auth code runs, and every other cross-origin response --- including cached pages, `401`/`403` and `404`/`405` responses --- gets the CORS headers.
 
 ## Installation
 
@@ -88,7 +88,7 @@ A browser sends a preflight before a cross-origin request that is not "simple" (
 - `Access-Control-Max-Age` --- when `max_age` is above `0`
 - `Vary: Origin`
 
-No route needs to exist for `OPTIONS`: because the middleware is global, it runs even though no route matches the preflight. An `OPTIONS` request without `Access-Control-Request-Method` is not a preflight; it continues to the router, which answers it automatically with `204` and an `Allow` header (see [HEAD and OPTIONS](/docs/packages/routing/#head-and-options)), and gets the normal CORS headers.
+No route needs to exist for `OPTIONS`. `CorsMiddleware` is marked `#[RunsOnUnmatched]`, so it is one of the few global middleware that still run when no route matches (see [Which middleware runs](/docs/packages/routing/#which-middleware-runs)). It answers the preflight with `204` whether or not any route exists for the path: a preflight to an unknown path that `paths` covers also gets a `204` with CORS headers, and the browser's actual request then receives a `404` that carries the CORS headers too, so client code can read the status. Session, CSRF and auth middleware never run for preflights. An `OPTIONS` request without `Access-Control-Request-Method` is not a preflight; it continues to the router, which answers it automatically with `204` and an `Allow` header (see [HEAD and OPTIONS](/docs/packages/routing/#head-and-options)), and gets the normal CORS headers.
 
 ### Actual Requests
 
