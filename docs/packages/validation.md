@@ -125,7 +125,7 @@ $errors->count();             // total error count across all fields
 | File | `file` | Must be an uploaded file that arrived without an upload error |
 | Image | `image` | Must be a JPEG, PNG, GIF or WebP image, judged from its contents (never SVG) |
 | Mimes | `mimes:jpg,png,pdf` | The extension for the file's sniffed MIME type must be listed (`jpeg` and `jpg` are the same) |
-| MimeTypes | `mimetypes:image/*,application/pdf` | The sniffed MIME type must be listed; `type/*` matches any subtype |
+| MimeTypes | `mimetypes:image/*,application/pdf` | The sniffed MIME type must be listed; `type/*` matches any subtype except `image/svg+xml` |
 | MaxSize | `max_size:2048` | File size at most this many kilobytes (1 KB = 1024 bytes) |
 | MinSize | `min_size:1` | File size at least this many kilobytes |
 
@@ -201,7 +201,7 @@ class AvatarController
 
 A failure throws `ValidationException`, which renders as a 422 with the file errors under their field names, exactly like any other rule. A file field overrides a form field of the same name in the merged array.
 
-The type rules never trust what the client sent. `image`, `mimes` and `mimetypes` read the MIME type that `UploadedFile::mimeType()` detects from the file contents, so a text file named `avatar.png` with a `Content-Type` of `image/png` fails `image` and `mimes:png`. `image` accepts JPEG, PNG, GIF and WebP only: SVG can carry script, so allow it explicitly with `mimes:svg` or `mimetypes:image/svg+xml` when you serve it safely.
+The type rules never trust what the client sent. `image`, `mimes` and `mimetypes` read the MIME type that `UploadedFile::mimeType()` detects from the file contents, so a text file named `avatar.png` with a `Content-Type` of `image/png` fails `image` and `mimes:png`. `image` accepts JPEG, PNG, GIF and WebP only: SVG can carry script, so allow it explicitly with `mimes:svg` or `mimetypes:image/svg+xml` when you serve it safely. The `image/*` wildcard does not match SVG either: `mimetypes:image/*` rejects an SVG upload, and `mimetypes:image/*,image/svg+xml` accepts it.
 
 Every file rule fails a value that is not an uploaded file, and an upload that failed or was already moved. Failed uploads get a message that says why --- for example `The avatar file is larger than the server allows.` when the file exceeded `upload_max_filesize`.
 
