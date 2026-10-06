@@ -13,6 +13,10 @@ composer require marko/admin-api
 
 Requires [`marko/admin`](/docs/packages/admin/) and `marko/admin-auth`.
 
+## Configuration
+
+The package has no configuration of its own. The routes are always under `/admin/api/v1`, and they authenticate on the [admin guard](/docs/packages/admin-auth/#the-admin-guard) named by `admin-auth.guard`. Earlier versions shipped a `config/admin-api.php` with `version`, `rate_limit` and `guard` keys that nothing read, so setting them changed nothing; they have been removed. The endpoints are not rate limited; to throttle them, put [`marko/ratelimiter`](/docs/packages/ratelimiter/)'s `RateLimitMiddleware` in front of them.
+
 ## Usage
 
 ### Available Endpoints
@@ -179,16 +183,3 @@ class ApiResponse
 ```
 
 `ApiResponse` builds success responses only. For errors, throw an `HttpException` (`notFound()`, `forbidden()`, `unauthorized()`, `badRequest()`, ...) from `marko/routing`.
-
-### AdminApiConfigInterface
-
-```php
-use Marko\AdminApi\Config\AdminApiConfigInterface;
-
-interface AdminApiConfigInterface
-{
-    public function getVersion(): string;
-    public function getRateLimit(): int;
-    public function getGuardName(): string;
-}
-```
