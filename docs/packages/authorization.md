@@ -148,6 +148,18 @@ The middleware checks authentication with the same guard the Gate uses, so the g
 
 Don't also list `AuthorizationMiddleware` in a route's `middleware` array. It already runs globally, so it would only check the same ability a second time.
 
+#### Cost on Routes Without `#[Can]`
+
+The middleware builds the Gate and the guard lazily, the first time it sees a route with `#[Can]`. For a route without `#[Can]`, and for a request that matches no route (`404`/`405`), `AuthorizationMiddleware` never resolves the Gate, the `AuthManager`, the guard or the authorization config. Those requests cost one cached attribute lookup, and they work even when authentication isn't configured. You can install `marko/authorization` just to call the Gate from a CLI command or a service without setting up the authentication stack. (An installed session driver still runs its own `SessionMiddleware` on every request; that is independent of `#[Can]`.)
+
+A route with `#[Can]` needs the full stack:
+
+- An authentication guard: `authorization.default_guard`, or the authentication default guard when that value is `null`, must name a guard defined under `authentication.guards`.
+- A `UserProviderInterface` binding, so the guard can load the logged-in user.
+- A session driver (such as `marko/session-file` or `marko/session-database`) when that guard is a session guard.
+
+Misconfiguration therefore surfaces on the first request to a `#[Can]` route, not on every request: that request fails with the container or config error that names what is missing, while routes without `#[Can]` keep working. A failed build is not cached, so the next `#[Can]` request tries again. The Gate and guard are built once per middleware instance, so a long-running worker builds them on its first `#[Can]` request and reuses them after that.
+
 #### Class-Level `#[Can]`
 
 Put `#[Can]` on the controller class to protect every action in it. A `#[Can]` on a method replaces the class-level one for that action:
@@ -313,12 +325,16 @@ Targets classes and methods. A method-level `#[Can]` overrides a class-level one
 
 ### AuthorizationMiddleware
 
-Registered as global middleware by `module.php`. It reads the matched controller and action from the request.
+Registered as global middleware by `module.php`. It reads the matched controller and action from the request. The constructor takes factories, not instances, so the Gate and guard are built only on the first route with `#[Can]`.
 
 ```php
 class AuthorizationMiddleware implements MiddlewareInterface
 {
-    public function __construct(GateInterface $gate, GuardInterface $guard);
+    /**
+     * @param Closure(): GateInterface $gate
+     * @param Closure(): GuardInterface $guard
+     */
+    public function __construct(Closure $gate, Closure $guard);
     public function handle(Request $request, callable $next): Response;
 }
 ```
