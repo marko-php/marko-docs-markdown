@@ -85,7 +85,9 @@ If you want to allow longer passphrases, set `hashing.default` to `argon2id`, wh
 
 ### Rehashing on Login
 
-Upgrade hashes transparently when algorithm or cost settings change:
+With [marko/authentication](/docs/packages/authentication/#password-hashing) installed you get this for free: its `PasswordHasherInterface` is backed by `HashManager`, so `HASH_DRIVER` decides how login passwords are hashed, and `SessionGuard::attempt()` rehashes and saves a user's password whenever `needsRehash()` reports it out of date. Switching `hashing.default` from `bcrypt` to `argon2id` keeps existing bcrypt users able to log in and moves each one to Argon2id on their next login.
+
+Elsewhere, upgrade hashes transparently when algorithm or cost settings change:
 
 ```php
 use Marko\Hashing\HashManager;
