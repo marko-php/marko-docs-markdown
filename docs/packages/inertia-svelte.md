@@ -106,4 +106,4 @@ This package registers `Marko\Inertia\Frontend\InertiaFrontendInterface` to a Sv
 
 - [`marko/inertia`](/docs/packages/inertia/) - renders Inertia responses and handles SSR fallback
 - [`marko/vite`](/docs/packages/vite/) - resolves the configured Svelte Vite entry
-- [`marko/env`](/docs/packages/env/) - loads the `.env` values read by [`Env`](/docs/packages/config/#environment-variables) in `config/inertia.php`
+- [`marko/env`](/docs/packages/env/) - loads a `.env` file into the environment that `config/inertia.php` reads with [`Env`](/docs/packages/config/#environment-variables). Installed by the [skeleton](/docs/packages/skeleton/), not by this package
