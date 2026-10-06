@@ -367,9 +367,26 @@ class WebhookController
 
 With [`marko/security`](/docs/packages/security/) installed, `CsrfMiddleware` is global as well, and a webhook receiver like this one excludes it alongside the session: `#[WithoutMiddleware([SessionMiddleware::class, CsrfMiddleware::class])]`.
 
-The route's stack is global middleware, then route middleware, minus the excluded classes. Unmatched requests (404/405) have no route to exclude anything; they run only the global middleware marked `#[RunsOnUnmatched]` (see [Which middleware runs](#which-middleware-runs)).
+The route's stack is global middleware, then route middleware, then the global middleware marked `#[RunsInnermost]` (see [Innermost global middleware](#innermost-global-middleware)), minus the excluded classes. Unmatched requests (404/405) have no route to exclude anything; they run only the global middleware marked `#[RunsOnUnmatched]` (see [Which middleware runs](#which-middleware-runs)).
 
 If a route excludes middleware that is neither global nor on the route, boot fails with a `RouteException`. That catches a typo in the class name, and it catches a driver package that isn't installed. A silent no-op would leave the middleware running. The [stateless API recipe](/docs/packages/session/#stateless-routes) shows the session case in full.
+
+### Innermost Global Middleware
+
+Global middleware normally wraps every route middleware. A global middleware that turns the controller's result into the final response (layout rendering in [`marko/layout`](/docs/packages/layout/), for example) needs the opposite: it should run directly around the controller, so route middleware sees, and can decorate, the final response. Mark it `#[RunsInnermost]`:
+
+```php title="app/web/src/Http/Middleware/WrapInFrameMiddleware.php"
+use Marko\Routing\Attributes\RunsInnermost;
+use Marko\Routing\Middleware\MiddlewareInterface;
+
+#[RunsInnermost]
+class WrapInFrameMiddleware implements MiddlewareInterface
+{
+    // ...
+}
+```
+
+For a matched route the stack becomes: global middleware, route middleware, then the `#[RunsInnermost]` global middleware in their declaration order, then the controller. A route middleware that denies the request (an auth redirect, a 403) answers before the innermost middleware runs, and headers or cookies a route middleware adds to the response returned by `$next()` are kept. `#[WithoutMiddleware]` excludes innermost middleware like any other. As with `#[RunsOnUnmatched]`, the attribute is read from the class listed under `globalMiddleware`, not from a `#[Preference]` that replaces it.
 
 ### Decorating Responses
 
@@ -753,6 +770,7 @@ marko route:list --method=GET --path=blog
 #[WithoutMiddleware(MiddlewareClass::class)]        // class or method; class-string or array
 #[RoutePrefix(prefix: '/api', namePrefix: 'api.')] // class only
 #[RunsOnUnmatched]                                  // middleware class only; runs on 404/405/automatic OPTIONS
+#[RunsInnermost]                                    // global middleware class only; runs after route middleware
 ```
 
 ### UrlGeneratorInterface
