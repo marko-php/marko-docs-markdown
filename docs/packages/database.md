@@ -749,7 +749,17 @@ Use `getEntities()` / `firstEntity()` for typed domain objects. Drop to `get()` 
 
 #### Raw expressions
 
-Use `selectRaw` and `whereRaw` when the structured builder methods cannot express the SQL you need. Both accept a raw expression string and an optional array of positional `?` bindings. A denylist rejects expressions containing `;`, `--`, `/*`, `*/`, or backticks --- use `?` placeholders for user-supplied values instead of interpolating them directly.
+Use `selectRaw` and `whereRaw` when the structured builder methods cannot express the SQL you need. Both accept a raw expression string and an optional array of positional `?` bindings. A denylist rejects expressions containing `;`, `--`, `/*`, `*/`, or backticks, plus `#` on MySQL and MariaDB, where it starts a comment. PostgreSQL allows `#` because `#`, `#>` and `#>>` are operators there.
+
+The denylist is a tripwire, not a sanitizer. It cannot see quotes, so `whereRaw("name = '$name'")` is still injectable. Always pass values as `?` bindings, in raw fragments and in `raw()`, `query()` and `execute()` alike:
+
+```php
+// Injectable: the value becomes part of the SQL
+$rows = $this->query()->whereRaw("name = '$name'")->get();
+
+// Safe: the value travels separately as a binding
+$rows = $this->query()->whereRaw('LOWER(name) = LOWER(?)', [$name])->get();
+```
 
 ```php
 // Compute a derived column inline
