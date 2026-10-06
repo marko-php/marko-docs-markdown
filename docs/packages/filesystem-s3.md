@@ -115,6 +115,8 @@ $url = $s3->url('images/photo.jpg');
 $tempUrl = $s3->temporaryUrl('private/report.pdf', expiration: 3600);
 ```
 
+The `expiration` must be between `1` and `604800` seconds (7 days, the SigV4 maximum). Any other value throws a `FilesystemException` rather than producing a URL that S3 would reject or that never expires as intended.
+
 Public URLs are constructed based on your configuration:
 
 - **Custom `url`** --- uses the configured base URL directly.
@@ -130,6 +132,13 @@ All keys are automatically prefixed when a `prefix` is configured, keeping your 
 // Application path: 'images/photo.jpg'
 // S3 key: 'uploads/images/photo.jpg'
 ```
+
+A leading `/` is stripped, so `/images/photo.jpg` maps to the same key. To keep every operation inside the prefix---including on S3-compatible gateways and proxies that resolve dot-segments---paths are validated before any request is made:
+
+- A `..` segment (e.g. `../other-tenant/file.txt`) throws `PathException::traversalAttempt()`.
+- A NUL byte or a backslash throws `PathException::invalidPath()`.
+
+`..` inside a name (e.g. `notes..txt`) is allowed. When copying, the source key is URL-encoded per segment, so characters such as `?`, `#`, `+` and spaces are treated as part of the key.
 
 ### Visibility
 
@@ -180,7 +189,7 @@ Implements all methods from `FilesystemInterface`. See [`marko/filesystem`](/doc
 | Method | Description |
 |---|---|
 | `url(string $path): string` | Generate a public URL for the given path |
-| `temporaryUrl(string $path, int $expiration = 3600): string` | Generate a temporary pre-signed URL (default: 1 hour) |
+| `temporaryUrl(string $path, int $expiration = 3600): string` | Generate a temporary pre-signed URL (default: 1 hour; `1`--`604800` seconds) |
 
 ### FilesystemInterface Methods
 

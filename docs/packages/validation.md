@@ -111,9 +111,9 @@ $errors->count();             // total error count across all fields
 | URL | `url` or `url:http,https,ftp` | Must be a valid URL with a host and an allowed scheme (`http`/`https` unless listed; see [URLs](#validating-urls)) |
 | Alpha | `alpha` | Letters only |
 | AlphaNumeric | `alpha_num` | Letters and numbers only |
-| Min | `min:5` | Minimum value (numeric) or minimum length (string) or minimum count (array). Fails for a file --- use `min_size` |
-| Max | `max:255` | Maximum value (numeric) or maximum length (string) or maximum count (array). Fails for a file --- use `max_size` |
-| Between | `between:1,100` | Value range (numeric), length range (string), or count range (array). Fails for a file --- use `min_size`/`max_size` |
+| Min | `min:5` | Minimum value (int/float, or numeric string with `numeric`/`integer`), minimum length (string), or minimum count (array). Fails for a file --- use `min_size` |
+| Max | `max:255` | Maximum value (int/float, or numeric string with `numeric`/`integer`), maximum length (string), or maximum count (array). Fails for a file --- use `max_size` |
+| Between | `between:1,100` | Value range (int/float, or numeric string with `numeric`/`integer`), length range (string), or count range (array). Fails for a file --- use `min_size`/`max_size` |
 | In | `in:draft,published` | Must be one of the listed values; numeric strings are compared numerically |
 | NotIn | `not_in:admin,root` | Must not be one of the listed values; numeric strings are compared numerically |
 | Same | `same:other_field` | Must match another field (a dot path; see [wildcards](#validating-arrays-with-wildcards)) |
@@ -131,15 +131,22 @@ $errors->count();             // total error count across all fields
 
 ### Numeric-Aware Rules
 
-`Min`, `Max`, and `Between` check the *value* numerically when the input is numeric (including numeric strings), and check *length* for non-numeric strings. This means `integer|min:18` accepts the string `"25"` as valid, and `max:100` rejects `"150"` even when sent as a string from a form:
+`Min`, `Max`, and `Between` measure a value by its type: an `int` or `float` by its value, an array by its item count, and a string by its length (`mb_strlen`). A string of digits is still a string: `string|min:8` rejects the password `"9"`, and `string|max:255` rejects a 300-character run of digits.
+
+To compare a form string by *value*, add `numeric` or `integer` to the field. The parser then switches that field's `min`, `max`, and `between` to numeric mode, so `integer|min:18` accepts `"25"` and `numeric|max:100` rejects `"150"`:
 
 ```php
 $errors = $this->validator->validate(
-    ['age' => '25'],
-    ['age' => 'required|integer|min:18'],
+    ['age' => '25', 'password' => '9'],
+    [
+        'age' => 'required|integer|min:18',      // "25" compared by value: 25 >= 18
+        'password' => 'required|string|min:8',   // "9" measured by length: 1 < 8
+    ],
 );
-// No errors — "25" is numeric, 25.0 >= 18
+// Only password fails: "The password field must be at least 8 characters."
 ```
+
+Numeric mode applies whether the rules are a string, an array, or rule objects (`[new Numeric(), new Min(8)]`). A size rule object built on its own measures strings by length; call `asNumeric()` (or pass `numeric: true` to the constructor) to compare numeric strings by value.
 
 `In` and `NotIn` compare numeric strings numerically: `in:1,2,3` accepts `"2"` even though it is not strictly identical to the integer `2`.
 
@@ -370,6 +377,17 @@ interface WildcardAwareRuleInterface extends RuleInterface
 ```
 
 Implement it on a custom rule that refers to another field which may contain `*`. Before checking each concrete field, the validator passes the rules key and the indexes its wildcards matched (`['3']` for `items.3.sku_check` under `items.*.sku_check`), and uses the rule it returns. `Same` and `Different` implement it; throw `InvalidArgumentException` when the referenced field has more `*` than there are indexes.
+
+### NumericAwareRuleInterface
+
+```php
+interface NumericAwareRuleInterface extends RuleInterface
+{
+    public function asNumeric(): RuleInterface;
+}
+```
+
+Implement it on a custom size rule whose meaning for a numeric string depends on the field's other rules. When a field's rules include `numeric` or `integer`, the parser replaces each such rule with the one `asNumeric()` returns. `Min`, `Max`, and `Between` implement it (see [Numeric-Aware Rules](#numeric-aware-rules)).
 
 ### ValidationErrors
 
