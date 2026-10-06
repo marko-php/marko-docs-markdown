@@ -143,6 +143,14 @@ if ($response->isServerError()) {
 
 Connection failures always throw `ConnectionException`, whatever the value of `http_errors`.
 
+When you report an error response, use `bodyExcerpt()` instead of `body()`. It trims the body and caps it at 500 bytes (or the limit you pass), cutting on a UTF-8 character boundary and appending `... [truncated N bytes]`, so a large HTML error page doesn't flood your logs:
+
+```php
+if (!$response->isSuccessful()) {
+    throw new OrderSyncFailed("Orders API responded with HTTP {$response->statusCode()}: {$response->bodyExcerpt()}");
+}
+```
+
 ### Testing
 
 Use `FakeHttpClient` from [`marko/testing`](/docs/packages/testing/#fakehttpclient) to stub responses and assert on sent requests without a live server. It applies the same option validation and `http_errors` behaviour as a real driver.
@@ -184,6 +192,7 @@ public function body(): string;
 public function headers(): array;                     // array<string, string>, exact-case keys; joined from headerValues when headers is empty
 public function header(string $name): ?string;        // values joined with ", ", or null when absent
 public function headerValues(string $name): array;    // list<string>, or [] when absent
+public function bodyExcerpt(int $maxBytes = 500): string; // trimmed body capped at $maxBytes, "... [truncated N bytes]" appended when cut
 public function json(): mixed;          // throws JsonException on invalid JSON
 public function isSuccessful(): bool;   // 2xx
 public function isRedirect(): bool;     // 3xx

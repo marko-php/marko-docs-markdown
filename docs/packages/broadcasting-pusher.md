@@ -71,6 +71,25 @@ Use `BroadcasterInterface` as described in [`marko/broadcasting`](/docs/packages
 
 Channel names may only contain letters, digits and `_ - = @ , . ;`, up to 164 characters including the `private-` or `presence-` prefix; other names throw `BroadcastException` before any request is made. The Pusher protocol has no event ids, so the `$id` argument is not transmitted.
 
+### Failed Publishes
+
+A broadcast that does not reach the server, or that the server rejects, throws `BroadcastException` with the message `Failed to broadcast to channel '{channel}' via Pusher.`
+
+- **Rejected (non-2xx response):** thrown by `BroadcastException::rejected()`. The context holds the status and the server's own error text, capped at 500 bytes: `The Pusher server responded with HTTP 413: Payload too large`. The suggestion depends on the status. For 401/403 it points at the credentials in `config/broadcasting-pusher.php`. For 413 it points at the payload size (hosted Pusher allows 10 KB per event). For any other 4xx it points at the event name, channel name and payload. For 5xx it reports a failure on the server's side.
+- **Unreachable (connection or transport error):** thrown by `BroadcastException::publishFailed()`. The context holds the HTTP client's error message.
+
+Neither exception contains the signed request query (`auth_key`, `auth_timestamp`, `body_md5`, `auth_signature`) or the app secret. The transport error is redacted, and the client's exception is not attached as the previous exception, because its message embeds the full signed URL.
+
+```php
+use Marko\Broadcasting\Exceptions\BroadcastException;
+
+try {
+    $this->broadcaster->broadcast('orders.42', 'order.shipped', $data);
+} catch (BroadcastException $e) {
+    $this->logger->error($e->getMessage(), ['context' => $e->getContext()]);
+}
+```
+
 ### Client Setup
 
 Use [pusher-js](https://github.com/pusher/pusher-js) directly or through Laravel Echo:
@@ -214,7 +233,8 @@ Readonly value object built from `config/broadcasting-pusher.php` by the module 
 | `PusherException::missingCredentials()` | `app_id`, `key` or `secret` is empty when signing |
 | `HttpException` (`marko/routing`) | `/broadcasting/auth` rejects a request (`400`) or the authorizer denies the user (`403`) |
 | `BroadcastException::invalidChannelName()` | A channel name contains characters the Pusher protocol does not allow |
-| `BroadcastException::publishFailed()` | The server is unreachable or answers with a non-2xx status |
+| `BroadcastException::rejected()` | The server answers with a non-2xx status; the context holds the status and the capped response body |
+| `BroadcastException::publishFailed()` | The server cannot be reached (connection or transport failure); the signed query is redacted from the context |
 
 ## Related Packages
 

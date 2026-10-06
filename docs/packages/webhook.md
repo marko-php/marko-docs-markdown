@@ -56,10 +56,13 @@ public function notifySubscriber(): void
     $response = $this->webhookDispatcher->dispatch($payload);
 
     if (!$response->successful) {
-        // handle failure
+        // The receiver answered with a non-2xx status:
+        // $response->statusCode and $response->body say why.
     }
 }
 ```
+
+`dispatch()` returns a `WebhookResponse` for every HTTP response, 4xx and 5xx included, so check `$response->successful` (true only for 2xx). It throws only when the receiver cannot be reached at all (`ConnectionException`/`HttpException` from [`marko/http`](/docs/packages/http/)). `$response->isRetryable()` tells you whether sending again could help: true for `408`, `429` and any `5xx`.
 
 The dispatcher automatically records the current Unix timestamp, includes it as an `X-Webhook-Timestamp` header, and signs the message as `"{timestamp}.{body}"` — producing an `X-Webhook-Signature: sha256={hash}` header. The receiver verifies both the timestamp freshness and the signature before accepting the payload.
 
@@ -89,7 +92,16 @@ public function scheduleWebhook(): void
 }
 ```
 
-Failed deliveries retry up to `max_retries` times with delays calculated as `retry_delay * 2^attempt` seconds.
+The job decides what to do from the outcome of each attempt:
+
+| Outcome | Recorded as | Retried |
+|---|---|---|
+| `2xx` response | Success: status code and response body | No |
+| `408`, `429` or `5xx` response | Failure: status code, response body (capped at 500 bytes) and `Webhook receiver responded with HTTP {status}.` | Yes |
+| Any other non-2xx response (`3xx`, other `4xx`) | Failure, same fields | No. The receiver will answer the same way again |
+| Receiver unreachable (connection or transport error) | Failure: the error message | Yes |
+
+Retries go back onto the queue with `retry_delay * 2^attempt` seconds of delay until `max_retries` attempts have been made. When `max_retries` or `retry_delay` is missing from config, the attempt is still recorded but not retried. Only the send is retried: if recording a delivered webhook fails (for example, the database is down), the exception propagates instead of sending the webhook again.
 
 ### Receiving Webhooks
 
@@ -144,7 +156,7 @@ class StripeWebhookController
 
 ### Delivery Tracking
 
-Every attempt is saved to the `webhook_attempts` table via `WebhookDeliveryService`. Successful attempts store the HTTP status code and response body. Failed attempts store the error message. Use `WebhookAttemptRepositoryInterface` to query the records:
+Every attempt is saved to the `webhook_attempts` table via `WebhookDeliveryService`. Successful attempts store the HTTP status code and response body. Attempts the receiver rejected with a non-2xx status store the status code, the response body (capped at 500 bytes) and an error message. Attempts that never reached the receiver store only the error message. Use `WebhookAttemptRepositoryInterface` to query the records:
 
 ```php
 use Marko\Webhook\Contracts\WebhookAttemptRepositoryInterface;
@@ -177,8 +189,9 @@ use Marko\Webhook\Value\WebhookResponse;
 public function __construct(
     int $statusCode,
     string $body,
-    bool $successful,
+    bool $successful,   // true only for 2xx
 );
+public function isRetryable(): bool;  // true for 408, 429 and 5xx
 ```
 
 ### WebhookDispatcher
@@ -188,6 +201,8 @@ use Marko\Webhook\Sending\WebhookDispatcher;
 use Marko\Webhook\Value\WebhookPayload;
 use Marko\Webhook\Value\WebhookResponse;
 
+// Returns a WebhookResponse for every HTTP response (4xx/5xx included).
+// @throws HttpException|ConnectionException when the receiver cannot be reached
 public function dispatch(WebhookPayload $payload): WebhookResponse;
 ```
 
@@ -241,6 +256,7 @@ use Marko\Webhook\Value\WebhookPayload;
 use Marko\Webhook\Value\WebhookResponse;
 
 public function recordSuccess(WebhookPayload $payload, WebhookResponse $response, int $attempt): void;
+public function recordRejection(WebhookPayload $payload, WebhookResponse $response, int $attempt): void; // non-2xx; body capped at 500 bytes
 public function recordFailure(WebhookPayload $payload, string $error, int $attempt): void;
 ```
 
@@ -252,9 +268,9 @@ public function recordFailure(WebhookPayload $payload, string $error, int $attem
 | `webhook_url`    | string | Destination URL                    |
 | `event`          | string | Event name                         |
 | `attempt_number` | int    | Which attempt this record covers   |
-| `status_code`    | int    | HTTP status code (success only)    |
-| `response_body`  | string | Response body (success only)       |
-| `error_message`  | string | Error message (failure only)       |
+| `status_code`    | int    | HTTP status code (null when the receiver was unreachable) |
+| `response_body`  | string | Response body (capped at 500 bytes for a rejection; null when unreachable) |
+| `error_message`  | string | Error message (failures and rejections only) |
 | `attempted_at`   | string | Timestamp in `Y-m-d H:i:s` format |
 
 ### WebhookConfig

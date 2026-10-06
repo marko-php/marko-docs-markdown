@@ -85,6 +85,15 @@ Use `BroadcasterInterface` as described in [`marko/broadcasting`](/docs/packages
 | `id` | The `$id` argument, when given (used by the hub for `Last-Event-ID` replay) |
 | `private` | `on` for a `PrivateChannel` |
 
+### Failed Publishes
+
+A publish that does not reach the hub, or that the hub rejects, throws `BroadcastException` with the message `Failed to broadcast to channel '{channel}' via Mercure.`
+
+- **Rejected (non-2xx response):** thrown by `BroadcastException::rejected()`. The context holds the status and the hub's own error text, capped at 500 bytes: `The Mercure server responded with HTTP 401: Unauthorized`. The suggestion depends on the status. For 401/403 it points at the publisher JWT settings in `config/broadcasting-mercure.php`. For 413 it points at the payload size limit configured on the hub. For any other 4xx it points at the event name, channel name and payload. For 5xx it reports a failure on the hub's side.
+- **Unreachable (connection or transport error):** thrown by `BroadcastException::publishFailed()`. The context holds the HTTP client's error message, and the client's exception is attached as the previous exception.
+
+The publisher JWT travels in the `Authorization` header, so it never appears in either exception.
+
 ### Subscribing in the Browser
 
 Mercure delivers updates as Server-Sent Events. Listen by event name, because `type` is set to the event name:
@@ -208,7 +217,8 @@ Readonly value object built from `config/broadcasting-mercure.php` by the module
 | `MercureException::emptySigningKey()` | A JWT is signed with an empty key |
 | `MercureException::missingPublisherCredentials()` | Neither `publisher_jwt` nor `publisher_jwt_key` is set |
 | `MercureException::missingSubscriberKey()` | A subscriber token is requested without `subscriber_jwt_key` |
-| `BroadcastException::publishFailed()` | The hub is unreachable or answers with a non-2xx status |
+| `BroadcastException::rejected()` | The hub answers with a non-2xx status; the context holds the status and the capped response body |
+| `BroadcastException::publishFailed()` | The hub cannot be reached (connection or transport failure) |
 | `BroadcastException::presenceChannelsUnsupported()` | A `PresenceChannel` is broadcast to or included in a subscriber token or URL |
 
 ## Related Packages
