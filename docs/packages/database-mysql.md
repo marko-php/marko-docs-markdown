@@ -56,13 +56,15 @@ MariaDB 10.5+ supports `INSERT ... RETURNING`, but this driver treats MariaDB li
 
 ### MySQL vs MariaDB
 
-This driver supports both MySQL and MariaDB. CI runs the driver integration tests against **MySQL 8.4** and **MariaDB 11.8** (LTS) on every pull request. Older releases (MySQL 8.0+, MariaDB 10.6+) are expected to work but are not tested. Where the two servers differ:
+This driver supports both MySQL and MariaDB. CI runs the driver integration tests against **MySQL 8.4**, **MariaDB 11.8** (LTS) and **MariaDB 10.11** (LTS) on every pull request. MySQL 8.0+ is expected to work but is not tested. MariaDB 10.6 reached end of life in July 2026, so MariaDB 10.11 is the oldest release the driver supports. Where the two servers differ:
 
 - **JSON:** MariaDB stores `JSON` as `LONGTEXT` with a `CHECK (json_valid(col))`. The introspector reads such a column back as `json`, so it diffs as unchanged. A column declared by hand as `LONGTEXT CHECK (json_valid(col))` reads as `json` too.
 - **Defaults and `ON UPDATE`:** see [Introspected Types and Defaults](#introspected-types-and-defaults).
 - **Integer display widths:** MariaDB keeps them in the native type (`int(10) unsigned`, `bigint(20)`), MySQL 8.0.19+ drops them. The native type is not part of the diff.
 - **`NOWAIT`:** MySQL reports a lock not acquired with `NOWAIT` as error `3572`, MariaDB as `1205`. Both are `LockTimeoutException`.
-- **Shared locks with a modifier:** `sharedLock()->noWait()` and `sharedLock()->skipLocked()` compile to `FOR SHARE`, which MariaDB rejects (see [Locking and upsert on MySQL and MariaDB](#locking-and-upsert-on-mysql-and-mariadb)).
+- **Shared locks with a modifier:** `sharedLock()->noWait()` and `sharedLock()->skipLocked()` compile to `FOR SHARE NOWAIT` / `FOR SHARE SKIP LOCKED` on MySQL and to `LOCK IN SHARE MODE NOWAIT` / `LOCK IN SHARE MODE SKIP LOCKED` on MariaDB (see [Locking and upsert on MySQL and MariaDB](#locking-and-upsert-on-mysql-and-mariadb)).
+
+The driver tells the two servers apart with `MySqlServer`, which reads `SELECT VERSION()` once, the first time SQL that differs between them is compiled, and keeps the answer for the life of the shared connection. It goes through `ConnectionInterface`, so it works behind `marko/database-readwrite` too (a replica runs the same server as its primary). Nothing is configured: the server always reports what it is.
 
 With `innodb_snapshot_isolation=ON` (the default from MariaDB 11.8), a `REPEATABLE READ` transaction that writes a row a concurrent transaction changed after its snapshot fails with error `1020` ("Record has changed since last read"). The driver raises it as `SerializationFailureException`, so `transaction(attempts: ...)` retries it like a deadlock. MySQL never raises `1020` for this case. See [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
@@ -224,6 +226,33 @@ class MyService
 | `disconnect(): void` | Close the connection and discard the transaction depth and pending callbacks |
 | `isConnected(): bool` | Check whether the connection is open |
 
+### Server Detection
+
+`MySqlServer` tells MySQL and MariaDB apart for SQL whose syntax differs between them. The container shares one instance, built on the shared `ConnectionInterface` (the `ReadWriteConnection` when `marko/database-readwrite` is installed). It reads `SELECT VERSION()` the first time it is asked and keeps the answer. `MySqlQueryBuilder`, `MySqlQueryBuilderFactory` and `MySqlIntrospector` take it as an optional last constructor argument (`server`) and build their own from their connection when it is omitted.
+
+```php
+use Marko\Database\MySql\Connection\MySqlServer;
+
+class DatabaseInfo
+{
+    public function __construct(
+        private MySqlServer $mySqlServer,
+    ) {}
+
+    public function serverName(): string
+    {
+        return $this->mySqlServer->isMariaDb() ? 'MariaDB' : 'MySQL';
+    }
+}
+```
+
+| Method | Description |
+|---|---|
+| `version(): MySqlServerVersion` | The server's version, read once and cached |
+| `isMariaDb(): bool` | Whether the server is MariaDB rather than MySQL |
+
+`MySqlServerVersion` holds the parsed answer: `reported` (the string the server sent, such as `11.8.7-MariaDB-ubu2404`), `version` (the number alone, `11.8.7`; the `5.5.5-` prefix MariaDB before 11.0 sends over the protocol is dropped) and `isMariaDb`. `isAtLeast(string $version): bool` compares the number, for example `isAtLeast('10.6')`. `MySqlServerVersion::fromString()` throws `ServerVersionException` when the string holds no version number.
+
 ### Transactions
 
 `MySqlConnection` also implements `TransactionInterface`, `PendingAfterCommitInterface` and `ResettableInterface`. The driver module registers one shared instance per request (per worker under a long-running runtime), and `TransactionInterface` resolves to that same instance. See [Transactions](/docs/packages/database/#transactions).
@@ -291,14 +320,25 @@ MySQL commits implicitly before any DDL statement (`CREATE`, `ALTER`, `DROP`, `T
 | `whereJsonMissing(string $path): static` | WHERE JSON key/path does not exist |
 | `raw(string $sql, array $bindings = []): array` | Execute raw SQL |
 | `lockForUpdate(): static` | Append `FOR UPDATE` (requires an open transaction) |
-| `sharedLock(): static` | Append `LOCK IN SHARE MODE`, or `FOR SHARE` with a modifier (requires an open transaction) |
+| `sharedLock(): static` | Append `LOCK IN SHARE MODE`; with a modifier, `FOR SHARE` on MySQL (requires an open transaction) |
 | `skipLocked(): static` | Append `SKIP LOCKED` to the lock |
 | `noWait(): static` | Append `NOWAIT` to the lock |
 | `upsert(array $rows, array $uniqueBy, ?array $update = null): int` | `INSERT ... ON DUPLICATE KEY UPDATE col = VALUES(col)`; returns the affected-row count (2 per updated row) |
 
 #### Locking and upsert on MySQL and MariaDB
 
-- `sharedLock()` compiles to `LOCK IN SHARE MODE`, which MySQL and MariaDB both accept. `LOCK IN SHARE MODE` takes no modifiers, so `sharedLock()->skipLocked()` / `->noWait()` compiles to `FOR SHARE SKIP LOCKED` / `FOR SHARE NOWAIT`, which needs MySQL 8.0+. MariaDB does not support `FOR SHARE`. `SKIP LOCKED` needs MariaDB 10.6+.
+MySQL accepts `NOWAIT` and `SKIP LOCKED` on a shared lock only after `FOR SHARE`, and MariaDB only after `LOCK IN SHARE MODE`, so a shared lock with a modifier compiles to the SQL of the server `MySqlServer` detects:
+
+| Call | MySQL 8.0+ | MariaDB |
+|------|------------|---------|
+| `sharedLock()` | `LOCK IN SHARE MODE` | `LOCK IN SHARE MODE` |
+| `sharedLock()->noWait()` | `FOR SHARE NOWAIT` | `LOCK IN SHARE MODE NOWAIT` |
+| `sharedLock()->skipLocked()` | `FOR SHARE SKIP LOCKED` | `LOCK IN SHARE MODE SKIP LOCKED` |
+| `lockForUpdate()->noWait()` | `FOR UPDATE NOWAIT` | `FOR UPDATE NOWAIT` |
+| `lockForUpdate()->skipLocked()` | `FOR UPDATE SKIP LOCKED` | `FOR UPDATE SKIP LOCKED` |
+
+Only a shared lock with a modifier asks which server this is, so no other query reads the server version.
+
 - `upsert()` resolves a conflict against **any** unique index or primary key the row violates, not only the `$uniqueBy` columns, which shape only the default update list. An empty update list compiles to a no-op assignment (`col = col`) instead of `INSERT IGNORE`, so unrelated errors still surface.
 - `upsert()` uses `VALUES(col)` rather than the row alias added in MySQL 8.0.19, because MariaDB supports only `VALUES()`. MySQL 8.0.20+ reports `VALUES()` as deprecated but still runs it.
 

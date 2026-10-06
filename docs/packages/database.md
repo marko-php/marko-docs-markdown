@@ -1196,12 +1196,14 @@ public function reserve(int $productId, int $quantity): void
 }
 ```
 
-| Method | PostgreSQL | MySQL / MariaDB |
-|--------|------------|-----------------|
-| `lockForUpdate()` | `FOR UPDATE` | `FOR UPDATE` |
-| `sharedLock()` | `FOR SHARE` | `LOCK IN SHARE MODE` (`FOR SHARE` when combined with a modifier) |
-| `skipLocked()` | `SKIP LOCKED` | `SKIP LOCKED` |
-| `noWait()` | `NOWAIT` | `NOWAIT` |
+| Method | PostgreSQL | MySQL | MariaDB |
+|--------|------------|-------|---------|
+| `lockForUpdate()` | `FOR UPDATE` | `FOR UPDATE` | `FOR UPDATE` |
+| `sharedLock()` | `FOR SHARE` | `LOCK IN SHARE MODE` (`FOR SHARE` when combined with a modifier) | `LOCK IN SHARE MODE` |
+| `skipLocked()` | `SKIP LOCKED` | `SKIP LOCKED` | `SKIP LOCKED` |
+| `noWait()` | `NOWAIT` | `NOWAIT` | `NOWAIT` |
+
+So `sharedLock()->skipLocked()` is `FOR SHARE SKIP LOCKED` on PostgreSQL and MySQL and `LOCK IN SHARE MODE SKIP LOCKED` on MariaDB. `marko/database-mysql` detects which of the two servers it is talking to (see [MySQL vs MariaDB](/docs/packages/database-mysql/#mysql-vs-mariadb)).
 
 `lockForUpdate()` blocks other transactions from updating, deleting or locking the rows. `sharedLock()` lets other transactions read and share-lock them but not change them. Add `skipLocked()` to return only the rows nobody else holds, which is useful for work queues. Add `noWait()` to fail immediately with a `LockTimeoutException` instead of waiting (see [Concurrency Errors and Retries](#concurrency-errors-and-retries)).
 
