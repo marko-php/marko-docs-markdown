@@ -65,7 +65,7 @@ return [
 
 ## Step 3: Configure Admin Authentication
 
-Set up the admin authentication guard and super admin role:
+Set the guard the admin area authenticates with:
 
 ```php title="config/admin-auth.php"
 <?php
@@ -74,7 +74,6 @@ declare(strict_types=1);
 
 return [
     'guard' => 'admin',
-    'super_admin_role' => 'super-admin',
 ];
 ```
 
@@ -495,19 +494,7 @@ $dashboardSections = $adminMenuBuilder->buildDashboardSections(
 
 ## Step 10: Add an Admin API
 
-The `marko/admin-api` package provides JSON API endpoints for headless admin access. Configure it:
-
-```php title="config/admin-api.php"
-<?php
-
-declare(strict_types=1);
-
-return [
-    'version' => 'v1',
-    'rate_limit' => 60,
-    'guard' => 'admin',
-];
-```
+The `marko/admin-api` package provides JSON API endpoints for headless admin access. It needs no configuration: its routes live under `/admin/api/v1` and authenticate on the same admin guard as the panel (`admin-auth.guard`).
 
 The package includes two built-in controllers:
 

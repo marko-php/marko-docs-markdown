@@ -59,7 +59,6 @@ return [
 ```php title="config/admin-auth.php"
 return [
     'guard' => 'admin',
-    'super_admin_role' => 'super-admin',
 ];
 ```
 
@@ -139,7 +138,7 @@ The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/doc
 
 ### Requiring Permissions
 
-Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method, or from the controller class when the method has none, and throws a `403` `HttpException` when the authenticated user lacks the required permission, or is not an admin user at all. Super admin roles bypass this check.
+Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method, or from the controller class when the method has none, and throws a `403` `HttpException` when the authenticated user lacks the required permission, or is not an admin user at all. Super admin roles bypass this check. A role is a super admin role when its `is_super_admin` flag (`roles.is_super_admin`) is set; there is no config key for it (the `admin-auth.super_admin_role` key earlier versions shipped was never read and has been removed).
 
 `ExceptionRenderer` renders the `403` as JSON for requests that ask for it and as the application's HTML error page otherwise:
 
@@ -596,6 +595,5 @@ readonly class AdminGuardResolver
 interface AdminAuthConfigInterface
 {
     public function getGuardName(): string;
-    public function getSuperAdminRoleSlug(): string;
 }
 ```
