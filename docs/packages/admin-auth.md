@@ -33,11 +33,28 @@ class CatalogController
 }
 ```
 
-Unauthenticated requests are redirected to the admin login page (or receive a 401 JSON response for API requests).
+When no admin is logged in, `AdminAuthMiddleware` does one of two things:
+
+- **Redirects** to `{prefix}/login` (`/admin/login` by default) when the request does not want JSON.
+- **Throws a `401` `HttpException`** when the request wants JSON (`Request::wantsJson()`: an `Accept` header with `application/json` or a `+json` type), because an API client can't follow a login redirect.
+
+The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), so it looks like every other HTTP error in the application:
+
+```json
+{"message": "Unauthorized."}
+```
 
 ### Requiring Permissions
 
-Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method via reflection and returns a 403 response (or JSON `{"error":"Forbidden"}` for API requests) when the authenticated user lacks the required permission. Super admin roles bypass this check.
+Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method via reflection and throws a `403` `HttpException` when the authenticated user lacks the required permission, or is not an admin user at all. Super admin roles bypass this check.
+
+`ExceptionRenderer` renders the `403` as JSON for requests that ask for it and as the application's HTML error page otherwise:
+
+```json
+{"message": "Forbidden."}
+```
+
+The required permission is never sent to the client. It is only in the exception's context, for logs. To render admin denials differently (a branded page, another JSON shape), replace `ExceptionRenderer` with a `#[Preference]`; see [Custom error pages](/docs/packages/routing/#custom-error-pages). Admin denials go through it like any other HTTP error.
 
 ```php title="ProductController.php"
 use Marko\AdminAuth\Attributes\RequiresPermission;
@@ -210,6 +227,8 @@ class AdminAuthMiddleware implements MiddlewareInterface
     public function handle(Request $request, callable $next): Response;
 }
 ```
+
+Throws `Marko\Routing\Exceptions\HttpException` with status `401` (unauthenticated request that wants JSON) or `403` (missing permission). Unauthenticated requests that don't want JSON get a redirect response to `{prefix}/login`.
 
 Permission enforcement relies on the router attaching route context to the request before middleware runs (see [`marko/routing`](/docs/packages/routing/) --- `Request::withRoute()`). If no route context is present, `#[RequiresPermission]` is not evaluated and the request passes through authenticated.
 

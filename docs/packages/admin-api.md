@@ -3,7 +3,7 @@ title: marko/admin-api
 description: Authenticated JSON endpoints for the admin panel --- exposes sections, menu items, and current user data for headless or SPA-based admin clients.
 ---
 
-Authenticated JSON endpoints for the admin panel --- exposes admin sections, menu items, and current user data for headless or SPA-based admin clients. All responses follow a consistent `{data, meta}` / `{errors}` envelope format. Sections are filtered by user permissions, section detail includes nested menu items, and the current user endpoint returns roles and permissions. Routes are protected by `AdminAuthMiddleware`.
+Authenticated JSON endpoints for the admin panel --- exposes admin sections, menu items, and current user data for headless or SPA-based admin clients. Controller responses follow a consistent `{data, meta}` / `{errors}` envelope format. Sections are filtered by user permissions, section detail includes nested menu items, and the current user endpoint returns roles and permissions. Routes are protected by `AdminAuthMiddleware`.
 
 ## Installation
 
@@ -17,7 +17,13 @@ Requires [`marko/admin`](/docs/packages/admin/) and `marko/admin-auth`.
 
 ### Available Endpoints
 
-All endpoints require admin authentication. Unauthenticated requests receive a 401 JSON response.
+All endpoints require admin authentication through `AdminAuthMiddleware`. An unauthenticated request whose `Accept` header asks for JSON gets a `401`; any other unauthenticated request is redirected to the admin login. A user without the required permission gets a `403`. These denials come from the middleware, not from the controllers, so they use the [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions) body rather than the `{errors}` envelope:
+
+```json
+{"message": "Unauthorized."}
+```
+
+Send `Accept: application/json` from API clients so they get the `401` rather than a redirect. See [Protecting Admin Routes](/docs/packages/admin-auth/#protecting-admin-routes).
 
 | Method | Path | Description |
 |--------|------|-------------|
