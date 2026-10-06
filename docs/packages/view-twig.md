@@ -91,6 +91,18 @@ Default values in the included template:
 </li>
 ```
 
+### Linking to Named Routes
+
+The `route()` function builds URLs for [named routes](/docs/packages/routing/#named-routes-and-url-generation) through `UrlGeneratorInterface`, so templates don't hard-code paths:
+
+```twig title="resources/views/post/list/item.twig"
+<a href="{{ route('blog.post.show', {slug: post.slug}) }}">{{ post.title }}</a>
+<a href="{{ route('blog.index', {page: 2}) }}">Next page</a>  {# /blog?page=2 #}
+<link rel="canonical" href="{{ route('blog.post.show', {slug: post.slug}, true) }}">
+```
+
+The arguments match `UrlGeneratorInterface::route(string $name, array $parameters = [], bool $absolute = false)`. Parameters the path doesn't use become the query string, and `true` as the third argument uses `APP_URL`. The function isn't marked safe, so its output is escaped like any other value (`&` renders as `&amp;`). An unknown name or a missing parameter throws `UrlGenerationException`. Twig wraps it in a `Twig\Error\RuntimeError` and the render fails.
+
 ### Template Organization
 
 All templates must live within at least one directory. No top-level template files.
@@ -145,6 +157,12 @@ views/
 |---|---|
 | `render(string $template, array $data = []): Response` | Render a template and return an HTTP response |
 | `renderToString(string $template, array $data = []): string` | Render a template and return the raw HTML string |
+
+### Template Functions
+
+| Function | Description |
+|---|---|
+| `route(string $name, array $parameters = [], bool $absolute = false): string` | URL for a named route (`Marko\View\Twig\RouteExtension`) |
 
 ### Configuration Options
 

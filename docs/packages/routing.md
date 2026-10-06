@@ -11,6 +11,22 @@ Routes live on the methods they handle. Conflicts are caught at boot time with c
 composer require marko/routing
 ```
 
+## Configuration
+
+The only setting is the base URL used for absolute URLs from the [URL generator](#named-routes-and-url-generation). It reads `APP_URL`:
+
+```php title="config/routing.php"
+return [
+    'url' => $_ENV['APP_URL'] ?? '',
+];
+```
+
+```bash title=".env"
+APP_URL=https://example.com
+```
+
+The base URL is never guessed from the request's `Host` header: that header is client-controlled, and it does not exist in CLI commands or queue jobs.
+
 ## Usage
 
 ### Defining Routes
@@ -61,16 +77,123 @@ Route parameters, POST body values, and query string values are automatically re
 
 You rarely need `#[Head]` or `#[Options]` --- the router answers both automatically (see [HEAD and OPTIONS](#head-and-options)). Declare them only when a route needs custom behaviour.
 
+### Route Parameters
+
+A `{name}` placeholder matches one path segment (anything except `/`). Two variants change what it matches:
+
+| Placeholder | Matches | Example |
+|---|---|---|
+| `{id}` | One segment | `/shows/{id}` matches `/shows/42` and `/shows/abc` |
+| `{id:\d+}` | A value matching the regex | `/shows/{id:\d+}` matches `/shows/42`, not `/shows/abc` |
+| `{path*}` | The rest of the path, slashes included | `/docs/{path*}` matches `/docs/guides/routing` with `path` = `guides/routing` |
+
+```php title="DocsController.php"
+#[Get('/shows/{id:\d+}')]
+public function show(int $id): Response { /* ... */ }
+
+#[Get('/archive/{year:\d{4}}/{slug:[a-z0-9-]+}')]
+public function archived(int $year, string $slug): Response { /* ... */ }
+
+#[Get('/docs/{path*}')]
+public function page(string $path): Response { /* ... */ }
+```
+
+A value that fails a constraint doesn't match the route, so the router tries the next route (and answers 404 if none matches). Constraints are PCRE patterns without delimiters. Use non-capturing groups such as `{format:(?:json|xml)}`. A catch-all needs at least one character, so `/docs/{path*}` doesn't match `/docs`; add a separate `#[Get('/docs')]` route for that.
+
+These mistakes fail at boot with a `RouteException` that names the path:
+
+- an invalid regex (`{id:[0-9}`)
+- a capturing group in a constraint (`{id:(\d+)}`)
+- a catch-all that is not the whole final segment (`/docs/{path*}/edit`, `/files/v-{path*}`)
+- a parameter name that is not an identifier, or the same name used twice in one path
+
 ### Route Precedence
 
 Which route handles a URL never depends on registration order, module order or file layout. For each HTTP method the router tries routes in this order:
 
 1. **Static paths** (no parameters), matched by exact lookup. `/shows/live` always beats `/shows/{id}`.
-2. **Dynamic paths with more static segments.** `/a/{x}/c` (2 static segments) beats `/a/{x}/{y}` (1).
-3. **Dynamic paths with a longer static prefix** (the text before the first `{`). `/api/{version}/list` beats `/{tenant}/users/list`.
-4. **Registration order** breaks any remaining tie.
+2. **Catch-all paths come last.** A route with `{path*}` is tried only after every other dynamic route.
+3. **Dynamic paths with more static segments.** `/a/{x}/c` (2 static segments) beats `/a/{x}/{y}` (1).
+4. **More constrained parameters.** At equal static segments, `/shows/{id:\d+}` is tried before `/shows/{slug}`, so `/shows/42` reaches the first and `/shows/the-wire` falls through to the second.
+5. **Dynamic paths with a longer static prefix** (the text before the first `{`). `/api/{version}/list` beats `/{tenant}/users/list`.
+6. **Registration order** breaks any remaining tie.
 
 A trailing slash is ignored (`/shows/live/` matches `/shows/live`). `marko route:list` prints routes in this effective order.
+
+### Named Routes and URL Generation
+
+Give a route a `name` so links and redirects don't hard-code its path:
+
+```php title="ShowController.php"
+#[Get('/shows/{id:\d+}', name: 'shows.show')]
+public function show(int $id): Response { /* ... */ }
+```
+
+Inject `UrlGeneratorInterface` to build URLs. There is no global `route()` helper:
+
+```php title="ShowController.php"
+use Marko\Routing\UrlGeneratorInterface;
+
+class ShowController
+{
+    public function __construct(
+        private UrlGeneratorInterface $urlGenerator,
+    ) {}
+
+    #[Post('/shows')]
+    public function store(): Response
+    {
+        $show = $this->showService->create(/* ... */);
+
+        return Response::redirect($this->urlGenerator->route('shows.show', ['id' => $show->id]));
+    }
+}
+```
+
+```php
+$urlGenerator->route('shows.show', ['id' => 42]);                  // /shows/42
+$urlGenerator->route('shows.show', ['id' => 42, 'tab' => 'cast']); // /shows/42?tab=cast
+$urlGenerator->route('docs', ['path' => 'guides/routing']);        // /docs/guides/routing
+$urlGenerator->route('shows.show', ['id' => 42], absolute: true);  // https://example.com/shows/42
+```
+
+- Values are URL-encoded with `rawurlencode()`. A `/` in a normal parameter becomes `%2F`. In a catch-all, each segment is encoded and the slashes are kept.
+- Parameters the path doesn't use are appended as a query string.
+- `absolute: true` prefixes the [configured](#configuration) base URL.
+
+Each of these throws a `UrlGenerationException`:
+
+- an unknown route name (the message suggests close matches)
+- a missing or empty parameter
+- a non-scalar parameter value
+- a value that fails the parameter's constraint
+- an absolute URL when no base URL is configured
+
+Templates get the same generator through `route()` in [Latte](/docs/packages/view-latte/) and [Twig](/docs/packages/view-twig/).
+
+Route names must be unique across the application. A duplicate name throws `RouteConflictException` at boot, naming both `Controller::action()` locations.
+
+### Route Prefixes
+
+`#[RoutePrefix]` on a controller prefixes every route the class declares. The optional `namePrefix` is prepended to each route name:
+
+```php title="app/api/src/Controller/ShowController.php"
+use Marko\Routing\Attributes\RoutePrefix;
+
+#[RoutePrefix('/api/v1', namePrefix: 'api.v1.')]
+class ShowController
+{
+    #[Get('/shows', name: 'shows.index')]       // GET /api/v1/shows, name api.v1.shows.index
+    public function index(): Response { /* ... */ }
+
+    #[Get('/shows/{id:\d+}', name: 'shows.show')] // GET /api/v1/shows/{id:\d+}, name api.v1.shows.show
+    public function show(int $id): Response { /* ... */ }
+}
+```
+
+Slashes are normalised when joining, so `#[RoutePrefix('/api/')]` with `#[Get('shows')]` gives `/api/shows`, and `#[Get('/')]` gives `/api`. A prefix must start with `/`; anything else throws at boot. Unnamed routes stay unnamed.
+
+The prefix belongs to the class that declares the method. A [`#[Preference]`](#overriding-vendor-routes) subclass without its own `#[RoutePrefix]` keeps the parent's prefix, including on methods it overrides. If the subclass declares its own prefix, that prefix applies only to the methods the subclass declares. Inherited routes keep the parent's prefix.
 
 ### Unmatched Requests: 404 and 405
 
@@ -125,6 +248,28 @@ class AuthMiddleware implements MiddlewareInterface
     }
 }
 ```
+
+`#[Middleware]` on a class applies to every route in the class, and to the routes a subclass (such as a `#[Preference]`) inherits. Class-level middleware and exclusions are collected from the class and all its ancestors.
+
+### Skipping Middleware
+
+Modules register **global** middleware that runs on every route. `marko/session-file` and `marko/session-database` register the session middleware, for example. `#[WithoutMiddleware]` removes middleware from one route, or from every route in a class. It accepts a class name or an array, and it works on global and route middleware alike:
+
+```php title="app/api/src/Controller/WebhookController.php"
+use Marko\Routing\Attributes\WithoutMiddleware;
+use Marko\Session\Middleware\SessionMiddleware;
+
+#[WithoutMiddleware(SessionMiddleware::class)]
+class WebhookController
+{
+    #[Post('/webhooks/stripe')]
+    public function stripe(): Response { /* ... */ }
+}
+```
+
+The route's stack is global middleware, then route middleware, minus the excluded classes. Unmatched requests (404/405) still run every global middleware.
+
+If a route excludes middleware that is neither global nor on the route, boot fails with a `RouteException`. That catches a typo in the class name, and it catches a driver package that isn't installed. A silent no-op would leave the middleware running. The [stateless API recipe](/docs/packages/session/#stateless-routes) shows the session case in full.
 
 ### Decorating Responses
 
@@ -288,6 +433,8 @@ class MyPostController extends PostController
 }
 ```
 
+Inherited routes keep everything the parent declared: path, `#[RoutePrefix]`, name, class-level `#[Middleware]` and `#[WithoutMiddleware]`. They dispatch to your class.
+
 ### Disabling Routes
 
 Explicitly remove an inherited route:
@@ -321,6 +468,8 @@ Defined in:
 Resolution: Use #[Preference] to extend one controller,
 or use #[DisableRoute] to remove one route.
 ```
+
+Two routes with the same name fail the same way. The error lists both `Controller::action()` locations.
 
 ### Errors and HTTP Exceptions
 
@@ -437,16 +586,15 @@ marko route:list
 ```
 
 ```
-METHOD  PATH            ACTION                    MIDDLEWARE
-GET     /               HelloController::index
-GET     /blog           PostController::index
-GET     /products       ProductController::index
-GET     /blog/{id}      PostController::show
-GET     /products/{id}  ProductController::show
-POST    /products       ProductController::store
+METHOD  PATH                    NAME               ACTION                     MIDDLEWARE
+GET     /                       home               HelloController::index
+GET     /blog                   blog.index         PostController::index
+GET     /api/v1/shows/{id:\d+}  api.v1.shows.show  ShowController::show       -SessionMiddleware
+GET     /blog/{id}                                 PostController::show
+POST    /webhooks/stripe                           WebhookController::stripe  VerifySignature, -SessionMiddleware
 ```
 
-Routes are grouped by method (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, then any others) and listed in the order the router tries them --- see [Route Precedence](#route-precedence). Automatic HEAD and OPTIONS responses are not listed.
+Paths include any `#[RoutePrefix]`. The MIDDLEWARE column lists route middleware, then excluded middleware prefixed with `-`. Routes are grouped by method (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, then any others) and listed in the order the router tries them --- see [Route Precedence](#route-precedence). Automatic HEAD and OPTIONS responses are not listed.
 
 Filter by HTTP method or path:
 
@@ -461,16 +609,47 @@ marko route:list --method=GET --path=blog
 ### Route Attributes
 
 ```php
-#[Get(path: '/path', middleware: [])]
-#[Post(path: '/path')]
+#[Get(path: '/path', middleware: [], name: null)]
+#[Post(path: '/path', name: 'route.name')]
 #[Put(path: '/path')]
 #[Patch(path: '/path')]
 #[Delete(path: '/path')]
 #[Head(path: '/path')]
 #[Options(path: '/path')]
 #[DisableRoute]
-#[Middleware(MiddlewareClass::class)]
+#[Middleware(MiddlewareClass::class)]               // class or method; class-string or array
+#[WithoutMiddleware(MiddlewareClass::class)]        // class or method; class-string or array
+#[RoutePrefix(prefix: '/api', namePrefix: 'api.')] // class only
 ```
+
+### UrlGeneratorInterface
+
+```php
+interface UrlGeneratorInterface
+{
+    /** @throws UrlGenerationException */
+    public function route(string $name, array $parameters = [], bool $absolute = false): string;
+}
+```
+
+Bound to `UrlGenerator` as a singleton.
+
+### RouteCollection
+
+```php
+class RouteCollection
+{
+    public function named(string $name): ?RouteDefinition;
+    public function names(): array;
+    public function inMatchOrder(): array;
+    public function byMethod(string $method): array;
+    public function all(): array;
+}
+```
+
+### RouteDefinition
+
+Each route is a `readonly` value object. Every constructor argument is a string or a list of strings (`method`, `path`, `controller`, `action`, `middleware`, `name`, `withoutMiddleware`). The path already includes any prefix. Everything else (`parameters`, `constraints`, `catchAll`, `regex`) is derived from the path.
 
 ### Request
 

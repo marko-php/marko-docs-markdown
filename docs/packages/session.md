@@ -134,6 +134,49 @@ The session cookie is attached to the `Response` rather than emitted directly by
 
 This matters for [`marko/page-cache`](/docs/packages/page-cache/): responses carrying any cookie are never cached, so attaching the session cookie unconditionally would silently disable page caching on every session-enabled route.
 
+### Stateless Routes
+
+Because the session middleware is global, every route starts a session by default. It reads and writes the session file or row, and a new visitor gets a `Set-Cookie`. A JSON API, a webhook receiver or a health check doesn't need any of that. Skip the middleware with [`#[WithoutMiddleware]`](/docs/packages/routing/#skipping-middleware), on one route or on a whole controller:
+
+```php title="app/api/src/Controller/ShowApiController.php"
+use Marko\Routing\Attributes\Get;
+use Marko\Routing\Attributes\RoutePrefix;
+use Marko\Routing\Attributes\WithoutMiddleware;
+use Marko\Routing\Http\Response;
+use Marko\Session\Middleware\SessionMiddleware;
+
+#[RoutePrefix('/api/v1', namePrefix: 'api.v1.')]
+#[WithoutMiddleware(SessionMiddleware::class)]
+class ShowApiController
+{
+    #[Get('/shows/{id:\d+}', name: 'shows.show')]
+    public function show(int $id): Response
+    {
+        return Response::json($this->showRepository->find($id)->toArray());
+    }
+}
+
+class HealthController
+{
+    #[Get('/health')]
+    #[WithoutMiddleware(SessionMiddleware::class)]
+    public function health(): Response
+    {
+        return Response::json(['status' => 'ok']);
+    }
+}
+```
+
+On these routes the session is never started. The session handler is never called, so no file or row is read or written, and the response carries no session cookie. Every other route keeps its session.
+
+Code that needs the session fails loudly on a stateless route. It never starts a session behind your back:
+
+- `SessionInterface::get()`, `set()` and the other data methods throw `SessionNotStartedException`.
+- The session guard from [`marko/authentication`](/docs/packages/authentication/) throws `AuthException` ("Session not started"). Authenticate stateless APIs with a bearer token instead: [`marko/authentication-token`](/docs/packages/authentication-token/). The same applies to `#[Can]` checks on these routes.
+- CSRF protection that keeps its token in the session can't work there either. That's expected for token-authenticated APIs and signed webhooks.
+
+Excluding `SessionMiddleware` requires a session driver (`marko/session-file` or `marko/session-database`) to be installed, because the driver registers the middleware. Without a driver, the exclusion names a middleware that isn't in the stack, and boot fails with a `RouteException`.
+
 ### Long-Running Processes
 
 `Session` implements `Marko\Core\Contracts\ResettableInterface`. In a long-running worker (e.g. Swoole, RoadRunner), call `reset()` between requests to clear the cached session ID, data, and flash bag so one request's session state is never reused for the next:
