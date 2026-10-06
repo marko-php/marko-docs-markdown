@@ -3,7 +3,7 @@ title: marko/queue-database
 description: Database queue driver — stores and processes jobs in SQL tables with transaction-safe polling and failed job persistence.
 ---
 
-Database queue driver --- stores and processes jobs in SQL tables with atomic reservation and failed job persistence. Jobs are stored in a `jobs` table and polled by the worker process. On MySQL and PostgreSQL the driver uses `FOR UPDATE SKIP LOCKED` inside a transaction to atomically claim each job, preventing duplicate processing across multiple workers. Crashed reservations (jobs reserved but neither deleted nor released within `queue.retry_after` seconds) are automatically reclaimed on the next poll cycle. Failed jobs are persisted to a `failed_jobs` table for later inspection and retry. Includes migrations for both tables.
+Database queue driver --- stores and processes jobs in SQL tables with atomic reservation and failed job persistence. Jobs are stored in a `jobs` table and polled by the worker process. Each job is claimed inside a transaction with the query builder's `lockForUpdate()->skipLocked()` (`FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL), so concurrent workers skip a job another worker is claiming instead of processing it twice. Crashed reservations (jobs reserved but neither deleted nor released within `queue.retry_after` seconds) are automatically reclaimed on the next poll cycle. Failed jobs are persisted to a `failed_jobs` table for later inspection and retry. Includes migrations for both tables.
 
 Implements `QueueInterface` from [`marko/queue`](/docs/packages/queue/) and requires [`marko/database`](/docs/packages/database/) for the database connection.
 
@@ -19,7 +19,7 @@ Requires [`marko/database`](/docs/packages/database/) for the database connectio
 
 ### Wiring
 
-Installing the package is enough. Its `module.php` binds `QueueInterface` to a `DatabaseQueue` built from your queue config, and binds `FailedJobRepositoryInterface` to `DatabaseFailedJobRepository`. `marko/queue` binds `WorkerInterface`, so `marko queue:work` runs with no extra bindings.
+Installing the package and a database driver is enough. Its `module.php` binds `QueueInterface` to a `DatabaseQueue` built from your queue config and the driver's `QueryBuilderFactoryInterface`, and binds `FailedJobRepositoryInterface` to `DatabaseFailedJobRepository`. `marko/queue` binds `WorkerInterface`, so `marko queue:work` runs with no extra bindings.
 
 The factory reads these keys from `config/queue.php`:
 
@@ -95,6 +95,7 @@ Implements `QueueInterface`. The constructor accepts:
 - a `ConnectionInterface` connection
 - a `JobEnvelope`
 - a `FailedJobRepositoryInterface`, used to fail jobs that exhaust their attempts through crashed reservations
+- a `QueryBuilderFactoryInterface`, used to build the locking reservation query. Its builders must use the same connection as the queue, so the lock is taken inside the queue's transaction. The driver bindings already do this.
 - an optional table name (`jobs`)
 - an optional default queue name
 - an optional `retryAfter` timeout in seconds
@@ -102,13 +103,13 @@ Implements `QueueInterface`. The constructor accepts:
 
 The module factory sets the last three from `queue.queue`, `queue.retry_after` and `queue.max_attempts`.
 
-On MySQL and PostgreSQL, `pop()` uses `FOR UPDATE SKIP LOCKED` inside a transaction to atomically claim the next available job, making it safe to run multiple concurrent workers. Jobs whose `reserved_at` timestamp is older than `retry_after` seconds are treated as crashed and become eligible for re-reservation.
+`pop()` selects the next available job with `lockForUpdate()->skipLocked()` inside a transaction, then reserves it with an `UPDATE` guarded on `reserved_at`. A job locked by another worker is skipped rather than waited for, so multiple workers can run concurrently without claiming the same job. The connection must implement `TransactionInterface` (the MySQL and PostgreSQL drivers do). Otherwise `pop()` throws `LockException`, because the lock would be released as soon as the `SELECT` finished. Jobs whose `reserved_at` timestamp is older than `retry_after` seconds are treated as crashed and become eligible for re-reservation.
 
 | Method | Description |
 |---|---|
 | `push(JobInterface $job, ?string $queue = null): string` | Insert a job for immediate processing. Returns the job ID. |
 | `later(int $delay, JobInterface $job, ?string $queue = null): string` | Insert a job with a delay in seconds. Returns the job ID. |
-| `pop(?string $queue = null): ?JobInterface` | Retrieve and reserve the next available job, or `null` if empty. Increments the `attempts` column, syncs the job's attempt count with earlier unreleased reservations, and moves crash-exhausted jobs to `failed_jobs`. Uses transactions when the connection supports `TransactionInterface`. |
+| `pop(?string $queue = null): ?JobInterface` | Retrieve and reserve the next available job, or `null` if empty. Increments the `attempts` column, syncs the job's attempt count with earlier unreleased reservations, and moves crash-exhausted jobs to `failed_jobs`. Runs in a transaction (a savepoint inside a caller's transaction). Throws `LockException` on a connection without transactions. |
 | `size(?string $queue = null): int` | Count pending (unreserved, available) jobs. |
 | `clear(?string $queue = null): int` | Delete all jobs in a queue. Returns the number of deleted rows. |
 | `delete(string $jobId): bool` | Delete a specific job by ID. |
