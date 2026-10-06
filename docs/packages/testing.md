@@ -828,9 +828,12 @@ public function __construct(array $users = [], ?callable $credentialValidator = 
 public function retrieveById(int|string $identifier): ?AuthenticatableInterface;
 public function retrieveByCredentials(array $credentials): ?AuthenticatableInterface;
 public function validateCredentials(AuthenticatableInterface $user, array $credentials): bool;
+public function rehashPasswordIfNeeded(AuthenticatableInterface $user, array $credentials): void;
 public function retrieveByRememberToken(int|string $identifier, string $token): ?AuthenticatableInterface;
 public function updateRememberToken(AuthenticatableInterface $user, ?string $token, ?DateTimeImmutable $expiresAt): void;
 ```
+
+`rehashPasswordIfNeeded()` stores no hash; it appends each call to the public `rehashChecks` array (`['user' => ..., 'credentials' => ...]`), so a test can assert `SessionGuard::attempt()` asked for a rehash.
 
 ### FakeGuard
 
