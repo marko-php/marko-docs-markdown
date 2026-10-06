@@ -17,7 +17,10 @@ the monorepo, each given an explicit **Leaks: Yes** or **Leaks: No** verdict.
 `marko/authentication`, then drives sequential `Request` objects through
 `$app->router->handle()` with interleaved identities — authenticated,
 anonymous, a different session — and several hundred requests for the memory
-curve. See `packages/roadrunner/tests/StateLeakSpikeTest.php`. Services from
+curve. See `packages/roadrunner/tests/StateLeakSpikeTest.php`. The
+harness's opt-in `reset()` delegates to `Marko\Core\RequestStateResetter`,
+the same resetter the worker calls before each request, so it resets the
+same instances in the same (sorted by binding id) order. Services from
 packages the fixture does not wire (debugbar, inertia, authorization, ...)
 are audited by reading the source directly; that is called out per item
 below, since it could not be exercised through a live request cycle in this
