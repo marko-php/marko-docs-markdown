@@ -103,6 +103,22 @@ readonly class CatalogPermissions
 }
 ```
 
+`marko/admin-auth` binds `PermissionRegistryInterface` to `PermissionRegistry` as a shared singleton, so you don't bind it yourself. Every class that injects the interface gets the same instance: your registration classes, `AdminAuthMiddleware` and `marko/admin-api`'s `SectionController`. A permission registered through one of them is visible to all of them.
+
+To replace the registry, put a `#[Preference]` on a class that implements the interface, and have it replace the interface rather than `PermissionRegistry`. The container checks preferences for the type being injected, which is the interface, so a Preference on the concrete class is never used. The replacement is still shared:
+
+```php title="app/admin/src/AppPermissionRegistry.php"
+use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
+use Marko\AdminAuth\PermissionRegistry;
+use Marko\Core\Attributes\Preference;
+
+#[Preference(replaces: PermissionRegistryInterface::class)]
+class AppPermissionRegistry extends PermissionRegistry
+{
+    // Override register(), all(), getByGroup() or matches() as needed
+}
+```
+
 ### Wildcard Permissions
 
 Permissions support wildcard matching. A role with `catalog.*` can access any `catalog.` permission:
