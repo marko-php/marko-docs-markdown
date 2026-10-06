@@ -19,27 +19,26 @@ Configure guards in `config/auth.php`:
 declare(strict_types=1);
 
 return [
-    'defaults' => [
+    'default' => [
         'guard' => 'web',
     ],
     'guards' => [
         'web' => [
             'driver' => 'session',
-            'provider' => 'database',
+            'provider' => 'users',
         ],
         'api' => [
             'driver' => 'token',
-            'provider' => 'database',
+            'provider' => 'users',
         ],
     ],
     'providers' => [
-        'database' => [
-            'driver' => 'database',
-            'table' => 'users',
-        ],
+        'users' => [], // no 'class': your UserProviderInterface binding
     ],
 ];
 ```
+
+Each guard loads its users through the provider it names. A provider entry without a `class` uses the `UserProviderInterface` your module binds; give an entry a `class` to back a guard with its own provider. See [User Providers](/docs/packages/authentication/#user-providers).
 
 The `session` driver is built in. The `token` driver comes from [marko/authentication-token](/docs/packages/authentication-token/) (`composer require marko/authentication-token`); until it is installed, resolving the `api` guard throws an error telling you so. Other drivers can be registered with `GuardDriverRegistry`. See [Guard Drivers](/docs/packages/authentication/#guard-drivers).
 
