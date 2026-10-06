@@ -52,6 +52,8 @@ DB_PASSWORD=your_password
 
 This driver supports both MySQL 8.0+ and MariaDB 10.5+. Both are tested and fully supported.
 
+With `innodb_snapshot_isolation=ON` (the default from MariaDB 11.8), a `REPEATABLE READ` transaction that writes a row a concurrent transaction changed after its snapshot fails with error `1020` ("Record has changed since last read"). The driver raises it as `SerializationFailureException`, so `transaction(attempts: ...)` retries it like a deadlock. MySQL never raises `1020` for this case. See [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
+
 ### Character Set
 
 The default charset is `utf8mb4` which supports the full Unicode range including emojis. This is the recommended setting for new applications.
@@ -152,7 +154,7 @@ class MyService
 | `rollback(): void` | Roll back the innermost level (`ROLLBACK TO SAVEPOINT` when nested); throws `TransactionException` when none is open |
 | `inTransaction(): bool` | Check whether a transaction is active |
 | `transactionLevel(): int` | Number of open levels (0 outside a transaction) |
-| `transaction(callable $callback, int $attempts = 1): mixed` | Execute a callback inside a transaction (a savepoint when nested) --- auto-commits on success, rolls back on exception; the outermost call runs up to `$attempts` times on a deadlock |
+| `transaction(callable $callback, int $attempts = 1, int\|Closure\|null $backoff = null): mixed` | Execute a callback inside a transaction (a savepoint when nested) --- auto-commits on success, rolls back on exception; the outermost call runs up to `$attempts` times on a deadlock or serialization failure, waiting between attempts as `$backoff` says ([Backoff](/docs/packages/database/#backoff)) |
 | `afterCommit(callable $callback): void` | Run the callback after the outermost commit (immediately outside a transaction) |
 | `afterRollback(callable $callback): void` | Run the callback if its level rolls back |
 | `runPendingAfterCommitCallbacks(): void` | Run the queued `afterCommit()` callbacks without committing (`PendingAfterCommitInterface`); for test helpers such as `RefreshDatabase`, not production code |
@@ -221,7 +223,7 @@ MySQL commits implicitly before any DDL statement (`CREATE`, `ALTER`, `DROP`, `T
 
 ### MySqlExceptionTranslator
 
-Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `MySqlStatement::execute()` into a typed exception from `marko/database`, keyed on the server error number (MySQL reports every integrity violation as SQLSTATE `23000`): `1062` unique; `1451`, `1452`, `1216`, `1217` foreign key; `1048`, `1364` not null; `3819` (MySQL) and `4025` (MariaDB) check; `1213` `DeadlockException` (InnoDB also reports serialization conflicts this way); `1205` (lock wait timeout) and `3572` (`NOWAIT`) `LockTimeoutException`; anything else `QueryException`. Failed `BEGIN`, `COMMIT`, `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK` statements are translated the same way. The constraint, table and column are parsed from the server message. The duplicate value in a `1062` message is never copied. `MySqlConnection` and `MySqlStatement` take it as an optional last constructor argument. See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions) and [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
+Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `MySqlStatement::execute()` into a typed exception from `marko/database`, keyed on the server error number (MySQL reports every integrity violation as SQLSTATE `23000`): `1062` unique; `1451`, `1452`, `1216`, `1217` foreign key; `1048`, `1364` not null; `3819` (MySQL) and `4025` (MariaDB) check; `1213` `DeadlockException` (InnoDB also reports most serialization conflicts this way); `1020` `SerializationFailureException` (MariaDB with `innodb_snapshot_isolation=ON`); `1205` (lock wait timeout) and `3572` (`NOWAIT`) `LockTimeoutException`; anything else `QueryException`. Failed `BEGIN`, `COMMIT`, `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK` statements are translated the same way. The constraint, table and column are parsed from the server message. The duplicate value in a `1062` message is never copied. `MySqlConnection` and `MySqlStatement` take it as an optional constructor argument (`exceptionTranslator`). See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions) and [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
 | Method | Description |
 |---|---|
@@ -234,6 +236,8 @@ Implements `ConnectionFactoryInterface`. Creates `MySqlConnection` instances fro
 | Method | Description |
 |---|---|
 | `make(DatabaseConfig $config): ConnectionInterface` | Create and return a new `MySqlConnection` for the given config |
+
+The factory hands every connection it makes the container-bound `TransactionBackoff`, so the write primary and the replicas wait between `transaction()` retries the same way as the default connection.
 
 ### SQL Generator
 

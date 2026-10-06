@@ -119,7 +119,7 @@ The sticky flag is set by:
 
 - `execute()` — any INSERT, UPDATE, DELETE, or DDL statement
 - `beginTransaction()` — entering a transaction
-- `transaction(callable $callback, int $attempts = 1)` — the entire callback, every retried attempt included, runs on the primary; when the callback completes, the sticky flag goes back to what it was before the call. A nested `transaction()` therefore leaves the outer transaction's reads on the primary.
+- `transaction(callable $callback, int $attempts = 1, int|Closure|null $backoff = null)` — the entire callback, every retried attempt included, runs on the primary; when the callback completes, the sticky flag goes back to what it was before the call. A nested `transaction()` therefore leaves the outer transaction's reads on the primary.
 
 ```php
 use Marko\Database\Connection\ConnectionInterface;
@@ -258,7 +258,7 @@ Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInt
 | `rollback(): void` | Write | Roll back the current transaction |
 | `inTransaction(): bool` | Write | Check if a transaction is active |
 | `transactionLevel(): int` | Write | Number of open transaction levels (savepoints included) |
-| `transaction(callable $callback, int $attempts = 1): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction (a savepoint when nested); `$attempts` is passed to the write connection, which retries the outermost transaction on a deadlock or serialization failure. The sticky flag is set for the callback duration and restored to its previous value afterwards |
+| `transaction(callable $callback, int $attempts = 1, int\|Closure\|null $backoff = null): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction (a savepoint when nested); `$attempts` and `$backoff` are passed to the write connection, which waits between attempts and retries the outermost transaction on a deadlock or serialization failure. The sticky flag is set for the callback duration and restored to its previous value afterwards |
 | `afterCommit(callable $callback): void` | Write | Run the callback after the write connection's outermost commit |
 | `afterRollback(callable $callback): void` | Write | Run the callback if its transaction level rolls back |
 | `runPendingAfterCommitCallbacks(): void` | Write | Run the write connection's queued `afterCommit()` callbacks without committing (for test helpers such as `RefreshDatabase`); throws `TransactionException` when the write connection does not implement `PendingAfterCommitInterface` |

@@ -5,7 +5,7 @@ description: Reusable fakes with built-in assertions that eliminate test boilerp
 
 Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, the clock, and console confirmations. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. An in-process HTTP test client (`TestClient`) sends requests through your real routes, middleware and controllers for feature tests. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`, `toHaveStatus`, `toHaveJsonPath`) are included for fluent assertions.
 
-Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`, `FakeConfirmationPrompter`.
+Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`, `FakeSleeper`, `FakeConfirmationPrompter`.
 
 ## Installation
 
@@ -192,6 +192,27 @@ $clock->assertNowIs('2026-06-01 09:00:00 UTC');
 ```
 
 `travel()` accepts any `DateTimeImmutable::modify()` string; a malformed modifier throws `DateMalformedStringException`. With no argument, the fake is frozen at the moment it was created.
+
+### FakeSleeper
+
+`FakeSleeper` implements `Marko\Database\Connection\SleeperInterface` from [`marko/database`](/docs/packages/database/) (install it to use this fake). It records each requested delay in milliseconds instead of sleeping, so you can assert the [backoff](/docs/packages/database/#backoff) between `transaction()` retries without waiting for it:
+
+```php
+use Marko\Database\Connection\TransactionBackoff;
+use Marko\Testing\Fake\FakeSleeper;
+
+$sleeper = new FakeSleeper();
+$connection = new PgSqlConnection($config, transactionBackoff: new TransactionBackoff($sleeper));
+
+// ... a transaction that conflicts twice, run with attempts: 3, backoff: 50
+
+$sleeper->assertSlept(50, 50);
+$sleeper->sleeps;            // [50, 50]
+$sleeper->clear();
+$sleeper->assertNotSlept();
+```
+
+The connection sleeps once per retry, including a `0` delay. It never sleeps after the last attempt, with `attempts: 1`, or in a nested `transaction()`. For repeatable default (jittered) delays, pass a seeded `new Randomizer(new Mt19937($seed))` as the second `TransactionBackoff` argument.
 
 ### FakeConfirmationPrompter
 
@@ -844,6 +865,16 @@ public function setNow(DateTimeImmutable|string $now): void;
 public function travel(string $modifier): void;
 public function travelTo(DateTimeImmutable|string $now): void;
 public function assertNowIs(DateTimeImmutable|string $expected): void;
+```
+
+### FakeSleeper
+
+```php
+public array $sleeps; // list<int>, milliseconds in the order requested
+public function sleep(int $milliseconds): void;
+public function clear(): void;
+public function assertSlept(int ...$milliseconds): void;
+public function assertNotSlept(): void;
 ```
 
 ### FakeConfirmationPrompter

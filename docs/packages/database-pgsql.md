@@ -202,7 +202,7 @@ Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInt
 | `rollback(): void` | Roll back the innermost level (`ROLLBACK TO SAVEPOINT` when nested); throws `TransactionException` when none is open |
 | `inTransaction(): bool` | Check if a transaction is active |
 | `transactionLevel(): int` | Number of open levels (0 outside a transaction) |
-| `transaction(callable $callback, int $attempts = 1): mixed` | Execute a callback inside an auto-managed transaction (a savepoint when nested); the outermost call runs up to `$attempts` times on a deadlock or serialization failure |
+| `transaction(callable $callback, int $attempts = 1, int\|Closure\|null $backoff = null): mixed` | Execute a callback inside an auto-managed transaction (a savepoint when nested); the outermost call runs up to `$attempts` times on a deadlock or serialization failure, waiting between attempts as `$backoff` says ([Backoff](/docs/packages/database/#backoff)) |
 | `afterCommit(callable $callback): void` | Run the callback after the outermost commit (immediately outside a transaction) |
 | `afterRollback(callable $callback): void` | Run the callback if its level rolls back |
 | `runPendingAfterCommitCallbacks(): void` | Run the queued `afterCommit()` callbacks without committing (`PendingAfterCommitInterface`); for test helpers such as `RefreshDatabase`, not production code |
@@ -221,7 +221,7 @@ Implements `StatementInterface`. Wraps a prepared PDO statement.
 
 ### PgSqlExceptionTranslator
 
-Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `PgSqlStatement::execute()` into a typed exception from `marko/database`, keyed on the SQLSTATE: `23505` unique, `23503` foreign key, `23502` not null, `23514` check, `40P01` `DeadlockException`, `40001` `SerializationFailureException`, `55P03` `LockTimeoutException` (`NOWAIT` and `lock_timeout`), anything else `QueryException`. Failed `BEGIN`, `COMMIT`, `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK` statements are translated the same way, so a serialization failure detected at `COMMIT` is a `SerializationFailureException`. The constraint, table and column are parsed from the server message, and the `DETAIL:` line (which echoes row data) is never copied. `PgSqlConnection` and `PgSqlStatement` take it as an optional last constructor argument. See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions) and [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
+Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `PgSqlStatement::execute()` into a typed exception from `marko/database`, keyed on the SQLSTATE: `23505` unique, `23503` foreign key, `23502` not null, `23514` check, `40P01` `DeadlockException`, `40001` `SerializationFailureException`, `55P03` `LockTimeoutException` (`NOWAIT` and `lock_timeout`), anything else `QueryException`. Failed `BEGIN`, `COMMIT`, `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK` statements are translated the same way, so a serialization failure detected at `COMMIT` is a `SerializationFailureException`. The constraint, table and column are parsed from the server message, and the `DETAIL:` line (which echoes row data) is never copied. `PgSqlConnection` and `PgSqlStatement` take it as an optional constructor argument (`exceptionTranslator`). See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions) and [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
 | Method | Description |
 |---|---|
@@ -281,6 +281,8 @@ Implements `ConnectionFactoryInterface`. Creates `PgSqlConnection` instances fro
 | Method | Description |
 |---|---|
 | `make(DatabaseConfig $config): ConnectionInterface` | Create and return a new `PgSqlConnection` for the given config |
+
+The factory hands every connection it makes the container-bound `TransactionBackoff`, so the write primary and the replicas wait between `transaction()` retries the same way as the default connection.
 
 ### PgSqlIntrospector
 
