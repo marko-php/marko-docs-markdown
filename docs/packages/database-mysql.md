@@ -48,6 +48,22 @@ DB_USERNAME=your_username
 DB_PASSWORD=your_password
 ```
 
+### TLS
+
+MySQL verifies the server certificate against `ssl_ca`. Setting `ssl_ca` turns verification on (`ssl_verify_server_cert` defaults to `true` when it is set):
+
+```php title="config/database.php"
+return [
+    'driver' => 'mysql',
+    // ...
+    'ssl_ca' => Env::nullableString('DB_SSL_CA'),     // CA that signed the server certificate
+    'ssl_cert' => Env::nullableString('DB_SSL_CERT'), // optional client certificate
+    'ssl_key' => Env::nullableString('DB_SSL_KEY'),   // optional client key
+];
+```
+
+A client certificate without a CA would encrypt the connection without checking who is on the other end, so `DatabaseConfig` throws a `ConfigurationException` when `ssl_cert` is set and `ssl_ca` is not. To accept an unverified server on purpose (for example, a local test server with a self-signed certificate), set `'ssl_verify_server_cert' => false` explicitly. `ssl_cert` and `ssl_key` must be set together.
+
 ## Driver-Specific Notes
 
 ### Generated Primary Keys
