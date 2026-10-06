@@ -419,6 +419,25 @@ All remember-me options live under `remember` in `config/authentication.php`:
 
 The guard reads and writes cookies through `CookieJarInterface`, which is bound as a singleton to `Marko\Authentication\Cookie\RequestCookieJar`. The jar reads from the current request and queues writes until `QueuedCookiesMiddleware` attaches them to the response. Writing a cookie when no HTTP request is being handled (for example, `login(..., remember: true)` from a CLI command) throws an `AuthException`. The jar implements `ResettableInterface`, so long-running workers clear its request and queue between requests.
 
+### Time and Testing
+
+Remember-token expiry (`RememberTokenManager`) and remember-cookie expiry (`RequestCookieJar`) read the current time through the PSR-20 `Psr\Clock\ClockInterface` from [`marko/clock`](/docs/packages/clock/), never `time()`. Both take the clock as a constructor parameter and the container injects it. In tests, pass a [`FakeClock`](/docs/packages/testing/#fakeclock) to check the lifetime boundary exactly, without sleeping:
+
+```php
+use Marko\Authentication\Token\RememberTokenManager;
+use Marko\Testing\Fake\FakeClock;
+
+$clock = new FakeClock('2026-01-01 12:00:00 UTC');
+$manager = new RememberTokenManager($clock, lifetimeMinutes: 60);
+$createdAt = $clock->now();
+
+$clock->travel('+60 minutes');
+$manager->isExpired($createdAt); // false
+
+$clock->travel('+1 second');
+$manager->isExpired($createdAt); // true
+```
+
 ## Middleware
 
 ### AuthMiddleware
@@ -668,9 +687,20 @@ public function set(string $name, string $value, int $minutes = 0): void;
 public function delete(string $name): void;
 ```
 
+### RememberTokenManager
+
+```php
+public function __construct(ClockInterface $clock, ?int $lifetimeMinutes = null);
+public function generate(): string;
+public function hash(string $token): string;
+public function validate(string $token, string $storedHash): bool;
+public function isExpired(DateTimeImmutable $createdAt): bool;
+```
+
 ### RequestCookieJar
 
 ```php
+public function __construct(AuthConfig $config, ClockInterface $clock);
 public function setRequest(Request $request): void;
 public function pullQueuedCookies(): array; // array<int, Cookie>
 public function reset(): void;

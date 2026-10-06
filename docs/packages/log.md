@@ -110,6 +110,8 @@ class MyService
 | `marko log:clear` | Clear log files older than configured `max_files` days |
 | `marko log:clear --days=7` | Clear log files older than 7 days |
 
+`log:clear` measures file age against the PSR-20 `ClockInterface` bound by [`marko/clock`](/docs/packages/clock/), so the cutoff is "now" on the same clock the rest of the application uses (a [`FakeClock`](/docs/packages/testing/#fakeclock) in tests).
+
 ## Customization
 
 Replace the default log formatter via [Preference](/docs/packages/core/):

@@ -75,9 +75,33 @@ var/log/app.1.log
 var/log/app.2.log
 ```
 
+### Time and Testing
+
+`FileLogger` stamps each record, and `DailyRotation` picks the day's file, from the PSR-20 `Psr\Clock\ClockInterface` bound by [`marko/clock`](/docs/packages/clock/), never the system time directly. Freeze it with [`FakeClock`](/docs/packages/testing/#fakeclock) to test record times and the midnight rollover exactly:
+
+```php
+use Marko\Log\File\Driver\FileLogger;
+use Marko\Log\Formatter\LineFormatter;
+use Marko\Log\LogLevel;
+use Marko\Testing\Fake\FakeClock;
+
+$clock = new FakeClock('2026-01-21 23:59:59');
+$logger = new FileLogger(
+    path: $dir,
+    channel: 'app',
+    minimumLevel: LogLevel::Debug,
+    formatter: new LineFormatter(),
+    clock: $clock,
+);
+
+$logger->info('Before midnight'); // app-2026-01-21.log, [2026-01-21 23:59:59]
+$clock->travel('+1 second');
+$logger->info('After midnight');  // app-2026-01-22.log, [2026-01-22 00:00:00]
+```
+
 ## Customization
 
-Replace the rotation strategy via Preference:
+The module binds `RotationStrategyInterface` to `DailyRotation`, resolved by the container, so the logger factory picks up a replacement. Replace the rotation strategy via Preference:
 
 ```php
 use Marko\Core\Attributes\Preference;
@@ -120,7 +144,8 @@ The constructor accepts the following parameters:
 | `$channel` | `string` | Channel name used in filenames and log output |
 | `$minimumLevel` | `LogLevel` | Messages below this level are skipped |
 | `$formatter` | `LogFormatterInterface` | Formats log records into strings |
-| `$rotation` | `RotationStrategyInterface` | Rotation strategy (defaults to `DailyRotation`) |
+| `$clock` | `ClockInterface` | PSR-20 clock that stamps each record |
+| `$rotation` | `?RotationStrategyInterface` | Rotation strategy (defaults to `DailyRotation` on the same clock) |
 
 Writes use `FILE_APPEND | LOCK_EX` for safe concurrent appends. The log directory is created automatically if it does not exist. A `LogWriteException` is thrown if the directory is not writable or a write fails.
 
@@ -138,5 +163,5 @@ interface RotationStrategyInterface
 
 ### Built-in Rotation Strategies
 
-- `DailyRotation` --- Date-stamped filenames, rotates automatically each day
+- `DailyRotation` --- Date-stamped filenames from the injected `ClockInterface`, rotates automatically each day
 - `SizeRotation` --- Numbered filenames, rotates when file exceeds max size (default: 10 MB)

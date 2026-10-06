@@ -123,6 +123,7 @@ use Marko\ErrorsSimple\SimpleErrorHandler;
 
 $handler = new SimpleErrorHandler(
     new Environment(),
+    $clock, // Psr\Clock\ClockInterface
     new MyTextFormatter(),
     new MyHtmlFormatter(),
 );
@@ -136,7 +137,6 @@ When building a custom handler, delegate failures to this one:
 use Marko\Core\Attributes\Preference;
 use Marko\Errors\Contracts\ErrorHandlerInterface;
 use Marko\Errors\ErrorReport;
-use Marko\Errors\Severity;
 use Marko\ErrorsSimple\SimpleErrorHandler;
 use Throwable;
 
@@ -155,9 +155,7 @@ class FancyErrorHandler implements ErrorHandlerInterface
             $this->renderPrettyHtml($report);
         } catch (Throwable $e) {
             // Fancy failed --- use the reliable fallback
-            $this->fallback->handle(
-                ErrorReport::fromThrowable($e, Severity::Error),
-            );
+            $this->fallback->handleException($e);
         }
     }
 }
@@ -167,15 +165,19 @@ class FancyErrorHandler implements ErrorHandlerInterface
 
 ### SimpleErrorHandler
 
+The handler stamps each `ErrorReport` it builds with the time from the injected PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)), so a [`FakeClock`](/docs/packages/testing/#fakeclock) freezes report timestamps in tests.
+
 ```php
 use Marko\ErrorsSimple\Environment;
 use Marko\ErrorsSimple\Formatters\BasicHtmlFormatter;
 use Marko\ErrorsSimple\Formatters\TextFormatter;
+use Psr\Clock\ClockInterface;
 
 class SimpleErrorHandler implements ErrorHandlerInterface
 {
     public function __construct(
         Environment $environment,
+        ClockInterface $clock,
         ?TextFormatter $textFormatter = null,
         ?BasicHtmlFormatter $htmlFormatter = null,
     );

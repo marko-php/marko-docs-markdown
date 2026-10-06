@@ -64,11 +64,15 @@ class MyService
 
 ### Creating Error Reports
 
+The report does not read the system time itself. Pass the instant it happened, read from the PSR-20 `ClockInterface` that [`marko/clock`](/docs/packages/clock/) binds, so tests can freeze it with [`FakeClock`](/docs/packages/testing/#fakeclock):
+
 ```php
 use Marko\Errors\ErrorReport;
 use Marko\Errors\Severity;
+use Psr\Clock\ClockInterface;
 
-$report = ErrorReport::fromThrowable($exception, Severity::Error);
+// $clock is an injected ClockInterface
+$report = ErrorReport::fromThrowable($exception, Severity::Error, $clock->now());
 ```
 
 ## Creating Custom Implementations
@@ -196,7 +200,7 @@ readonly class ErrorReport
     public string $suggestion;   // From MarkoException
     public ?Throwable $previous;
 
-    public static function fromThrowable(Throwable $throwable, Severity $severity): self;
+    public static function fromThrowable(Throwable $throwable, Severity $severity, DateTimeImmutable $timestamp): self;
 }
 ```
 

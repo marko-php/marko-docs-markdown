@@ -72,6 +72,7 @@ use Marko\Errors\Contracts\ErrorHandlerInterface;
 use Marko\ErrorsAdvanced\AdvancedErrorHandler;
 use Marko\ErrorsSimple\Environment;
 use App\Web\Errors\CustomHtmlFormatter;
+use Psr\Clock\ClockInterface;
 
 return [
     'bindings' => [
@@ -79,6 +80,7 @@ return [
             $appEnvironment = $container->get(AppEnvironment::class);
 
             return new AdvancedErrorHandler(
+                clock: $container->get(ClockInterface::class),
                 environment: new Environment(appEnvironment: $appEnvironment),
                 prettyHtmlFormatter: new CustomHtmlFormatter(
                     environment: $appEnvironment,
@@ -95,15 +97,17 @@ A `PrettyHtmlFormatter` subclass takes the same `AppEnvironment`. When none is p
 
 ### AdvancedErrorHandler
 
-The main error handler. Implements `ErrorHandlerInterface` from [marko/errors](/docs/packages/errors/) and delegates to the appropriate formatter based on environment.
+The main error handler. Implements `ErrorHandlerInterface` from [marko/errors](/docs/packages/errors/) and delegates to the appropriate formatter based on environment. It stamps each `ErrorReport` it builds with the time from the injected PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)), so a [`FakeClock`](/docs/packages/testing/#fakeclock) freezes report timestamps in tests.
 
 ```php
 use Marko\Errors\Contracts\ErrorHandlerInterface;
 use Marko\Errors\ErrorReport;
+use Psr\Clock\ClockInterface;
 
 class AdvancedErrorHandler implements ErrorHandlerInterface
 {
     public function __construct(
+        ClockInterface $clock, // stamps each ErrorReport
         ?Environment $environment = null,
         ?FormatterInterface $prettyHtmlFormatter = null, // defaults to an environment-aware PrettyHtmlFormatter
     );

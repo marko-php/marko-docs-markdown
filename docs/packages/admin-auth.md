@@ -151,6 +151,22 @@ readonly class DashboardController
 }
 ```
 
+### Events
+
+`RoleRepository` and `AdminUserRepository` dispatch `RoleCreated`, `RoleUpdated`, `RoleDeleted`, `AdminUserCreated` and `AdminUserUpdated` after a save or delete. `AdminUserDeleted` and `PermissionsSynced` are available for your own code to dispatch. Each event exposes `getTimestamp()`, which is a required constructor argument: the events never read the clock themselves. The repositories pass the current instant from the [`marko/database`](/docs/packages/database/) repository (`Repository::now()`, in UTC), the same instant source used for `#[Timestamps]`.
+
+```php
+use Marko\AdminAuth\Events\PermissionsSynced;
+use Psr\Clock\ClockInterface;
+
+// $clock is an injected ClockInterface
+$this->eventDispatcher->dispatch(new PermissionsSynced(
+    createdCount: $created,
+    totalCount: $total,
+    timestamp: $clock->now(),
+));
+```
+
 ## API Reference
 
 ### AdminUserInterface

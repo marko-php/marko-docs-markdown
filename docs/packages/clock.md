@@ -88,6 +88,13 @@ These packages take an injected `ClockInterface` and so require `marko/clock`:
 - [`marko/session`](/docs/packages/session/) --- session cookie expiry
 - [`marko/session-file`](/docs/packages/session-file/) and [`marko/session-database`](/docs/packages/session-database/) --- `last_activity` and garbage collection
 - [`marko/authentication-token`](/docs/packages/authentication-token/) --- personal access token expiry
+- [`marko/authentication`](/docs/packages/authentication/) --- remember-token expiry and remember-cookie expiry
+- [`marko/errors-simple`](/docs/packages/errors-simple/) and [`marko/errors-advanced`](/docs/packages/errors-advanced/) --- `ErrorReport` timestamps (`ErrorReport::fromThrowable()` in [`marko/errors`](/docs/packages/errors/) takes the timestamp as an argument)
+- [`marko/log`](/docs/packages/log/) --- the `log:clear` age cutoff
+- [`marko/log-file`](/docs/packages/log-file/) --- record times and the daily file name
+- [`marko/testing`](/docs/packages/testing/) --- `TestClient`'s `REQUEST_TIME` and cookie expiry (falls back to `SystemClock` when no clock is bound)
+
+[`marko/admin-auth`](/docs/packages/admin-auth/) event timestamps come from the `marko/database` repository's current instant rather than a clock of its own.
 - [`marko/webhook`](/docs/packages/webhook/) --- signature timestamps, the freshness window, and attempt times
 - [`marko/cache-array`](/docs/packages/cache-array/) and [`marko/cache-file`](/docs/packages/cache-file/) --- cache entry expiry and `created_at`
 - [`marko/cache-redis`](/docs/packages/cache-redis/) --- the reported `expiresAt()` of a cache item (Redis itself enforces the TTL)
