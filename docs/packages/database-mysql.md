@@ -100,7 +100,22 @@ When the entity changes the type, its type wins: `INT UNSIGNED` to `bigint` beco
 
 The down migration restates the column exactly as the introspector read it (native type, collation, default and `ON UPDATE`), so `db:rollback` restores the previous schema. A column whose only differences are ones the diff accepts gets no `MODIFY COLUMN` in either direction.
 
-`MODIFY COLUMN` never restates `UNIQUE`: on a column that already has a unique index, it would add a second one. The index diff handles uniqueness.
+`MODIFY COLUMN` never restates `UNIQUE`: on a column that already has a unique index, it would add a second one. Uniqueness changes are separate statements from the index diff: adding `unique: true` to an existing column generates a `CREATE UNIQUE INDEX` named `<table>_<column>_unique`, and removing it generates `DROP INDEX` for the column's unique index, whatever its name (`email` when an inline `UNIQUE` created it). Both are reversed in the down migration. On a foreign key column, the plain replacement index the diff adds is created before the unique index is dropped (and dropped only after it is restored in down), since InnoDB refuses to drop the last index a foreign key uses. See [Unique Columns on Existing Tables](/docs/packages/database/#unique-columns-on-existing-tables).
+
+### Introspected Types and Defaults
+
+The introspector reports columns in the vocabulary entities use, so an unchanged column diffs as empty:
+
+| MySQL reports | Read as |
+|---|---|
+| `INT` | `integer` |
+| `TINYINT(1)` | `boolean` |
+| `CHAR(36)` | `uuid` |
+| other types (`BIGINT`, `VARCHAR`, `DECIMAL`, ...) | the lowercase type name |
+
+Literal defaults come back typed: `'0'` is `0` on an integer column, `'0'`/`'1'` are `false`/`true` on a `TINYINT(1)`, and `'0.00'` is `0.0` on a `DECIMAL`, `FLOAT` or `DOUBLE`. The native type (`nativeType`) still holds the full `COLUMN_TYPE`, so a `CHAR(36)` declared as `#[Column(type: 'char', length: 36)]` reads as `uuid` and diffs as changed; declare it as `uuid`.
+
+MariaDB (10.2.7+) reports defaults differently, and the introspector normalizes them: a quoted string default (`'abc'`) is unquoted, the `NULL` it reports for no default is `null`, `current_timestamp()` is `CURRENT_TIMESTAMP`, and any other unquoted non-numeric default is an `Expression`.
 
 A type change needs no cast: `MODIFY COLUMN` converts the existing values, and in strict mode a value that doesn't fit (`'abc'` to `INT`) fails the migration.
 
@@ -299,7 +314,7 @@ The factory hands every connection it makes the container-bound `TransactionBack
 | `getTables(): array` | List all table names in the database |
 | `getTable(string $name): ?Table` | Get a full `Table` schema object (columns, indexes, foreign keys) |
 | `tableExists(string $name): bool` | Check whether a table exists |
-| `getColumns(string $table): array` | Get column definitions for a table, including each column's native type (`nativeType`), a collation that differs from the table default (`collation`) and its `ON UPDATE` expression (`onUpdateExpression`). A `DEFAULT_GENERATED` default is returned as an `Expression`, and a string literal that reads like a function (`'now()'`) as a `Literal` |
-| `getIndexes(string $table): array` | Get index definitions for a table |
+| `getColumns(string $table): array` | Get column definitions for a table with abstract type names and typed defaults (see [Introspected Types and Defaults](#introspected-types-and-defaults)), including each column's native type (`nativeType`), a collation that differs from the table default (`collation`) and its `ON UPDATE` expression (`onUpdateExpression`). A `DEFAULT_GENERATED` default is returned as an `Expression`, and a string literal that reads like a function (`'now()'`) as a `Literal` |
+| `getIndexes(string $table): array` | Get index definitions for a table, single-column unique indexes included |
 | `getForeignKeys(string $table): array` | Get foreign key definitions for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names for a table |

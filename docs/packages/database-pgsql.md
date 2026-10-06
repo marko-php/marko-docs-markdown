@@ -190,6 +190,16 @@ ALTER TABLE "items" ALTER COLUMN "quantity" DROP DEFAULT,
 - **The default is dropped before the type changes and set again after it.** An old default that can't be cast (`'0'` on a `VARCHAR` becoming `INTEGER`) never blocks the change. An auto-increment column keeps its sequence default, so widening an `integer` key to `bigint` keeps generating ids from the same sequence. The sequence itself stays `integer`; run `ALTER SEQUENCE ... AS bigint` by hand when the ids need to pass 2,147,483,647.
 - **Anything a cast can't express** (splitting a column, parsing a custom format) still needs a hand-written migration.
 
+### Unique Constraints
+
+An inline `UNIQUE` (a new table or column with `unique: true`) creates a unique constraint, `<table>_<column>_key`, which `DROP INDEX` cannot remove. The introspector marks the index behind it (`Index::$constraint`), so removing `unique: true` from the column generates:
+
+```sql
+ALTER TABLE "users" DROP CONSTRAINT "users_email_key"
+```
+
+and the down migration restores it with `ALTER TABLE "users" ADD CONSTRAINT "users_email_key" UNIQUE ("email")`. Adding `unique: true` to an existing column creates a unique index, `<table>_<column>_unique`, dropped with `DROP INDEX` in down. See [Unique Columns on Existing Tables](/docs/packages/database/#unique-columns-on-existing-tables).
+
 ### Partial Indexes
 
 `#[Index(..., where: '...')]` generates `CREATE INDEX ... WHERE <predicate>`, and the introspector reads the predicate back from `pg_indexes`, so a partial index round-trips without drift. See [Partial Indexes](/docs/packages/database/#partial-indexes).
@@ -310,7 +320,7 @@ Implements `IntrospectorInterface`. Reads schema metadata from `information_sche
 | `getTable(string $name): ?Table` | Get full table metadata (columns, indexes, foreign keys) |
 | `tableExists(string $name): bool` | Check if a table exists |
 | `getColumns(string $table): array` | Get column definitions for a table. A default that isn't a literal is returned as an `Expression`, and a string literal that reads like a function (`'now()'`) as a `Literal` |
-| `getIndexes(string $table): array` | Get non-primary-key indexes for a table |
+| `getIndexes(string $table): array` | Get non-primary-key indexes for a table. An index behind a unique constraint has `constraint` set |
 | `getForeignKeys(string $table): array` | Get foreign key constraints for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names |
 
@@ -327,7 +337,7 @@ Implements `SqlGeneratorInterface`. Generates PostgreSQL DDL for schema migratio
 | `generateAddColumn(string $table, Column $column): string` | Generate an ALTER TABLE ADD COLUMN statement |
 | `generateDropColumn(string $table, string $columnName): string` | Generate an ALTER TABLE DROP COLUMN statement |
 | `generateModifyColumn(string $table, Column $column, Column $oldColumn): string` | Generate one ALTER TABLE with the type (cast with `USING`), nullability and default changes from `$oldColumn` to `$column`. Throws `MigrationException` when none of those differ, or when the primary key or auto-increment changes |
-| `generateAddIndex(string $table, Index $index): string` | Generate a CREATE INDEX statement |
+| `generateAddIndex(string $table, Index $index): string` | Generate a CREATE INDEX statement, or `ADD CONSTRAINT ... UNIQUE` for an index that backs a unique constraint |
 | `generateDropIndex(string $table, string $indexName): string` | Generate a DROP INDEX statement |
 | `generateAddForeignKey(string $table, ForeignKey $foreignKey): string` | Generate an ADD CONSTRAINT FOREIGN KEY statement |
 | `generateDropForeignKey(string $table, string $keyName): string` | Generate a DROP CONSTRAINT statement |

@@ -1619,6 +1619,25 @@ A few things to know:
 - **`SET NOT NULL` needs data that satisfies it.** Making a column required fails if existing rows hold `NULL`. Fill those rows in first.
 - **A type change needs data that converts.** Changing `VARCHAR` to `INTEGER` on a table holding `'abc'` fails inside the migration's transaction. Clean up those rows first.
 
+### Unique Columns on Existing Tables
+
+`#[Column(unique: true)]` is applied through the index diff, on both drivers. A new table or a new column gets the unique index inline (`UNIQUE` in `CREATE TABLE` or `ADD COLUMN`). On a column that already exists:
+
+- **Adding `unique: true`** creates a unique index named `<table>_<column>_unique`:
+
+  ```sql
+  CREATE UNIQUE INDEX "users_email_unique" ON "users" ("email")
+  ```
+
+  The down migration drops it. The migration fails if the column already holds duplicate values, so remove them first.
+- **Removing `unique: true`** drops the column's unique index (on PostgreSQL, the unique constraint an inline `UNIQUE` created, with `DROP CONSTRAINT`). The down migration puts it back.
+- **The index is matched by its column, not its name.** Any single-column, non-partial unique index on the column counts, whatever created it (`email` from MySQL's inline `UNIQUE`, `users_email_key` from PostgreSQL's), so an existing unique column diffs as empty and is never renamed or rebuilt.
+- **A foreign key column keeps an index.** When a foreign key column stops being unique and no other index starts with it, the diff adds a plain `<table>_<column>_index` before dropping the unique one, because MySQL refuses to drop the last index a foreign key uses.
+
+A column whose only difference is uniqueness is never modified, so the column diff and the index diff never both act on it.
+
+When the diff reports a change to a table but the SQL generator produces no statement for it in either direction, migration generation stops with a `MigrationException` naming the table and the reported changes, instead of writing an empty `alter_*` migration. It means the entity and the driver describe the column differently; report it.
+
 ### Partial Indexes
 
 Add `where:` to `#[Index]` to create a partial index. The predicate is raw SQL, copied into the `CREATE INDEX` statement:
