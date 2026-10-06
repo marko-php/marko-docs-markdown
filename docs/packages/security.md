@@ -3,7 +3,7 @@ title: marko/security
 description: CSRF protection and security headers middleware -- secure your routes with drop-in middleware.
 ---
 
-CSRF protection and security headers middleware --- secure your routes with drop-in middleware. Two middleware classes cover the most common web security needs: `CsrfMiddleware` validates tokens on state-changing requests, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). Both are configured via `config/security.php`.
+CSRF protection and security headers middleware --- secure your routes with drop-in middleware. Two middleware classes cover the most common web security needs: `CsrfMiddleware`, registered globally, validates tokens on every state-changing request, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). Both are configured via `config/security.php`.
 
 For cross-origin requests, install [marko/cors](/docs/packages/cors/). `marko/security` used to ship its own `CorsMiddleware` with `security.cors.*` config; it was removed so there is a single CORS implementation. Replace any `#[Middleware]` reference to the old class with `marko/cors` (which registers itself globally) and move the `cors` block of `config/security.php` to `config/cors.php`.
 
@@ -35,32 +35,60 @@ return [
 ];
 ```
 
+`csrf.session_key` is the session key `CsrfTokenManager` stores the token under.
+
 ## Usage
 
 ### CSRF Protection
 
-Apply `CsrfMiddleware` to routes that accept form submissions:
+Installing `marko/security` protects every route. Its `module.php` registers `CsrfMiddleware` as **global** middleware (running inside the session middleware), so a `POST`, `PUT`, `PATCH` or `DELETE` to any matched route must carry a valid token or it is rejected with `419`. Nothing has to be added to your controllers:
 
 ```php
 use Marko\Routing\Attributes\Post;
-use Marko\Routing\Attributes\Middleware;
-use Marko\Security\Middleware\CsrfMiddleware;
 
 class FormController
 {
     #[Post('/contact')]
-    #[Middleware(CsrfMiddleware::class)]
     public function submit(): Response
     {
-        // Token validated automatically
+        // Token already validated by the global CsrfMiddleware
         return new Response('Submitted');
     }
 }
 ```
 
-The middleware checks `_token` in POST data or the `X-CSRF-TOKEN` header. Safe methods (GET, HEAD, OPTIONS) are skipped automatically.
+The middleware reads the token from the `_token` form field, the `X-CSRF-TOKEN` header, or the `X-XSRF-TOKEN` header. Safe methods (GET, HEAD, OPTIONS) are skipped.
 
-You can also register `CsrfMiddleware` as global middleware in your module's `module.php`. It still never runs on requests that match no route, because it does not carry `#[RunsOnUnmatched]` (see [Which middleware runs](/docs/packages/routing/#which-middleware-runs)). A `POST` to an unknown path gets a `404`, and a `POST` to a GET-only path gets a `405` with `Allow` --- never a `419` token mismatch. The token check applies only to routes that exist.
+It never runs on requests that match no route, because it does not carry `#[RunsOnUnmatched]` (see [Which middleware runs](/docs/packages/routing/#which-middleware-runs)). A `POST` to an unknown path gets a `404`, and a `POST` to a GET-only path gets a `405` with `Allow` --- never a `419` token mismatch.
+
+:::caution[Upgrading from per-route CSRF]
+In earlier releases, `CsrfMiddleware` only ran on routes that declared `#[Middleware(CsrfMiddleware::class)]`. Now it runs on every route. Remove the now-redundant `#[Middleware(CsrfMiddleware::class)]` attributes, make sure every form and JavaScript client sends the token, and exempt the routes that cannot carry one (see below).
+:::
+
+### Exempting Routes
+
+Webhook receivers, token-authenticated APIs and other routes that are not driven by a browser session opt out explicitly with [`#[WithoutMiddleware]`](/docs/packages/routing/#skipping-middleware), on one route or on a whole controller:
+
+```php
+use Marko\Routing\Attributes\Post;
+use Marko\Routing\Attributes\WithoutMiddleware;
+use Marko\Security\Middleware\CsrfMiddleware;
+use Marko\Session\Middleware\SessionMiddleware;
+
+#[WithoutMiddleware([SessionMiddleware::class, CsrfMiddleware::class])]
+class StripeWebhookController
+{
+    #[Post('/webhooks/stripe')]
+    public function handle(): Response
+    {
+        // Verify the provider's signature instead
+    }
+}
+```
+
+A route that excludes `SessionMiddleware` but not `CsrfMiddleware` has no session to compare tokens against. A state-changing request to it throws `CsrfSessionUnavailableException` (a loud `500`) that tells you to exempt the route, rather than rejecting every request with a misleading `419`.
+
+### Tokens in Forms
 
 Issuing a token (`CsrfTokenManagerInterface::get()` the first time) writes it to the session. That counts as a modification, so the session is saved and the visitor gets a session cookie even under [lazy session persistence](/docs/packages/session/#lazy-persistence). The form submission then carries the cookie that holds the token.
 
@@ -82,6 +110,19 @@ readonly class ContactController
     }
 }
 ```
+
+### SPAs, Inertia and axios (`XSRF-TOKEN`)
+
+Whenever a response persists the session (the request resumed the visitor's session, or modified it --- issuing a token counts), `CsrfMiddleware` mirrors the current token into an `XSRF-TOKEN` cookie. axios, and therefore Inertia, read that cookie and send it back as the `X-XSRF-TOKEN` header on every same-origin request, so SPA requests pass the CSRF check with no extra code.
+
+| Attribute | Value |
+|---|---|
+| `HttpOnly` | off --- JavaScript must read it |
+| `SameSite` | `Lax` |
+| `Secure`, `Path`, `Domain` | follow the session cookie (`session.cookie.*` in `config/session.php`) |
+| Lifetime | browser session; re-issued whenever the token differs from the one the client sent |
+
+A request whose session is only read and then discarded (a cookieless visitor on a page that never issues a token) gets no `XSRF-TOKEN` cookie, so bots and health checks still create no sessions. If the first page of your SPA neither starts a session nor renders a form, issue the token there --- for example call `$this->csrfTokenManager->get()` in the controller that renders the SPA's root view --- so the first `POST` already has a cookie to echo.
 
 ### Security Headers Middleware
 
@@ -142,7 +183,7 @@ use Marko\Security\Exceptions\CsrfTokenMismatchException;
 // Thrown automatically by CsrfMiddleware:
 // message:    "CSRF token validation failed."
 // context:    "The submitted CSRF token does not match the token stored in the session..."
-// suggestion: "Ensure your form includes a valid CSRF token field (_token) or X-CSRF-TOKEN header..."
+// suggestion: "Ensure your form includes a valid CSRF token field (_token), or send it in the X-CSRF-TOKEN or X-XSRF-TOKEN header..."
 ```
 
 `CsrfTokenMismatchException` implements `Marko\Core\Exceptions\HttpExceptionInterface`, so the routing pipeline renders it as **`419 Page Expired`** with the body `{"message": "CSRF token mismatch."}` (JSON, or a minimal HTML page for browsers). The detailed message, context and suggestion above stay server-side. Because the response is rendered where the middleware threw, outer middleware such as CORS and security headers still decorate it --- see [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
@@ -164,7 +205,26 @@ public function regenerate(): string; // Regenerate token, replacing the previou
 ```php
 use Marko\Security\Middleware\CsrfMiddleware;
 
+public const string COOKIE_NAME = 'XSRF-TOKEN';
+
+public function __construct(
+    CsrfTokenManagerInterface $tokenManager,
+    SessionInterface $session,
+    SessionConfig $sessionConfig,
+);
 public function handle(Request $request, callable $next): Response;
+```
+
+### CsrfTokenManager
+
+```php
+use Marko\Security\CsrfTokenManager;
+
+public function __construct(
+    SessionInterface $session,
+    EncryptorInterface $encryptor,
+    string $sessionKey = '_csrf_token', // module.php passes security.csrf.session_key
+);
 ```
 
 ### SecurityHeadersMiddleware
@@ -207,4 +267,12 @@ public static function invalidToken(): self;
 public function getStatusCode(): int;       // 419
 public function getHeaders(): array;        // []
 public function getResponseData(): array;   // ['message' => 'CSRF token mismatch.']
+```
+
+### CsrfSessionUnavailableException
+
+```php
+use Marko\Security\Exceptions\CsrfSessionUnavailableException;
+
+public static function forRequest(string $method, string $path): self;
 ```

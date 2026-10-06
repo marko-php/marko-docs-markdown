@@ -117,6 +117,8 @@ echo.private('orders.7').listen('.order.shipped', (data) => showShipped(data));
 
 Echo prefixes event names with a namespace unless they start with `.`, so listen with a leading dot for the plain event names Marko sends.
 
+With [`marko/security`](/docs/packages/security/) installed, its global `CsrfMiddleware` also guards `POST /broadcasting/auth`. Send the token: pass Echo the `csrfToken` option (or render `<meta name="csrf-token" content="...">`, which Echo reads), or give pusher-js `auth: { headers: { 'X-CSRF-TOKEN': token } }`. The value is `CsrfTokenManagerInterface::get()`, also readable from the `XSRF-TOKEN` cookie.
+
 ### Channel Authorization
 
 When a client subscribes to `private-*` or `presence-*`, pusher-js `POST`s `socket_id` and `channel_name` to `/broadcasting/auth`. `PusherAuthController` strips the prefix, asks the [`ChannelRegistry`](/docs/packages/broadcasting/#authorizing-private-channels) whether the current user (from `GuardInterface`) may subscribe, and responds:

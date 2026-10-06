@@ -332,6 +332,8 @@ class WebhookController
 }
 ```
 
+With [`marko/security`](/docs/packages/security/) installed, `CsrfMiddleware` is global as well, and a webhook receiver like this one excludes it alongside the session: `#[WithoutMiddleware([SessionMiddleware::class, CsrfMiddleware::class])]`.
+
 The route's stack is global middleware, then route middleware, minus the excluded classes. Unmatched requests (404/405) have no route to exclude anything; they run only the global middleware marked `#[RunsOnUnmatched]` (see [Which middleware runs](#which-middleware-runs)).
 
 If a route excludes middleware that is neither global nor on the route, boot fails with a `RouteException`. That catches a typo in the class name, and it catches a driver package that isn't installed. A silent no-op would leave the middleware running. The [stateless API recipe](/docs/packages/session/#stateless-routes) shows the session case in full.

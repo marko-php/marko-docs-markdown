@@ -207,7 +207,7 @@ Code that needs the session fails loudly on a stateless route. It never starts a
 
 - `SessionInterface::get()`, `set()` and the other data methods throw `SessionNotStartedException`.
 - The session guard from [`marko/authentication`](/docs/packages/authentication/) throws `AuthException` ("Session not started"). Authenticate stateless APIs with a bearer token instead: [`marko/authentication-token`](/docs/packages/authentication-token/). The same applies to `#[Can]` checks on these routes.
-- CSRF protection that keeps its token in the session can't work there either. That's expected for token-authenticated APIs and signed webhooks.
+- CSRF protection that keeps its token in the session can't work there either. That's expected for token-authenticated APIs and signed webhooks. With [`marko/security`](/docs/packages/security/) installed, `CsrfMiddleware` is global, so a stateless route that accepts `POST`, `PUT`, `PATCH` or `DELETE` must exclude it too --- `#[WithoutMiddleware([SessionMiddleware::class, CsrfMiddleware::class])]` --- or the request fails with `CsrfSessionUnavailableException`.
 
 Excluding `SessionMiddleware` requires a session driver (`marko/session-file` or `marko/session-database`) to be installed, because the driver registers the middleware. Without a driver, the exclusion names a middleware that isn't in the stack, and boot fails with a `RouteException`.
 
