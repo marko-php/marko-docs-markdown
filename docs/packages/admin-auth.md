@@ -3,7 +3,7 @@ title: marko/admin-auth
 description: Admin authentication and role-based authorization --- manages admin users, roles, permissions, and access control for the admin panel.
 ---
 
-Admin authentication and role-based authorization --- manages admin users, roles, permissions, and access control for the admin panel. The package provides an `AdminUserProvider` that integrates with the [authentication](/docs/packages/authentication/) system, a `PermissionRegistry` for declaring and matching permissions (including wildcards), role and permission entities with repository interfaces, and `AdminAuthMiddleware` that enforces `#[RequiresPermission]` checks on controller methods. Super admin roles bypass all permission checks.
+Admin authentication and role-based authorization --- manages admin users, roles, permissions, and access control for the admin panel. The package provides an `AdminUserProvider` that integrates with the [authentication](/docs/packages/authentication/) system, a `PermissionRegistry` for declaring and matching permissions (including wildcards), role and permission entities with repository interfaces, and `AdminAuthMiddleware` that enforces `#[RequiresPermission]` checks on controller classes and methods. Super admin roles bypass all permission checks.
 
 ## Installation
 
@@ -135,7 +135,7 @@ The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/doc
 
 ### Requiring Permissions
 
-Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method via reflection and throws a `403` `HttpException` when the authenticated user lacks the required permission, or is not an admin user at all. Super admin roles bypass this check.
+Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method, or from the controller class when the method has none, and throws a `403` `HttpException` when the authenticated user lacks the required permission, or is not an admin user at all. Super admin roles bypass this check.
 
 `ExceptionRenderer` renders the `403` as JSON for requests that ask for it and as the application's HTML error page otherwise:
 
@@ -159,6 +159,33 @@ class ProductController
     public function index(): Response
     {
         // Only admin users with 'catalog.products.view' permission
+    }
+}
+```
+
+Put `#[RequiresPermission]` on the controller class to protect every action at once. A method-level attribute replaces the class-level one for that action, it does not add to it:
+
+```php title="SettingsController.php"
+use Marko\AdminAuth\Attributes\RequiresPermission;
+use Marko\AdminAuth\Middleware\AdminAuthMiddleware;
+use Marko\Routing\Attributes\Get;
+use Marko\Routing\Attributes\Middleware;
+
+#[Middleware(AdminAuthMiddleware::class)]
+#[RequiresPermission(permission: 'settings.manage')]
+class SettingsController
+{
+    #[Get('/admin/settings')]
+    public function index(): Response
+    {
+        // Requires 'settings.manage'
+    }
+
+    #[Get('/admin/settings/summary')]
+    #[RequiresPermission(permission: 'settings.view')]
+    public function summary(): Response
+    {
+        // Requires only 'settings.view'
     }
 }
 ```
@@ -468,6 +495,8 @@ public function discoverFromClass(string $className): void;
 ```php
 #[RequiresPermission(permission: 'section.action')]
 ```
+
+Targets classes and methods. A method-level attribute replaces a class-level one.
 
 ### AdminAuthMiddleware
 
