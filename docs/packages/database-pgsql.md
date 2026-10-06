@@ -213,6 +213,20 @@ $$
 - **The sequence must be owned by the column.** `SERIAL` and `BIGSERIAL` columns, including every key Marko creates, already are. A key that reads from a sequence it doesn't own fails before anything changes, with an error naming the table and column. Run `ALTER SEQUENCE ... OWNED BY "posts"."id"`, then run the migration again.
 - **Identity columns** (`GENERATED ... AS IDENTITY`) work the same way. PostgreSQL already changes their sequence with the column, so the sequence step changes nothing.
 
+### Expression Defaults
+
+PostgreSQL stores a deparsed form of an expression default, with its own casts and parentheses: `now() + interval '1 day'` comes back as `(now() + '1 day'::interval)`, and `'a' || 'b'` on a `text` column as `('a'::text || 'b'::text)`. Write the expression as you would in SQL:
+
+```php
+use Marko\Database\Attributes\Column;
+use Marko\Database\Schema\Expression;
+
+#[Column(type: 'timestamp', default: new Expression("now() + interval '1 day'"))]
+public DateTimeImmutable $expiresAt;
+```
+
+When an `Expression` default differs from the stored one, `PgSqlIntrospector::matchesStoredDefault()` opens a transaction, creates `CREATE TEMP TABLE marko_default_probe` with one column of the real column's type (`format_type()`) and your expression as its default, reads back the default PostgreSQL stored, and rolls back. Inside an open transaction it uses a savepoint. If both defaults deparse to the same text, `db:diff` reports no change. If PostgreSQL rejects the expression, the diff fails with a `MigrationException` naming the column and expression. The connection's user needs the `TEMPORARY` privilege on the database, which PostgreSQL grants to everyone by default. See [Column Defaults](/docs/packages/database/#column-defaults).
+
 ### Unique Constraints
 
 An inline `UNIQUE` (a new table or column with `unique: true`) creates a unique constraint, `<table>_<column>_key`, which `DROP INDEX` cannot remove. The introspector marks the index behind it (`Index::$constraint`), so removing `unique: true` from the column generates:
@@ -336,7 +350,7 @@ The factory hands every connection it makes the container-bound `TransactionBack
 
 ### PgSqlIntrospector
 
-Implements `IntrospectorInterface`. Reads schema metadata from `information_schema` and `pg_catalog`.
+Implements `IntrospectorInterface` and `ExpressionDefaultMatcherInterface`. Reads schema metadata from `information_schema` and `pg_catalog`.
 
 | Method | Description |
 |---|---|
@@ -347,6 +361,7 @@ Implements `IntrospectorInterface`. Reads schema metadata from `information_sche
 | `getIndexes(string $table): array` | Get non-primary-key indexes for a table. An index behind a unique constraint has `constraint` set |
 | `getForeignKeys(string $table): array` | Get foreign key constraints for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names |
+| `matchesStoredDefault(string $table, string $column, Expression $expression): bool` | Whether the column would store its current default if it were declared with `$expression`, checked on a temporary table that is rolled back. Throws `MigrationException` when PostgreSQL rejects the expression |
 
 ### PgSqlGenerator
 

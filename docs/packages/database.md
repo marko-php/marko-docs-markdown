@@ -134,7 +134,11 @@ public string $placeholder;
 
 The SQL is not checked against the database: a function the database doesn't have (`UUID()` on PostgreSQL, `gen_random_uuid()` on MySQL) fails when the migration runs. MySQL needs 8.0.13 or later for any expression default except the `CURRENT_TIMESTAMP` family; the generator adds the parentheses MySQL requires.
 
-The introspectors read an expression default back as an `Expression`, so the diff compares it with the entity's. The comparison ignores case, whitespace and parentheses around the whole expression, because databases report `NOW()` as `now()` and MySQL reports `(UUID())` as `uuid()`. A database can rewrite a more complex expression (PostgreSQL reports `now() + interval '1 day'` as `(now() + '1 day'::interval)`); write it the way the database reports it, or `db:diff` keeps showing the column as changed.
+The introspectors read an expression default back as an `Expression`, so the diff compares it with the entity's. The comparison ignores case, whitespace and parentheses around the whole expression, because databases report `NOW()` as `now()` and MySQL reports `(UUID())` as `uuid()`.
+
+A database stores its own rewritten form of a more complex expression, not the text you wrote. PostgreSQL reports `now() + interval '1 day'` as `(now() + '1 day'::interval)`, and MySQL reports `CONCAT('a', 'b')` as `concat(_utf8mb4'a',_utf8mb4'b')`. Write the expression the way you would in SQL. When an `Expression` default still differs from the database's after that comparison, `db:diff` and `db:migrate` ask the database how it would store your expression. They declare it on a temporary column of the same type, read back what the database stored, and compare that with the column's current default. If the two match, the column is unchanged. If not, the diff modifies the column and the migration sets your expression as written. The temporary table is dropped (MySQL) or rolled back (PostgreSQL), so the real schema never changes. Columns whose defaults already compare equal, and columns the diff modifies for another reason, are never probed.
+
+An expression the database rejects (`now() + 'tomorrow'` on a timestamp column) fails at diff time with a `MigrationException` naming the table, column and expression, instead of when the migration runs. A third-party driver whose introspector doesn't implement `ExpressionDefaultMatcherInterface` keeps the plain text comparison.
 
 ### Union-Typed Columns
 
@@ -1801,7 +1805,7 @@ Every driver package binds six interfaces. They fall into two categories:
 | `ConnectionInterface` | **Wire** | PDO connection, DSN format, PostgreSQL/MySQL protocol; exposes `driverName(): string` (e.g. `'mysql'`, `'pgsql'`) so dialect-aware code can branch without a live connection, and `supportsReturning(): bool` so the repository knows whether it can read generated keys back with `INSERT ... RETURNING` |
 | `ConnectionFactoryInterface` | **Wire** | Creates `ConnectionInterface` instances from a `DatabaseConfig` |
 | `SqlGeneratorInterface` | Dialect | DDL generation for schema diffs |
-| `IntrospectorInterface` | Dialect | Reading existing schema from `information_schema` etc. |
+| `IntrospectorInterface` | Dialect | Reading existing schema from `information_schema` etc. Implement `ExpressionDefaultMatcherInterface` on it too so the diff can settle expression defaults the database rewrites (see [Column Defaults](#column-defaults)) |
 | `QueryBuilderInterface` | Dialect | SELECT/INSERT/UPDATE/DELETE SQL generation |
 | `QueryBuilderFactoryInterface` | Dialect | Constructs query builder instances |
 

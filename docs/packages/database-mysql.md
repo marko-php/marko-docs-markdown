@@ -157,6 +157,8 @@ public DateTimeImmutable $createdAt;
 
 `CURRENT_TIMESTAMP(6)` is passed through as well, but needs a column with the same fractional seconds (`TIMESTAMP(6)`), which only raw DDL creates; an entity's `timestamp` is `TIMESTAMP`. The introspector reads every default MySQL marks `DEFAULT_GENERATED` back as an `Expression` (`(UUID())` comes back as `uuid()`, which the diff treats as the same default). See [Column Defaults](/docs/packages/database/#column-defaults) for the shortcut rules and `Literal`.
 
+MySQL rewrites an expression before storing it: `(CONCAT('a', 'b'))` comes back as `concat(_utf8mb4'a',_utf8mb4'b')`, and `(CURRENT_TIMESTAMP + INTERVAL 1 DAY)` as `(now() + interval 1 day)`. Write the expression as you would in SQL. When an `Expression` default differs from the stored one, `MySqlIntrospector::matchesStoredDefault()` creates a `CREATE TEMPORARY TABLE marko_default_probe` with one column of the real column's type and your expression as its default, reads it back with `SHOW COLUMNS`, and drops it. Creating and dropping a temporary table never commits an open transaction. If what MySQL stored matches the column's default, `db:diff` reports no change. If MySQL rejects the expression, the diff fails with a `MigrationException` naming the column and expression. The connection's user needs the `CREATE TEMPORARY TABLES` privilege. The probe uses the connection's character set, which is what MySQL writes into charset introducers such as `_utf8mb4`, so run `db:diff` with the same connection settings that created the column.
+
 ### Partial Indexes
 
 MySQL has no partial indexes. Generating SQL for an `#[Index]` with `where:` throws a `MigrationException` naming the index instead of silently creating a full index. Create the index you need by hand in a migration and list it in `#[Table(unmanagedIndexes: [...])]` (see [Hand-Made Indexes](/docs/packages/database/#hand-made-indexes)).
@@ -320,7 +322,7 @@ The factory hands every connection it makes the container-bound `TransactionBack
 
 ### Introspector
 
-`MySqlIntrospector` implements `IntrospectorInterface` --- reads the live database schema via `information_schema` for use by the migration diff calculator.
+`MySqlIntrospector` implements `IntrospectorInterface` and `ExpressionDefaultMatcherInterface` --- reads the live database schema via `information_schema` for use by the migration diff calculator.
 
 | Method | Description |
 |---|---|
@@ -331,3 +333,4 @@ The factory hands every connection it makes the container-bound `TransactionBack
 | `getIndexes(string $table): array` | Get index definitions for a table, single-column unique indexes included |
 | `getForeignKeys(string $table): array` | Get foreign key definitions for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names for a table |
+| `matchesStoredDefault(string $table, string $column, Expression $expression): bool` | Whether the column would store its current default if it were declared with `$expression`, checked on a temporary table that is dropped again (see [Expression Defaults](#expression-defaults)). Throws `MigrationException` when MySQL rejects the expression |
