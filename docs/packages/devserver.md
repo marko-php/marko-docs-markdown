@@ -259,8 +259,11 @@ use Marko\DevServer\Process\ProcessManager;
 $processManager = new ProcessManager(
     output: $output,
     stopTimeoutSeconds: 10.0, // grace period between SIGTERM and SIGKILL
+    startProbeSeconds: 0.5, // how long start() watches for "command not found"
 );
 ```
+
+`start()` watches the new process for `startProbeSeconds` (default 0.15 seconds) and throws a `DevServerException` if it exits with code 126 or 127 (not executable or not found) in that window. It returns as soon as the process exits, so a longer window only delays commands that keep running.
 
 ### PidFile
 
