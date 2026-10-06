@@ -240,6 +240,10 @@ public function __construct(
 );
 ```
 
+The table name, every searchable field, every filter field and the sort column are quoted through `ConnectionInterface::quoteIdentifier()`, so columns named with reserved words (`key`, `group`, `order`) work on MySQL, MariaDB and PostgreSQL, and a mixed-case PostgreSQL column (`displayName`) is matched exactly instead of being folded to lower case. Each name must still be a plain identifier (letters, digits and underscores, not starting with a digit): anything else, such as `posts.title` or `id; DROP TABLE users`, throws `SearchException` before any SQL runs. The sort direction must be `asc` or `desc`, and every search term and filter value is bound, never interpolated.
+
+The driver uses `LIKE`, so searchable fields must be text columns; PostgreSQL has no `LIKE` on integer columns. Filter and sort on any column.
+
 ### Exceptions
 
 | Exception | Description |

@@ -83,7 +83,7 @@ Property names are automatically converted from camelCase to snake_case for colu
 
 ### Reserved Words and Mixed Case
 
-Table and column names can be SQL reserved words (`key`, `group`, `order`, `user`, `rank`) or mixed case (`#[Column(name: 'displayName')]`). Every name Marko writes into SQL is quoted with the driver's delimiter: the migration DDL, the query builder, the repository (`find()`, `findBy()`, `save()`, `insertBatch()`, `delete()`, `exists()` and the rest), `DataMigration`'s `insert()`/`update()`/`delete()` helpers and `DatabaseTestHelper`. MySQL and MariaDB use backticks, PostgreSQL double quotes, and a delimiter inside a name is doubled. The quoting comes from `ConnectionInterface::quoteIdentifier()`, so use it too when you write your own SQL:
+Table and column names can be SQL reserved words (`key`, `group`, `order`, `user`, `rank`) or mixed case (`#[Column(name: 'displayName')]`). Every name Marko writes into SQL is quoted with the driver's delimiter: the migration DDL, the query builder, the repository (`find()`, `findBy()`, `save()`, `insertBatch()`, `delete()`, `exists()` and the rest), `DataMigration`'s `insert()`/`update()`/`delete()` helpers, `DatabaseTestHelper`, the migrations table, and the hand-written SQL in other packages (the search driver, the database queue, sessions, notifications, `TruncateDatabase` and the admin-auth pivots). MySQL and MariaDB use backticks, PostgreSQL double quotes, and a delimiter inside a name is doubled. The quoting comes from `ConnectionInterface::quoteIdentifier()`, so use it too when you write your own SQL:
 
 ```php
 $sql = sprintf(
@@ -92,6 +92,8 @@ $sql = sprintf(
     $this->connection->quoteIdentifier('group'),
 );
 ```
+
+Never write the delimiter yourself (`` `jobs` `` or `"jobs"`): that is a second copy of one driver's rule, which breaks on the other driver and on a decorator or third-party driver. In the framework's own packages a test (`tests/SqlIdentifierQuotingTest.php`) fails on any SQL string in `packages/*/src` that quotes a name by hand; only the `marko/database-mysql` and `marko/database-pgsql` drivers own a delimiter.
 
 On PostgreSQL a quoted name is case-sensitive. A mixed-case `#[Table]` or `#[Column(name: ...)]` name therefore has to match the table exactly as it was created. Tables created by `db:migrate` always match. A table created by a hand-written migration with unquoted mixed-case names was folded to lower case by PostgreSQL, so declare the lower-case name on the entity.
 
@@ -1992,6 +1994,8 @@ A class that implements `ConnectionInterface` itself (a new driver, a decorator 
 `supportsReturning()` may connect: the repository calls it just before it runs the `INSERT`, so a driver whose answer depends on the server can ask the server once and keep the answer.
 
 A decorator delegates to the connection it wraps, as `ReadWriteConnection` delegates to its write connection.
+
+`quoteIdentifier()` is the only place a package's raw SQL gets its quoting rule. The search driver, the database queue and failed-job store, the session handler, both notification packages, the migrations table, `TruncateDatabase` and the admin-auth repositories all call it on the connection they were given, so a new driver or decorator only has to answer it once for all of them.
 
 ### CockroachDB example
 
