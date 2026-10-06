@@ -115,13 +115,7 @@ return [
 ];
 ```
 
-Both ways register in memory only, and boot never touches the database. Roles are assigned permissions from the `permissions` table, so after deploying code that adds permissions, write them to the table:
-
-```bash
-marko admin-auth:permissions:sync
-```
-
-The command calls `PermissionRepositoryInterface::syncFromRegistry()`. It inserts every registered permission that isn't in the table yet, leaves existing rows alone, and reports how many it created. It never deletes a permission that is no longer registered.
+Both ways register in memory only, and boot never touches the database. Roles are assigned permissions from the `permissions` table. After deploying code that adds, changes or removes permissions, write them to the table as described in [Syncing Permissions to the Database](#syncing-permissions-to-the-database).
 
 `marko/admin-auth` binds `PermissionRegistryInterface` to `PermissionRegistry` as a shared singleton, so you don't bind it yourself. Every class that injects the interface gets the same instance: the boot callback, your own boot code, `AdminAuthMiddleware` and `marko/admin-api`'s `SectionController`. A permission registered through one of them is visible to all of them.
 
@@ -138,6 +132,55 @@ class AppPermissionRegistry extends PermissionRegistry
     // Override register(), all(), getByGroup() or matches() as needed
 }
 ```
+
+### Syncing Permissions to the Database
+
+```bash
+marko admin-auth:permissions:sync
+```
+
+The command calls `PermissionRepositoryInterface::syncFromRegistry()`, which writes in one transaction:
+
+- It inserts every registered permission that isn't in the table yet.
+- It updates the `label` and `group` of an existing row when the `#[AdminPermission]` (or `register()` call) changed them.
+- It reports every row whose key is no longer registered (a removed or renamed permission, or an uninstalled module) and how many roles still hold it.
+- It deletes nothing.
+
+```
+Synced 12 registered permission(s): 1 created, 1 updated, 10 unchanged.
+2 permission(s) in the database are no longer registered:
+  legacy.reports.export (held by 3 role(s))
+  legacy.reports.view (held by 0 role(s))
+Re-run with --prune to delete them and their role assignments.
+Wildcard grants kept: catalog.*
+```
+
+A stale row still grants its key: users with a role that holds it keep the permission, and a later module that registers the same key would hand its new meaning to those roles. Remove stale rows with `--prune`:
+
+```bash
+marko admin-auth:permissions:sync --prune
+```
+
+`--prune` deletes the unregistered permissions and their `role_permissions` rows in one `transaction()`, then lists what it removed. It deletes the role assignments explicitly, so the result doesn't depend on the foreign key's `ON DELETE CASCADE`.
+
+Keys containing `*` are wildcard grants such as `catalog.*` or `*` (see [Wildcard Permissions](#wildcard-permissions)). `#[AdminPermission]` never registers them, so they are never reported as stale and never pruned. They are listed as "Wildcard grants kept".
+
+Pruning changes what roles can do, so it follows the [destructive command policy](/docs/packages/database/#environment-behaviour) of marko/database, opted in to run in production:
+
+| Environment | `--prune` |
+|-------------|-----------|
+| `development`, `dev`, `local`, `testing`, `test` | Runs; asks for confirmation first when someone can answer |
+| Everything else, including `production` and an unset environment | Refused with exit code 1 unless you also pass `--force`. With `--force`, asks for confirmation when someone can answer, and runs when nobody can (deploy scripts, `--no-interaction`) |
+
+Declining the confirmation cancels the prune with exit code 0; the sync itself has already been written. A deploy script that prunes passes both flags:
+
+```bash
+APP_ENV=production marko admin-auth:permissions:sync --prune --force --no-interaction
+```
+
+When nothing is stale, `--prune` prints `No unregistered permissions to prune.` and needs no `--force`. The plain sync never deletes anything, so running it on every deploy is safe: a deploy that temporarily disables a module doesn't strip its permissions from roles.
+
+Every run dispatches [`PermissionsSynced`](#events).
 
 ### Wildcard Permissions
 
@@ -206,19 +249,44 @@ readonly class DashboardController
 
 ### Events
 
-`RoleRepository` and `AdminUserRepository` dispatch `RoleCreated`, `RoleUpdated`, `RoleDeleted`, `AdminUserCreated` and `AdminUserUpdated` after a save or delete. `AdminUserDeleted` and `PermissionsSynced` are available for your own code to dispatch. Each event exposes `getTimestamp()`, which is a required constructor argument: the events never read the clock themselves. The repositories pass the current instant from the [`marko/database`](/docs/packages/database/) repository (`Repository::now()`, in UTC), the same instant source used for `#[Timestamps]`.
+`RoleRepository` and `AdminUserRepository` dispatch `RoleCreated`, `RoleUpdated`, `RoleDeleted`, `AdminUserCreated` and `AdminUserUpdated` after a save or delete. `AdminUserDeleted` is available for your own code to dispatch. Each event exposes `getTimestamp()`, which is a required constructor argument: the events never read the clock themselves. The repositories pass the current instant from the [`marko/database`](/docs/packages/database/) repository (`Repository::now()`, in UTC), the same instant source used for `#[Timestamps]`.
 
-```php
+`admin-auth:permissions:sync` dispatches `PermissionsSynced` once per run, after the sync and any prune, with the time from the injected `ClockInterface`. It fires even when `--prune` is refused or cancelled, because the sync has already been written; `getPrunedCount()` is then `0`. Observe it to audit permission changes:
+
+```php title="app/admin/src/Observers/AuditPermissionSync.php"
 use Marko\AdminAuth\Events\PermissionsSynced;
-use Psr\Clock\ClockInterface;
+use Marko\Core\Attributes\Observer;
+use Marko\Log\Contracts\LoggerInterface;
 
-// $clock is an injected ClockInterface
-$this->eventDispatcher->dispatch(new PermissionsSynced(
-    createdCount: $created,
-    totalCount: $total,
-    timestamp: $clock->now(),
-));
+#[Observer(event: PermissionsSynced::class)]
+readonly class AuditPermissionSync
+{
+    public function __construct(
+        private LoggerInterface $logger,
+    ) {}
+
+    public function handle(
+        PermissionsSynced $event,
+    ): void {
+        $this->logger->info('Admin permissions synced', [
+            'registered' => $event->getTotalCount(),
+            'created' => $event->getCreatedCount(),
+            'updated' => $event->getUpdatedCount(),
+            'unregistered' => $event->getUnregisteredCount(),
+            'pruned' => $event->getPrunedCount(),
+            'at' => $event->getTimestamp()->format(DATE_ATOM),
+        ]);
+    }
+}
 ```
+
+| Getter | Returns |
+|--------|---------|
+| `getTotalCount()` | The number of registered permissions |
+| `getCreatedCount()` | Permissions inserted |
+| `getUpdatedCount()` | Existing permissions whose label or group changed |
+| `getUnregisteredCount()` | Rows no longer registered, wildcard grants excluded |
+| `getPrunedCount()` | Rows deleted by `--prune` (`0` without it, or when it was refused or cancelled) |
 
 ## API Reference
 
@@ -269,7 +337,8 @@ public function discoverFromClass(string $className): void;
 
 | Command | Description |
 |---------|-------------|
-| `admin-auth:permissions:sync` | Writes the registered permissions to the `permissions` table and reports how many it created |
+| `admin-auth:permissions:sync` | Inserts missing permissions, updates changed labels and groups, and lists permissions that are no longer registered with how many roles hold each. Deletes nothing |
+| `admin-auth:permissions:sync --prune` | Also deletes the unregistered permissions and their role assignments in one transaction. Never deletes a key containing `*`. Outside development and testing, needs `--force`; asks for confirmation when someone can answer |
 
 ### RequiresPermission Attribute
 
@@ -314,11 +383,41 @@ interface PermissionRepositoryInterface extends RepositoryInterface
 {
     public function findByKey(string $key): ?Permission;
     public function findByGroup(string $group): array;
-    public function syncFromRegistry(PermissionRegistryInterface $registry): int;
+    public function syncFromRegistry(PermissionRegistryInterface $registry): PermissionSyncResult;
+    /** @return list<UnregisteredPermission> */
+    public function findUnregistered(PermissionRegistryInterface $registry): array;
+    /** @return list<UnregisteredPermission> */
+    public function pruneUnregistered(PermissionRegistryInterface $registry): array;
 }
 ```
 
-`syncFromRegistry()` inserts the registered permissions that are missing from the table and returns how many it created. The `admin-auth:permissions:sync` command calls it.
+`syncFromRegistry()` inserts the registered permissions that are missing from the table and updates the label and group of rows that changed, in one transaction. It deletes nothing. It returns a `PermissionSyncResult`:
+
+```php
+readonly class PermissionSyncResult
+{
+    public int $registeredCount;
+    public array $created;      // list<string>: keys inserted
+    public array $updated;      // list<string>: keys whose label or group changed
+    public array $unregistered; // list<UnregisteredPermission>: rows no longer registered
+    public array $wildcardKeys; // list<string>: keys containing `*`, kept
+
+    public function createdCount(): int;
+    public function updatedCount(): int;
+    public function unregisteredCount(): int;
+}
+
+readonly class UnregisteredPermission
+{
+    public int $id;
+    public string $key;
+    public string $label;
+    public string $group;
+    public int $roleCount; // distinct roles holding the permission
+}
+```
+
+`findUnregistered()` returns the rows whose key is not registered, sorted by key. `pruneUnregistered()` deletes those rows and their `role_permissions` rows in one `transaction()` (a savepoint inside your own transaction) and returns what it removed. Neither ever includes a key containing `*`. The deletes are SQL statements, so no `EntityDeleting` or `EntityDeleted` events fire for the removed rows. The `admin-auth:permissions:sync` command calls `syncFromRegistry()`, and `pruneUnregistered()` with `--prune`.
 
 `getPermissionsForRoles()` returns the deduplicated permission set across all given role IDs in a single query. Empty input returns an empty array without issuing a query.
 

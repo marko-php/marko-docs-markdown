@@ -1661,6 +1661,45 @@ APP_ENV=staging marko db:seed --force --no-interaction
 
 Production has no override. `SeederRunner` applies the same policy when you call it from your own code: `runAll()` and `runByName()` throw `SeederException` outside development and testing unless you pass `force: true`, and always throw in production.
 
+#### Using the policy in your own commands
+
+The `db:*` commands get this policy from `Marko\Database\Command\DestructiveCommandGuard`. Inject it into your own destructive command and call `check()` before doing anything. It returns `null` when the command may go ahead. Otherwise it returns the exit code to stop with: `1` when the environment refuses the command, or `0` when the person declines the confirmation. It writes the error or cancellation message itself. Declare `force` as a flag on the command so `--force` never consumes the next argument.
+
+```php
+public function check(
+    string $command,
+    string $effect,
+    Input $input,
+    Output $output,
+    bool $allowInProduction = false,
+    bool $confirmInDevelopment = false,
+): ?int;
+```
+
+Some destructive changes are needed in production, where a rebuild never is. Two opt-ins cover them, passed per call so the `db:*` commands keep the defaults:
+
+| Argument | Effect |
+|----------|--------|
+| `allowInProduction: true` | Production (or no environment set) is treated like staging. The command is refused without `--force`. With `--force`, it asks for confirmation when someone can answer and runs when nobody can. |
+| `confirmInDevelopment: true` | Development and testing still run the command without `--force`, but ask for confirmation first when someone can answer. |
+
+`admin-auth:permissions:sync --prune` passes both (see [marko/admin-auth](/docs/packages/admin-auth/#syncing-permissions-to-the-database)):
+
+```php
+$refusal = $this->destructiveCommandGuard->check(
+    'admin-auth:permissions:sync --prune',
+    'deletes 2 unregistered permission(s) and their role assignments',
+    $input,
+    $output,
+    allowInProduction: true,
+    confirmInDevelopment: true,
+);
+
+if ($refusal !== null) {
+    return $refusal;
+}
+```
+
 Generation runs only in development: staging is stricter than "not production" and never writes migration files on its own. When `db:migrate` skips generation because of the environment and the entities differ from the database, it prints the SQL it would have generated:
 
 ```

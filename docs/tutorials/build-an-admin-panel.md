@@ -246,13 +246,13 @@ INSERT INTO admin_user_roles (user_id, role_id) VALUES (1, 1);
 
 You declare permissions with `#[AdminPermission]` attributes on an admin section class, which you'll create in the next step (`posts.view`, `posts.create`, `posts.edit` and `posts.delete`). You don't register them yourself: at boot, `marko/admin-auth` registers every `#[AdminPermission]` in `PermissionRegistryInterface`, grouped by the first segment of the key (`posts`). Registering the same key again by hand fails boot with an `AdminAuthException`.
 
-Boot keeps permissions in memory and never writes to the database. To assign them to roles, write them to the `permissions` table once the section exists, and again after each deploy that adds permissions:
+Boot keeps permissions in memory and never writes to the database. To assign them to roles, write them to the `permissions` table once the section exists, and again after each deploy that changes permissions:
 
 ```bash
 marko admin-auth:permissions:sync
 ```
 
-The command inserts the permissions that are missing from the table, leaves existing ones alone, and reports how many it created.
+The command inserts the permissions that are missing from the table and updates changed labels and groups. It lists permissions that are no longer registered, but deletes them only when you add `--prune` (see [Syncing Permissions to the Database](/docs/packages/admin-auth/#syncing-permissions-to-the-database)).
 
 ## Step 6: Create an Admin Section
 
