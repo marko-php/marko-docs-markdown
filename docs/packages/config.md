@@ -189,10 +189,10 @@ How values are read:
 - The default is returned as written and isn't checked against `min`/`max`.
 - `min:` and `max:` are optional named arguments. Use them to state the valid range where the value is read: `Env::int('PAGE_CACHE_TTL', 3600, min: 0)` rejects `-1`.
 
-A rejected value throws `ConfigException`. The message names the variable, the context shows the value and the suggestion lists the accepted forms:
+A rejected value throws `ConfigException`. The message names the variable, the context shows the value and the suggestion lists the accepted forms. When the rejection happens while a config file loads, `ConfigLoader` rethrows it as a `ConfigLoadException` (a `ConfigException` subclass) whose message also names the file that read the variable. The original exception is its `getPrevious()`:
 
 ```text
-Environment variable "PAGE_CACHE_TTL" must be an integer
+Environment variable "PAGE_CACHE_TTL" must be an integer [file: /app/config/page-cache.php]
 Got "1h"
 Set PAGE_CACHE_TTL to a whole number written with digits only (no units, decimals or exponents) of 0 or greater, or remove it to use the default (3600).
 ```
@@ -429,6 +429,8 @@ public static function list(string $name, array $default): array
 public function load(string $filePath): array
 public function loadIfExists(string $filePath): ?array
 ```
+
+Load errors throw `ConfigLoadException`, whose message ends with `[file: <path>]`: a missing file, a file that doesn't return an array, a syntax error, and any Marko exception the file throws while it runs (an `Env` rejection, for example). For the last case the message, context and suggestion are the original's, and `getPrevious()` returns the original. Other throwables, such as `TypeError`, pass through unchanged.
 
 ### ConfigMerger
 
