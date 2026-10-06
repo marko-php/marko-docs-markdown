@@ -44,6 +44,20 @@ class ProductController
 
 `PageCacheMiddleware` is automatically registered as global middleware. On the first request the response is served from the controller and stored. Subsequent requests return the stored response without executing the controller.
 
+### Cache Lifetime (TTL)
+
+The effective TTL of a stored page is worked out in two steps:
+
+1. A positive `#[Cacheable(ttl: ...)]` is used as-is (seconds).
+2. `#[Cacheable(ttl: 0)]` falls back to `page-cache.default_ttl` (`PAGE_CACHE_TTL`, default `3600`).
+
+When the effective TTL is `0` --- that is, `PAGE_CACHE_TTL=0` and the attribute uses `ttl: 0` --- the page **never expires**. It is served until it is removed by a tag purge (`purgeTag()`, which [marko/page-cache-entity](/docs/packages/page-cache-entity/) calls when an entity is saved or deleted), a URL purge (`purgeUrl()` / `marko page-cache:purge <url>`), or `marko page-cache:clear`. This suits content that is purged when it changes.
+
+A negative TTL is always a mistake and fails loudly with a `PageCacheException`:
+
+- A negative `#[Cacheable]` ttl throws when routes are discovered, at application boot.
+- A negative `page-cache.default_ttl` throws when the driver first reads it, on the first cache miss of a cacheable route.
+
 ### Cookies Are Never Cached
 
 Responses carrying any cookie --- whether attached via `Response::withCookie()` or set directly with a raw `Set-Cookie` header --- are never cached. This is a deliberate security boundary, not a limitation to work around: a cached `Set-Cookie` would be replayed to every later visitor, leaking one user's session (or any other cookie) to everybody else. This includes responses that set analytics or session cookies --- if your response carries any cookie, it bypasses the cache entirely.
@@ -130,9 +144,11 @@ Add `config/page-cache.php` to your application:
 
 ```php title="config/page-cache.php"
 return [
-    'driver' => env('PAGE_CACHE_DRIVER', 'file'),
-    'path'   => env('PAGE_CACHE_PATH', 'storage/page-cache'),
-    'ttl'    => (int) env('PAGE_CACHE_TTL', 3600),
+    'driver' => $_ENV['PAGE_CACHE_DRIVER'] ?? 'file',
+    'path' => $_ENV['PAGE_CACHE_PATH'] ?? 'storage/page-cache',
+    'default_ttl' => (int) ($_ENV['PAGE_CACHE_TTL'] ?? 3600),
+    'cacheable_status_codes' => [200, 301],
+    'cacheable_methods' => ['GET', 'HEAD'],
 ];
 ```
 
@@ -140,7 +156,9 @@ return [
 |---|---|---|---|
 | `driver` | `PAGE_CACHE_DRIVER` | `file` | Driver name |
 | `path` | `PAGE_CACHE_PATH` | `storage/page-cache` | Root storage directory |
-| `ttl` | `PAGE_CACHE_TTL` | `3600` | Default TTL in seconds |
+| `default_ttl` | `PAGE_CACHE_TTL` | `3600` | TTL in seconds used when `#[Cacheable]` has `ttl: 0`. `0` means pages never expire and are only removed by a purge or `page-cache:clear`. Negative values throw a `PageCacheException`. |
+| `cacheable_status_codes` | --- | `[200, 301]` | Response status codes eligible for caching |
+| `cacheable_methods` | --- | `['GET', 'HEAD']` | Request methods eligible for caching |
 
 ## CLI Commands
 
@@ -200,7 +218,7 @@ readonly class Cacheable
 }
 ```
 
-The optional `provider` parameter accepts a class name implementing `CacheTagProviderInterface`. When set, the provider is resolved via the DI container at request time and its returned tags are appended to the static `tags` array (deduplicated).
+`ttl` is in seconds; `0` falls back to `page-cache.default_ttl` and a negative value throws `PageCacheException` (see [Cache Lifetime (TTL)](#cache-lifetime-ttl)). The optional `provider` parameter accepts a class name implementing `CacheTagProviderInterface`. When set, the provider is resolved via the DI container at request time and its returned tags are appended to the static `tags` array (deduplicated).
 
 ### CacheTagProviderInterface
 
@@ -252,8 +270,12 @@ use Marko\PageCache\Config\PageCacheConfig;
 
 public function driver(): string;
 public function path(): string;
-public function ttl(): int;
+public function defaultTtl(): int;
+public function cacheableStatusCodes(): array;
+public function cacheableMethods(): array;
 ```
+
+`defaultTtl()` throws `PageCacheException` when `page-cache.default_ttl` is negative.
 
 ### Exceptions
 
@@ -261,6 +283,8 @@ public function ttl(): int;
 |---|---|
 | `PageCacheException` | Base exception for all page-cache errors |
 | `NoDriverException` | Thrown when no driver is bound to `PageCacheInterface` |
+| `PageCacheException::negativeTtl()` | Thrown when a `#[Cacheable]` attribute declares a negative `ttl` (at route discovery) |
+| `PageCacheException::negativeDefaultTtl()` | Thrown when `page-cache.default_ttl` (`PAGE_CACHE_TTL`) is negative |
 | `PageCacheException::invalidTagProvider()` | Thrown when the class named in `provider` does not implement `CacheTagProviderInterface` |
 | `PageCacheException::missingEntityBridge()` | Thrown at boot when a class implements `IdentityInterface` but `marko/page-cache-entity` is not installed |
 

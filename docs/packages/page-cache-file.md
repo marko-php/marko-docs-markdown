@@ -19,13 +19,17 @@ This automatically installs `marko/page-cache`.
 
 ```php title="config/page-cache.php"
 return [
-    'driver' => env('PAGE_CACHE_DRIVER', 'file'),
-    'path'   => env('PAGE_CACHE_PATH', 'storage/page-cache'),
-    'ttl'    => (int) env('PAGE_CACHE_TTL', 3600),
+    'driver' => $_ENV['PAGE_CACHE_DRIVER'] ?? 'file',
+    'path' => $_ENV['PAGE_CACHE_PATH'] ?? 'storage/page-cache',
+    'default_ttl' => (int) ($_ENV['PAGE_CACHE_TTL'] ?? 3600),
+    'cacheable_status_codes' => [200, 301],
+    'cacheable_methods' => ['GET', 'HEAD'],
 ];
 ```
 
 The `path` directory and its subdirectories are created automatically if they do not exist.
+
+`default_ttl` is used when a `#[Cacheable]` attribute has `ttl: 0`. When the effective TTL is `0` (for example `PAGE_CACHE_TTL=0`), the page is stored with no expiry and served until it is purged by tag or URL or cleared with `marko page-cache:clear`. See [Cache Lifetime (TTL)](/docs/packages/page-cache/#cache-lifetime-ttl).
 
 ### Storage Layout
 
@@ -35,7 +39,7 @@ storage/page-cache/
   tags/{hash}.tag        # Reverse-index: page hashes per tag
 ```
 
-Each `.cache` file contains the serialized response body, status code, headers, associated tags, and expiry timestamp. Each `.tag` file contains a serialized list of page hashes that carry that tag, used to resolve purge-by-tag requests.
+Each `.cache` file contains the serialized response body, status code, headers, associated tags, and expiry timestamp (`null` for a page that never expires). An expired entry is deleted the next time it is looked up. Each `.tag` file contains a serialized list of page hashes that carry that tag, used to resolve purge-by-tag requests.
 
 ## Usage
 
