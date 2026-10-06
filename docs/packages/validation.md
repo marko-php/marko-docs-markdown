@@ -111,9 +111,9 @@ $errors->count();             // total error count across all fields
 | URL | `url` | Must be a valid URL |
 | Alpha | `alpha` | Letters only |
 | AlphaNumeric | `alpha_num` | Letters and numbers only |
-| Min | `min:5` | Minimum value (numeric) or minimum length (string) or minimum count (array) |
-| Max | `max:255` | Maximum value (numeric) or maximum length (string) or maximum count (array) |
-| Between | `between:1,100` | Value range (numeric), length range (string), or count range (array) |
+| Min | `min:5` | Minimum value (numeric) or minimum length (string) or minimum count (array). Fails for a file --- use `min_size` |
+| Max | `max:255` | Maximum value (numeric) or maximum length (string) or maximum count (array). Fails for a file --- use `max_size` |
+| Between | `between:1,100` | Value range (numeric), length range (string), or count range (array). Fails for a file --- use `min_size`/`max_size` |
 | In | `in:draft,published` | Must be one of the listed values; numeric strings are compared numerically |
 | NotIn | `not_in:admin,root` | Must not be one of the listed values; numeric strings are compared numerically |
 | Same | `same:other_field` | Must match another field |
@@ -122,6 +122,12 @@ $errors->count();             // total error count across all fields
 | Regex | `regex:/^\d{3}$/` | Must match the pattern |
 | Date | `date` or `date:Y-m-d` | Must be a valid date |
 | Array | `array` | Must be an array |
+| File | `file` | Must be an uploaded file that arrived without an upload error |
+| Image | `image` | Must be a JPEG, PNG, GIF or WebP image, judged from its contents (never SVG) |
+| Mimes | `mimes:jpg,png,pdf` | The extension for the file's sniffed MIME type must be listed (`jpeg` and `jpg` are the same) |
+| MimeTypes | `mimetypes:image/*,application/pdf` | The sniffed MIME type must be listed; `type/*` matches any subtype |
+| MaxSize | `max_size:2048` | File size at most this many kilobytes (1 KB = 1024 bytes) |
+| MinSize | `min_size:1` | File size at least this many kilobytes |
 
 ### Numeric-Aware Rules
 
@@ -136,6 +142,51 @@ $errors = $this->validator->validate(
 ```
 
 `In` and `NotIn` compare numeric strings numerically: `in:1,2,3` accepts `"2"` even though it is not strictly identical to the integer `2`.
+
+### Validating File Uploads
+
+The validator checks an array, and uploaded files live apart from the form fields on the [request](/docs/packages/routing/#handling-file-uploads). Merge them into the data you validate:
+
+```php title="app/profile/src/Controllers/AvatarController.php"
+use Marko\Routing\Attributes\Post;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+use Marko\Validation\Contracts\ValidatorInterface;
+
+class AvatarController
+{
+    public function __construct(
+        private ValidatorInterface $validator,
+    ) {}
+
+    #[Post('/profile/avatar')]
+    public function upload(Request $request): Response
+    {
+        $this->validator->validateOrFail([...$request->input(), ...$request->files()], [
+            'name' => 'required|string|max:100',
+            'avatar' => 'required|file|image|max_size:2048',
+            'resume' => 'nullable|file|mimes:pdf,docx|max_size:5120',
+        ]);
+
+        $avatar = $request->file('avatar');
+        $avatar->moveTo('/var/www/storage/avatars/' . bin2hex(random_bytes(16)) . '.' . $avatar->guessExtension());
+
+        return new Response('Saved');
+    }
+}
+```
+
+A failure throws `ValidationException`, which renders as a 422 with the file errors under their field names, exactly like any other rule. A file field overrides a form field of the same name in the merged array.
+
+The type rules never trust what the client sent. `image`, `mimes` and `mimetypes` read the MIME type that `UploadedFile::mimeType()` detects from the file contents, so a text file named `avatar.png` with a `Content-Type` of `image/png` fails `image` and `mimes:png`. `image` accepts JPEG, PNG, GIF and WebP only: SVG can carry script, so allow it explicitly with `mimes:svg` or `mimetypes:image/svg+xml` when you serve it safely.
+
+Every file rule fails a value that is not an uploaded file, and an upload that failed or was already moved. Failed uploads get a message that says why --- for example `The avatar file is larger than the server allows.` when the file exceeded `upload_max_filesize`.
+
+Sizes are in kilobytes (1 KB = 1024 bytes) and the limits are inclusive. `max`, `min` and `between` keep their meaning for strings, numbers and arrays; given a file, they fail with a message that points to `max_size` / `min_size` (`The avatar field is a file: use max_size:2048 to limit its size in kilobytes.`). `max_size` and `min_size` without a number throw `InvalidArgumentException`, as do `mimes` and `mimetypes` without a list.
+
+For a multi-file input (`name="photos[]"`), `array` and `max:5` check the list and count its files. Per-file rules (`photos.*`) are not supported yet.
+
+The file rules depend only on `Marko\Core\Contracts\UploadedFileInterface`, which `Marko\Routing\Http\UploadedFile` implements, so `marko/validation` does not require `marko/routing`.
 
 ### Mixed Rule Formats
 

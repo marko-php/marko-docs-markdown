@@ -576,6 +576,25 @@ interface ResettableInterface
 
 Implemented by services that hold request-scoped state which must be cleared between requests in a long-running process. See [Resetting Request-Scoped State](#resetting-request-scoped-state-in-long-running-processes) above.
 
+```php
+interface UploadedFileInterface
+{
+    public function clientFilename(): string;
+    public function clientMediaType(): string;
+    public function size(): int;
+    public function error(): int;
+    public function isValid(): bool;
+    public function isMoved(): bool;
+    public function moveTo(string $targetPath): void;
+    public function stream(): mixed; // resource
+    public function contents(): string;
+    public function mimeType(): string;
+    public function guessExtension(): ?string;
+}
+```
+
+A file uploaded with a request. [`marko/routing`](/docs/packages/routing/#uploadedfile) implements it as `Marko\Routing\Http\UploadedFile`; packages that only inspect uploads, such as the [file rules in `marko/validation`](/docs/packages/validation/#validating-file-uploads), depend on this contract instead of on routing. Methods that read or move the file throw a `MarkoException` subclass when the upload failed or was moved.
+
 ### Events
 
 ```php

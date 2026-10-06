@@ -399,6 +399,8 @@ public function upload(Request $request): Response
 
 The client filename and media type are untrusted: `mimeType()` and `guessExtension()` inspect the file contents with `finfo` instead. Inputs submitted without a file are left out, so `hasFile()` is `false` for them. An upload that failed (for example, larger than `upload_max_filesize`) is still present but not valid; moving it, or moving any file twice, throws `UploadedFileException` naming the reason. Calling `file()` on a multi-file input also throws --- use `files()` there.
 
+To check type and size with 422 errors in the same shape as the rest of the form, use the file rules in [`marko/validation`](/docs/packages/validation/#validating-file-uploads) (`file`, `image`, `mimes`, `mimetypes`, `max_size`, `min_size`) instead of hand-written checks. `UploadedFile` implements `Marko\Core\Contracts\UploadedFileInterface`, the contract those rules depend on.
+
 To store an upload through [`marko/media`](/docs/packages/media/), build a `Marko\Media\Value\UploadedFile` from it:
 
 ```php
@@ -706,7 +708,7 @@ The constructor accepts a `files` argument (`array<string, UploadedFile|array>`)
 ### UploadedFile
 
 ```php
-use Marko\Routing\Http\UploadedFile;
+use Marko\Routing\Http\UploadedFile; // implements Marko\Core\Contracts\UploadedFileInterface
 
 public function __construct(
     string $tempPath,
