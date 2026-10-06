@@ -67,9 +67,9 @@ PUSHER_SCHEME=http
 
 ### Publishing
 
-Use `BroadcasterInterface` as described in [`marko/broadcasting`](/docs/packages/broadcasting/). Each broadcast is a signed `POST {scheme}://{host}:{port}/apps/{app_id}/events` with the body `{"name": event, "channels": [channel], "data": "<JSON data>"}`. A `PrivateChannel` is sent with the `private-` prefix (`orders.7` → `private-orders.7`).
+Use `BroadcasterInterface` as described in [`marko/broadcasting`](/docs/packages/broadcasting/). Each broadcast is a signed `POST {scheme}://{host}:{port}/apps/{app_id}/events` with the body `{"name": event, "channels": [channel], "data": "<JSON data>"}`. A `PrivateChannel` is sent with the `private-` prefix (`orders.7` → `private-orders.7`) and a `PresenceChannel` with the `presence-` prefix (`rooms.3` → `presence-rooms.3`).
 
-Channel names may only contain letters, digits and `_ - = @ , . ;`, up to 164 characters including the `private-` prefix; other names throw `BroadcastException` before any request is made. The Pusher protocol has no event ids, so the `$id` argument is not transmitted.
+Channel names may only contain letters, digits and `_ - = @ , . ;`, up to 164 characters including the `private-` or `presence-` prefix; other names throw `BroadcastException` before any request is made. The Pusher protocol has no event ids, so the `$id` argument is not transmitted.
 
 ### Client Setup
 
@@ -96,17 +96,46 @@ echo.private('orders.7').listen('.order.shipped', (data) => showShipped(data));
 
 Echo prefixes event names with a namespace unless they start with `.`, so listen with a leading dot for the plain event names Marko sends.
 
-### Private Channel Authorization
+### Channel Authorization
 
-When a client subscribes to `private-*`, pusher-js `POST`s `socket_id` and `channel_name` to `/broadcasting/auth`. `PusherAuthController` strips the `private-` prefix, asks the [`ChannelRegistry`](/docs/packages/broadcasting/#authorizing-private-channels) whether the current user (from `GuardInterface`) may subscribe, and responds:
+When a client subscribes to `private-*` or `presence-*`, pusher-js `POST`s `socket_id` and `channel_name` to `/broadcasting/auth`. `PusherAuthController` strips the prefix, asks the [`ChannelRegistry`](/docs/packages/broadcasting/#authorizing-private-channels) whether the current user (from `GuardInterface`) may subscribe, and responds:
 
 | Situation | Response |
 |---|---|
-| Authorized | `200 {"auth": "key:HMAC-SHA256(secret, socket_id:channel_name)"}` |
-| The authorizer denies the user | `403` |
-| Missing/malformed `socket_id`, or a channel without the `private-` prefix | `400` |
-| No authorizer matches the channel | `ChannelAuthorizationException` (loud error) |
-| A `presence-*` channel | `PusherException` --- presence channels are not supported yet |
+| Private channel authorized | `200 {"auth": "key:HMAC-SHA256(secret, socket_id:channel_name)"}` |
+| Presence channel authorized | `200 {"auth": "key:HMAC-SHA256(secret, socket_id:channel_name:channel_data)", "channel_data": "{\"user_id\":\"7\",\"user_info\":{...}}"}` |
+| The authorizer denies the user (guests included) | `HttpException::forbidden()` --- `403` |
+| Missing/malformed `socket_id`, missing `channel_name`, or a public channel (no `private-`/`presence-` prefix) | `HttpException::badRequest()` --- `400` |
+| No authorizer matches the channel, or it serves the other channel kind | `ChannelAuthorizationException` (loud error) |
+
+Errors are thrown as `HttpException` and rendered by the routing pipeline's [exception renderer](/docs/packages/routing/#errors-and-http-exceptions), so the body format follows the request (pusher-js only reads the status).
+
+### Presence Channels
+
+Broadcast to a `PresenceChannel` and register a [`PresenceChannelAuthorizerInterface`](/docs/packages/broadcasting/#presence-channels) for its pattern. The authorizer's `PresenceMember` becomes the `channel_data` the server shares with other members: `user_id` is the member id as a string, and `user_info` is the member's info (omitted when empty).
+
+```javascript
+// pusher-js
+const room = pusher.subscribe('presence-rooms.3');
+
+room.bind('pusher:subscription_succeeded', (members) => {
+    members.each((member) => addToRoster(member.id, member.info.name));
+});
+room.bind('pusher:member_added', (member) => addToRoster(member.id, member.info.name));
+room.bind('pusher:member_removed', (member) => removeFromRoster(member.id));
+room.bind('message.posted', (data) => showMessage(data.text));
+
+// or Laravel Echo
+echo.join('rooms.3')
+    .here((members) => setRoster(members))
+    .joining((member) => addToRoster(member.id, member.info.name))
+    .leaving((member) => removeFromRoster(member.id))
+    .listen('.message.posted', (data) => showMessage(data.text));
+```
+
+```php
+$broadcaster->broadcast(new PresenceChannel('rooms.3'), 'message.posted', ['text' => $text]); // sent as presence-rooms.3
+```
 
 Package routes are always discovered. To change the path or add middleware, replace the controller with a [`#[Preference]`](/docs/concepts/preferences/) subclass:
 
@@ -159,6 +188,9 @@ public function sign(string $method, string $path, array $query): string;
 public function signedQuery(string $method, string $path, string $body, int $timestamp): array;
 
 public function channelAuth(string $socketId, string $channelName): string;
+
+/** $channelData is the already-encoded JSON string returned to the client as channel_data */
+public function presenceChannelAuth(string $socketId, string $channelName, string $channelData): string;
 ```
 
 ### PusherAuthController
@@ -167,6 +199,7 @@ public function channelAuth(string $socketId, string $channelName): string;
 use Marko\Broadcasting\Pusher\Controller\PusherAuthController;
 
 #[Post('/broadcasting/auth')]
+/** @throws HttpException|ChannelAuthorizationException */
 public function authorize(Request $request): Response;
 ```
 
@@ -179,7 +212,7 @@ Readonly value object built from `config/broadcasting-pusher.php` by the module 
 | Exception | Thrown when |
 |---|---|
 | `PusherException::missingCredentials()` | `app_id`, `key` or `secret` is empty when signing |
-| `PusherException::presenceChannelsNotSupported()` | A client requests authorization for a `presence-*` channel |
+| `HttpException` (`marko/routing`) | `/broadcasting/auth` rejects a request (`400`) or the authorizer denies the user (`403`) |
 | `BroadcastException::invalidChannelName()` | A channel name contains characters the Pusher protocol does not allow |
 | `BroadcastException::publishFailed()` | The server is unreachable or answers with a non-2xx status |
 

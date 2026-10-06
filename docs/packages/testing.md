@@ -30,7 +30,7 @@ $dispatcher->assertNotDispatched(OrderShipped::class);
 
 ### FakeBroadcaster
 
-Implements `BroadcasterInterface` from [`marko/broadcasting`](/docs/packages/broadcasting/). A string channel matches by name; a `Channel`/`PrivateChannel` also matches its privacy. The optional callback receives the event data and id.
+Implements `BroadcasterInterface` from [`marko/broadcasting`](/docs/packages/broadcasting/). A string channel matches by name; a `Channel`, `PrivateChannel` or `PresenceChannel` also matches its kind (public, private or presence). The optional callback receives the event data and id.
 
 ```php
 use Marko\Broadcasting\PrivateChannel;

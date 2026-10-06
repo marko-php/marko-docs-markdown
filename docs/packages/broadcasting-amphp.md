@@ -105,6 +105,10 @@ public function sellSeat(): void
 
 `AmphpBroadcaster` publishes `{"event": ..., "data": ..., "id": ...}` to the pub/sub channel `channel_prefix + name`. Private channels are published as `channel_prefix + "private-" + name`, so a public subscriber can never receive a private event. When you pass no `id`, a sortable one is generated (unix milliseconds plus random hex, e.g. `1759651200000-3f9c0b1a2d4e5f60`). Public channel names may not start with `private-`, and names may only use letters, digits and `_ - = @ . ; :`.
 
+:::note
+The SSE server does not track channel members, so this driver does not support [presence channels](/docs/packages/broadcasting/#presence-channels). `AmphpBroadcaster::broadcast()`, `AmphpSubscriberToken::for()` and `streamUrl()` throw `BroadcastException::presenceChannelsUnsupported()` for a `PresenceChannel` instead of treating it as private or public. Use the [Pusher driver](/docs/packages/broadcasting-pusher/#presence-channels) for presence.
+:::
+
 :::caution
 `marko/pubsub-pgsql` sends messages with `NOTIFY`, whose payload must be shorter than 8,000 bytes. `AmphpBroadcaster` checks the encoded size and throws `AmphpBroadcastException::payloadTooLarge()` instead of letting Postgres reject it. Broadcast identifiers and let the client fetch the full record, or use `marko/pubsub-redis`.
 :::
@@ -284,6 +288,7 @@ A readonly value object built from `config/broadcasting-amphp.php` by the module
 | `AmphpBroadcastException::signalsUnsupported()` | The event loop cannot handle `SIGINT`/`SIGTERM` (install `ext-pcntl`) |
 | `BroadcastException::publishFailed()` | The pub/sub driver fails to publish |
 | `BroadcastException::invalidChannelName()` | A channel name uses characters outside the allowed set |
+| `BroadcastException::presenceChannelsUnsupported()` | A `PresenceChannel` is broadcast to or included in a subscriber token or stream URL |
 
 ## Related Packages
 

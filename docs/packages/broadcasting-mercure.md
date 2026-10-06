@@ -115,6 +115,10 @@ $hubUrl = $this->mercureSubscriberToken->subscribeUrl([
 
 Private updates are delivered only to subscribers holding a JWT whose `mercure.subscribe` claim lists the topic. `MercureSubscriberToken` builds that token, including **only** the private channels the [`ChannelRegistry`](/docs/packages/broadcasting/#authorizing-private-channels) authorizes for the user. Public channels need no token and are left out of the claim. A private channel with no registered authorizer throws `ChannelAuthorizationException`.
 
+:::note
+Mercure has no presence protocol, so this driver does not support [presence channels](/docs/packages/broadcasting/#presence-channels). `MercureBroadcaster::broadcast()`, `MercureSubscriberToken::for()` and `subscribeUrl()` throw `BroadcastException::presenceChannelsUnsupported()` for a `PresenceChannel` instead of treating it as private or public. Use the [Pusher driver](/docs/packages/broadcasting-pusher/#presence-channels) for presence.
+:::
+
 The usual way to hand the token to the browser is the `mercureAuthorization` cookie, which the hub reads automatically:
 
 ```php
@@ -205,6 +209,7 @@ Readonly value object built from `config/broadcasting-mercure.php` by the module
 | `MercureException::missingPublisherCredentials()` | Neither `publisher_jwt` nor `publisher_jwt_key` is set |
 | `MercureException::missingSubscriberKey()` | A subscriber token is requested without `subscriber_jwt_key` |
 | `BroadcastException::publishFailed()` | The hub is unreachable or answers with a non-2xx status |
+| `BroadcastException::presenceChannelsUnsupported()` | A `PresenceChannel` is broadcast to or included in a subscriber token or URL |
 
 ## Related Packages
 

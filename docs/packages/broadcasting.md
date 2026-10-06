@@ -3,7 +3,7 @@ title: marko/broadcasting
 description: Realtime broadcasting contracts --- send events to everyone watching a channel, with pluggable Mercure and Pusher drivers.
 ---
 
-Realtime broadcasting contracts --- send an event to everyone watching a channel without coupling your app to how the connections are held. App code calls `BroadcasterInterface::broadcast()`; the installed driver delivers the event through a hub that holds the browser connections, so no PHP worker is tied up per viewer. This package defines the interfaces, the `Channel` / `PrivateChannel` value objects, and private-channel authorization via `#[BroadcastChannel]` authorizers. It ships no driver.
+Realtime broadcasting contracts --- send an event to everyone watching a channel without coupling your app to how the connections are held. App code calls `BroadcasterInterface::broadcast()`; the installed driver delivers the event through a hub that holds the browser connections, so no PHP worker is tied up per viewer. This package defines the interfaces, the `Channel` / `PrivateChannel` / `PresenceChannel` value objects, and private and presence channel authorization via `#[BroadcastChannel]` authorizers. It ships no driver.
 
 ## Installation
 
@@ -120,6 +120,59 @@ Patterns match dot-separated channel names. Each `{name}` placeholder matches ex
 
 Drivers call `ChannelRegistry::authorize($channelName, $user)` when they issue subscriber credentials (the Mercure subscriber token, the Pusher `/broadcasting/auth` endpoint). A private channel with no matching authorizer is **denied loudly** with a `ChannelAuthorizationException` --- private channels are never open by default.
 
+### Presence Channels
+
+A `PresenceChannel` is a private channel whose subscribers also know who else is subscribed: "who's online in this room", typing indicators, collaborative cursors. Subscribers must be authorized like a private channel, and the authorizer also returns the member's identity and the public info other members see.
+
+```php
+use Marko\Broadcasting\PresenceChannel;
+
+$broadcaster->broadcast(new PresenceChannel("rooms.$roomId"), 'message.posted', ['text' => $text]);
+```
+
+Authorize presence channels with a class implementing `PresenceChannelAuthorizerInterface`. Return a `PresenceMember` to admit the user, or `null` to deny:
+
+```php title="app/chat/src/Broadcasting/RoomPresenceAuthorizer.php"
+use Marko\Authentication\AuthenticatableInterface;
+use Marko\Broadcasting\Attributes\BroadcastChannel;
+use Marko\Broadcasting\PresenceChannelAuthorizerInterface;
+use Marko\Broadcasting\PresenceMember;
+
+#[BroadcastChannel('rooms.{roomId}')]
+class RoomPresenceAuthorizer implements PresenceChannelAuthorizerInterface
+{
+    public function __construct(
+        private RoomMemberRepository $roomMemberRepository,
+    ) {}
+
+    public function authorize(
+        ?AuthenticatableInterface $user,
+        array $params,
+    ): ?PresenceMember {
+        $roomMember = $user === null
+            ? null
+            : $this->roomMemberRepository->find((int) $params['roomId'], $user->getAuthIdentifier());
+
+        if ($roomMember === null) {
+            return null;
+        }
+
+        return new PresenceMember(
+            id: $user->getAuthIdentifier(),
+            info: ['name' => $roomMember->displayName],
+        );
+    }
+}
+```
+
+`PresenceMember::$info` is shared with every member of the channel, so put only public, scalar values in it (`array<string, scalar|null>`). An empty-string id throws a `BroadcastException`.
+
+Drivers call `ChannelRegistry::authorizePresence($channelName, $user)` for presence subscriptions. The rules match private channels: a presence channel with no matching authorizer is denied loudly with a `ChannelAuthorizationException`.
+
+One pattern serves exactly one kind of channel. A presence channel whose pattern matches a `ChannelAuthorizerInterface` (or a private channel whose pattern matches a `PresenceChannelAuthorizerInterface`) throws a `ChannelAuthorizationException` naming the authorizer, and registering both kinds of authorizer for the same pattern is a duplicate-pattern error. Use distinct patterns, e.g. `rooms.{roomId}` for presence and `rooms.{roomId}.admin` for private.
+
+Presence channels need a driver that can track members. The [Pusher driver](/docs/packages/broadcasting-pusher/#presence-channels) supports them. The Mercure and amphp drivers throw a `BroadcastException` when given a `PresenceChannel`; they never fall back to treating it as private or public.
+
 ### Testing
 
 Use `FakeBroadcaster` from [`marko/testing`](/docs/packages/testing/#fakebroadcaster):
@@ -149,10 +202,11 @@ public function broadcast(string|Channel $channel, string $event, array $data, ?
 public function dispatch(BroadcastableInterface $broadcastable): void;
 ```
 
-### Channel and PrivateChannel
+### Channel, PrivateChannel and PresenceChannel
 
 ```php
 use Marko\Broadcasting\Channel;
+use Marko\Broadcasting\PresenceChannel;
 use Marko\Broadcasting\PrivateChannel;
 
 readonly class Channel
@@ -160,9 +214,25 @@ readonly class Channel
     public function __construct(public string $name); // throws BroadcastException when empty
     public static function from(string|Channel $channel): Channel;
     public function isPrivate(): bool; // false
+    public function isPresence(): bool; // false
 }
 
 readonly class PrivateChannel extends Channel {} // isPrivate(): true
+readonly class PresenceChannel extends Channel {} // isPrivate(): true, isPresence(): true
+```
+
+Drivers check `isPresence()` before `isPrivate()`, because a presence channel also requires authorization.
+
+### PresenceMember
+
+```php
+use Marko\Broadcasting\PresenceMember;
+
+readonly class PresenceMember
+{
+    /** @param array<string, scalar|null> $info Public info shared with other members */
+    public function __construct(public string|int $id, public array $info = []); // throws BroadcastException when $id is ''
+}
 ```
 
 ### BroadcastableInterface
@@ -189,13 +259,30 @@ use Marko\Broadcasting\ChannelAuthorizerInterface;
 public function authorize(?AuthenticatableInterface $user, array $params): bool;
 ```
 
+### PresenceChannelAuthorizerInterface
+
+```php
+use Marko\Broadcasting\PresenceChannelAuthorizerInterface;
+
+/**
+ * @param array<string, string> $params
+ * @return PresenceMember|null The member to announce, or null to deny
+ */
+public function authorize(?AuthenticatableInterface $user, array $params): ?PresenceMember;
+```
+
+Registered with the same `#[BroadcastChannel]` attribute. A class implements one authorizer interface or the other.
+
 ### ChannelRegistry
 
 ```php
 use Marko\Broadcasting\ChannelRegistry;
 
-/** @throws ChannelAuthorizationException when no authorizer matches */
+/** @throws ChannelAuthorizationException when no authorizer matches, or the match is a presence authorizer */
 public function authorize(string $channelName, ?AuthenticatableInterface $user): bool;
+
+/** @throws ChannelAuthorizationException when no authorizer matches, or the match is a private-channel authorizer */
+public function authorizePresence(string $channelName, ?AuthenticatableInterface $user): ?PresenceMember;
 
 /** @return list<string> */
 public function patterns(): array;
@@ -207,8 +294,8 @@ A shared singleton; authorizers are discovered on first use.
 
 | Exception | Thrown when |
 |---|---|
-| `BroadcastException` | Empty channel or event name, unencodable payload, a driver request fails, or a channel name is invalid for the driver |
-| `ChannelAuthorizationException` | A private channel has no authorizer, an authorizer is registered twice for one pattern, or a `#[BroadcastChannel]` class does not implement `ChannelAuthorizerInterface` |
+| `BroadcastException` | Empty channel or event name, empty presence member id, unencodable payload, a driver request fails, a channel name is invalid for the driver, or a driver without presence support is given a `PresenceChannel` (`presenceChannelsUnsupported()`) |
+| `ChannelAuthorizationException` | A private or presence channel has no authorizer, the matching authorizer serves the other channel kind, an authorizer is registered twice for one pattern, or a `#[BroadcastChannel]` class implements neither authorizer interface |
 | `NoDriverException` | `BroadcasterInterface` is resolved with no driver installed |
 
 ## Related Packages
