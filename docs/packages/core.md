@@ -409,7 +409,7 @@ At boot, `Application::initialize()` reads these environment variables directly 
 |---|---|---|
 | `MARKO_ENV` / `APP_ENV` | `production` | Application environment, read through [`AppEnvironment`](#application-environment). `development`, `dev`, or `local` disable the cache. `MARKO_ENV` wins when both are set. |
 | `DISCOVERY_CACHE_ENABLED` | `true` | `1`, `true`, `yes`, `on` enable; `0`, `false`, `no`, `off`, or empty disable. Case-insensitive and trimmed. Any other value (`enabled`, `ture`) throws `DiscoveryCacheException`. |
-| `DISCOVERY_CACHE_PATH` | `storage/cache/discovery.php` | Path to the cache file. Relative paths resolve from the project root; absolute paths are used as-is. |
+| `DISCOVERY_CACHE_PATH` | `storage/cache/discovery.php` | Path to the cache file. Relative paths resolve from the project root; absolute paths are used as-is. The directory must not be shared (see [Cache file security](#cache-file-security)). |
 
 The cache is used when **all three conditions** are true:
 
@@ -420,6 +420,17 @@ The cache is used when **all three conditions** are true:
 If the cache file is **missing**, boot falls back to a normal full rescan --- no error.
 
 If the cache file is **corrupt, malformed, version-mismatched or stale**, boot throws `DiscoveryCacheException` immediately. There is no silent fallback and the cache is never rebuilt behind your back. Run `marko discovery:cache` to rebuild it, or `marko discovery:clear` to go back to live discovery.
+
+#### Cache file security
+
+The cache file is executable PHP that boot loads with `include`, so whoever can write it can run code in your application. Keep it in a directory that only the application user can write to. The default `storage/cache/` is fine; a shared directory such as `/tmp` is not.
+
+Before including the file, boot checks the file and the directory that holds it. It throws `DiscoveryCacheException` without running the file if either one is:
+
+- **world-writable**, or
+- **owned by another user**: the owner must be the user running PHP, or root. This check is skipped on Windows and when the `posix` extension is not loaded.
+
+Run `marko discovery:cache` as the same user that serves the application (for example `sudo -u www-data vendor/bin/marko discovery:cache`), and make sure that user (or root) owns the cache directory. Otherwise the ownership check refuses the file. Temp files written during `discovery:cache` get random names so other users cannot guess them.
 
 In a **development** environment (`development`, `dev`, or `local` --- the skeleton ships `APP_ENV=local`) the cache is always bypassed, so adding or editing a module, route, `#[Plugin]`, `#[Observer]`, `#[Preference]`, or `#[Command]` takes effect on the next request without any manual step.
 
