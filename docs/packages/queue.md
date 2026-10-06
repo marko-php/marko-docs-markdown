@@ -33,7 +33,17 @@ return [
 
 `JobEnvelope` wraps every stored payload as `{hmac}.b64:{base64(serialize(job))}`. The 64-character hex HMAC-SHA256 covers everything after the `.` separator, including the `b64:` marker. PHP's `serialize()` writes NUL bytes for private and protected properties. Base64 keeps the payload 7-bit clean, so it fits in a PostgreSQL `TEXT` column, which can't store `\0`.
 
-The legacy format, `{hmac}.{raw serialized bytes}`, is still accepted when unwrapping. Jobs queued before the base64 format was introduced keep working after an upgrade. New payloads are always written in the base64 format. The same envelope is used for queued jobs, failed-job payloads and `AsyncObserverJob` event data, and by every driver.
+The HMAC key is not `encryption.key` itself. `JobEnvelope` derives a separate subkey with `hash_hkdf('sha256', $key, 32, 'marko-queue-envelope')`, so the key that encrypts data is never reused to sign queue payloads, and the queue subkey differs from the [cache signer's](/docs/packages/cache/#cachevaluesigner). The same envelope is used for queued jobs, failed-job payloads and `AsyncObserverJob` event data, and by every driver. A body without the `b64:` marker is rejected.
+
+#### Upgrading: drain the queue before deploying
+
+Releases before HKDF subkeys signed envelopes with the raw `encryption.key`, and the older `{hmac}.{raw serialized bytes}` format is no longer read. A worker on the new release rejects those payloads with `SerializationException` (signature mismatch), so the job fails instead of running. Before deploying the upgrade:
+
+1. Stop dispatching new jobs (or put the app in maintenance mode).
+2. Let the old workers run until the queue is empty.
+3. Deploy, then restart the workers.
+
+Failed jobs stored by the old release also no longer verify, so `queue:retry` can't replay them. Retry or clear them before upgrading.
 
 ## Usage
 
