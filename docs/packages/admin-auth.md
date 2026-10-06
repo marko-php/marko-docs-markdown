@@ -78,34 +78,52 @@ class ProductController
 
 ### Registering Permissions
 
-Modules register their permissions via `PermissionRegistryInterface`:
+The usual way to declare a permission is `#[AdminPermission]` on an admin section class (see [marko/admin](/docs/packages/admin/)):
 
-```php title="CatalogPermissions.php"
-use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
+```php title="app/catalog/src/Admin/CatalogSection.php"
+use Marko\Admin\Attributes\AdminPermission;
+use Marko\Admin\Attributes\AdminSection;
+use Marko\Admin\Contracts\AdminSectionInterface;
 
-readonly class CatalogPermissions
+#[AdminSection(id: 'catalog', label: 'Catalog')]
+#[AdminPermission(id: 'catalog.products.view', label: 'View Products')]
+#[AdminPermission(id: 'catalog.products.edit', label: 'Edit Products')]
+class CatalogSection implements AdminSectionInterface
 {
-    public function __construct(
-        private PermissionRegistryInterface $permissionRegistry,
-    ) {}
-
-    public function register(): void
-    {
-        $this->permissionRegistry->register(
-            'catalog.products.view',
-            'View Products',
-            'Catalog',
-        );
-        $this->permissionRegistry->register(
-            'catalog.products.edit',
-            'Edit Products',
-            'Catalog',
-        );
-    }
+    // ...
 }
 ```
 
-`marko/admin-auth` binds `PermissionRegistryInterface` to `PermissionRegistry` as a shared singleton, so you don't bind it yourself. Every class that injects the interface gets the same instance: your registration classes, `AdminAuthMiddleware` and `marko/admin-api`'s `SectionController`. A permission registered through one of them is visible to all of them.
+You don't register these yourself. `marko/admin-auth`'s boot callback registers every `#[AdminPermission]` on the `#[AdminSection]` classes that [marko/admin](/docs/packages/admin/) discovers. It uses the same section list as marko/admin: one scan per boot, or the discovery cache in production. Each permission's group is the first segment of its key (`catalog` for `catalog.products.view`). Boot fails with an `AdminAuthException` when:
+
+- two section classes declare the same key (the message names both classes);
+- a key declared by `#[AdminPermission]` was already registered by hand. Remove the manual `register()` call.
+
+For a permission that doesn't belong to a section, call `PermissionRegistryInterface::register()` from your module's `boot` callback:
+
+```php title="app/catalog/module.php"
+use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
+
+return [
+    'boot' => function (PermissionRegistryInterface $permissionRegistry): void {
+        $permissionRegistry->register(
+            key: 'catalog.reports.export',
+            label: 'Export Reports',
+            group: 'catalog',
+        );
+    },
+];
+```
+
+Both ways register in memory only, and boot never touches the database. Roles are assigned permissions from the `permissions` table, so after deploying code that adds permissions, write them to the table:
+
+```bash
+marko admin-auth:permissions:sync
+```
+
+The command calls `PermissionRepositoryInterface::syncFromRegistry()`. It inserts every registered permission that isn't in the table yet, leaves existing rows alone, and reports how many it created. It never deletes a permission that is no longer registered.
+
+`marko/admin-auth` binds `PermissionRegistryInterface` to `PermissionRegistry` as a shared singleton, so you don't bind it yourself. Every class that injects the interface gets the same instance: the boot callback, your own boot code, `AdminAuthMiddleware` and `marko/admin-api`'s `SectionController`. A permission registered through one of them is visible to all of them.
 
 To replace the registry, put a `#[Preference]` on a class that implements the interface, and have it replace the interface rather than `PermissionRegistry`. The container checks preferences for the type being injected, which is the interface, so a Preference on the concrete class is never used. The replacement is still shared:
 
@@ -231,6 +249,28 @@ interface PermissionRegistryInterface
 }
 ```
 
+`register()` throws `AdminAuthException::duplicatePermission()` for a key that is already registered.
+
+### PermissionDiscovery
+
+```php
+public function registerFromDefinitions(array $definitions): void;
+public function discoverFromClass(string $className): void;
+```
+
+`registerFromDefinitions()` registers the `#[AdminPermission]` entries of the given `AdminSectionDefinition`s, grouped by the first segment of each key. The boot callback calls it with marko/admin's `DiscoveredAdminSections::all()`. `discoverFromClass()` parses one `#[AdminSection]` class and registers its permissions.
+
+| Exception | Thrown when |
+|-----------|-------------|
+| `AdminAuthException::duplicatePermission()` | Two section classes declare the same permission key (the message names both classes) |
+| `AdminAuthException::permissionAlreadyRegistered()` | A key declared by `#[AdminPermission]` was already registered by hand |
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `admin-auth:permissions:sync` | Writes the registered permissions to the `permissions` table and reports how many it created |
+
 ### RequiresPermission Attribute
 
 ```php
@@ -274,9 +314,11 @@ interface PermissionRepositoryInterface extends RepositoryInterface
 {
     public function findByKey(string $key): ?Permission;
     public function findByGroup(string $group): array;
-    public function syncFromRegistry(PermissionRegistryInterface $registry): void;
+    public function syncFromRegistry(PermissionRegistryInterface $registry): int;
 }
 ```
+
+`syncFromRegistry()` inserts the registered permissions that are missing from the table and returns how many it created. The `admin-auth:permissions:sync` command calls it.
 
 `getPermissionsForRoles()` returns the deduplicated permission set across all given role IDs in a single query. Empty input returns an empty array without issuing a query.
 

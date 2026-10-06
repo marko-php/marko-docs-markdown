@@ -244,60 +244,15 @@ INSERT INTO admin_user_roles (user_id, role_id) VALUES (1, 1);
 
 ## Step 5: Register Permissions
 
-Permissions are registered in the `PermissionRegistryInterface` and can be discovered automatically from `#[AdminPermission]` attributes on admin section classes. You can also register them manually:
+You declare permissions with `#[AdminPermission]` attributes on an admin section class, which you'll create in the next step (`posts.view`, `posts.create`, `posts.edit` and `posts.delete`). You don't register them yourself: at boot, `marko/admin-auth` registers every `#[AdminPermission]` in `PermissionRegistryInterface`, grouped by the first segment of the key (`posts`). Registering the same key again by hand fails boot with an `AdminAuthException`.
 
-```php title="app/admin/src/Setup/RegisterPermissions.php"
-<?php
+Boot keeps permissions in memory and never writes to the database. To assign them to roles, write them to the `permissions` table once the section exists, and again after each deploy that adds permissions:
 
-declare(strict_types=1);
-
-namespace App\Admin\Setup;
-
-use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
-
-readonly class RegisterPermissions
-{
-    public function __construct(
-        private PermissionRegistryInterface $permissionRegistry,
-    ) {}
-
-    public function register(): void
-    {
-        $this->permissionRegistry->register(
-            key: 'posts.view',
-            label: 'View Posts',
-            group: 'posts',
-        );
-
-        $this->permissionRegistry->register(
-            key: 'posts.create',
-            label: 'Create Posts',
-            group: 'posts',
-        );
-
-        $this->permissionRegistry->register(
-            key: 'posts.edit',
-            label: 'Edit Posts',
-            group: 'posts',
-        );
-
-        $this->permissionRegistry->register(
-            key: 'posts.delete',
-            label: 'Delete Posts',
-            group: 'posts',
-        );
-    }
-}
+```bash
+marko admin-auth:permissions:sync
 ```
 
-After registering permissions in the registry, sync them to the database so they can be assigned to roles:
-
-```php
-use Marko\AdminAuth\Contracts\PermissionRegistryInterface;
-use Marko\AdminAuth\Repository\PermissionRepositoryInterface;
-
-$permissionRepository->syncFromRegistry($permissionRegistry);
-```
+The command inserts the permissions that are missing from the table, leaves existing ones alone, and reports how many it created.
 
 ## Step 6: Create an Admin Section
 
@@ -370,13 +325,7 @@ class PostsSection implements AdminSectionInterface
 }
 ```
 
-Register the section in the admin section registry:
-
-```php
-use Marko\Admin\Contracts\AdminSectionRegistryInterface;
-
-$sectionRegistry->register(new PostsSection());
-```
+There is nothing to register. At boot, `marko/admin` finds every `#[AdminSection]` class in your modules' `src/` directories, builds it through the container and adds it to the shared `AdminSectionRegistryInterface`. `getId()` must return the same id as the attribute (`posts`), or boot fails with an `AdminException`. In production, run `marko discovery:cache` after adding or changing a section so the cached section list stays current.
 
 The `AdminMenuBuilder` from `marko/admin-panel` automatically filters menu items based on the current user's permissions --- users only see items they have access to.
 
