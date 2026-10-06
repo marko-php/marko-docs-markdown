@@ -36,6 +36,16 @@ return [
     'max_files' => Env::int('LOG_MAX_FILES', 30, min: 0),
     'max_file_size' => Env::int('LOG_MAX_FILE_SIZE', 10 * 1024 * 1024, min: 0),
     'escape_newlines' => true,
+    'redact_keys' => [
+        'password',
+        'password_confirmation',
+        'token',
+        'secret',
+        'api_key',
+        'authorization',
+    ],
+    'file_mode' => 0600,
+    'dir_mode' => 0700,
 ];
 ```
 
@@ -49,6 +59,10 @@ return [
 | `date_format` | `Y-m-d H:i:s` | Timestamp format |
 | `max_files` | `30` | Days of logs to keep (used by `log:clear`) |
 | `max_file_size` | `10485760` | Max file size in bytes for size-based rotation (10 MB) |
+| `escape_newlines` | `true` | Escape CR/LF in messages so each record stays on one line (other control characters are always escaped) |
+| `redact_keys` | `password`, `password_confirmation`, `token`, `secret`, `api_key`, `authorization` | Context keys (case-insensitive, at any depth) whose values are written as `[redacted]` |
+| `file_mode` | `0600` | Permissions applied to newly created log files |
+| `dir_mode` | `0700` | Permissions applied to a newly created log directory |
 
 Override any value via environment variables (`LOG_DRIVER`, `LOG_PATH`, `LOG_LEVEL`, `LOG_CHANNEL`, `LOG_MAX_FILES`, `LOG_MAX_FILE_SIZE`).
 
