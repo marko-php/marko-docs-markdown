@@ -640,13 +640,15 @@ class LogFailedLoginObserver
     public function handle(
         FailedLoginEvent $event,
     ): void {
-        $credentials = $event->getCredentials(); // Password removed for security
+        $credentials = $event->getCredentials(); // Secret-looking keys removed
         $guard = $event->getGuard();
 
         // Log failed attempt, implement rate limiting, alert on suspicious activity
     }
 }
 ```
+
+Before the credentials are stored on the event, every key matching `FailedLoginEvent::SENSITIVE_KEY_PATTERN` (`/password|secret|token|otp|pin|passcode/i`) is removed, at any nesting depth. So `password`, `password_confirmation`, `current_password`, `otp`, `api_token` and similar never reach listeners or logs, while identifiers such as `email` or `username` are kept.
 
 ### PasswordResetEvent
 
