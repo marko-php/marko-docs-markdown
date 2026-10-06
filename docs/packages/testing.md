@@ -527,7 +527,9 @@ The helpers refuse to run in production, and an unset `APP_ENV` counts as produc
 </php>
 ```
 
-Operations that delete data (`TruncateDatabase::truncate()` and `fresh: true`) are also refused in development (`development`, `dev`, `local`), so they never wipe the database you work in.
+Migrating the database (`TestDatabase::boot()`) and `RefreshDatabase` run in any environment except production, because they leave existing data in place. Operations that delete data (`TruncateDatabase::truncate()` and `fresh: true`) run only when the environment is `testing` or `test`. Production, development (`development`, `dev`, `local`), `staging`, `qa` and any other name, including a typo, are refused, because only a testing environment shows that the database is disposable. If `MARKO_ENV` is set, it takes precedence over `APP_ENV`.
+
+This follows the [destructive-command policy](/docs/packages/database/#environment-behaviour) of the `db:*` commands, but is stricter: development is refused too, and there is no `--force` to override it.
 
 ### RefreshDatabase
 
@@ -616,7 +618,7 @@ beforeEach(function () {
 });
 ```
 
-`truncate()` empties the tables of every `#[Table]` entity the application discovers, and restarts their identity sequences. On PostgreSQL it runs one `TRUNCATE ... RESTART IDENTITY CASCADE`. On MySQL it truncates table by table with foreign key checks switched off. The `migrations` table, and tables created only by hand-written migrations, are left alone. It throws inside an open transaction, so don't combine it with `RefreshDatabase` in the same test.
+`truncate()` empties the tables of every `#[Table]` entity the application discovers, and restarts their identity sequences. On PostgreSQL it runs one `TRUNCATE ... RESTART IDENTITY CASCADE`. On MySQL it truncates table by table with foreign key checks switched off. The `migrations` table, and tables created only by hand-written migrations, are left alone. It throws inside an open transaction, so don't combine it with `RefreshDatabase` in the same test, and it runs only in a testing environment (see [Test environment](#test-environment)).
 
 ### Fresh schema
 
@@ -626,7 +628,7 @@ beforeEach(function () {
 TestDatabase::boot(dirname(__DIR__), fresh: getenv('DB_FRESH') === '1');
 ```
 
-Pass the same `fresh` value on every call; a different value for a base path that is already booted throws.
+Pass the same `fresh` value on every call; a different value for a base path that is already booted throws. Because it deletes all data, `fresh: true` runs only in a testing environment (see [Test environment](#test-environment)).
 
 ### Seeding rows
 
