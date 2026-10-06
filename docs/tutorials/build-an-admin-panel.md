@@ -50,7 +50,7 @@ return [
 ];
 ```
 
-Create the admin panel configuration:
+Set the title the dashboard shows in the browser tab:
 
 ```php title="config/admin-panel.php"
 <?php
@@ -59,7 +59,6 @@ declare(strict_types=1);
 
 return [
     'page_title' => 'My App Admin',
-    'items_per_page' => 25,
 ];
 ```
 

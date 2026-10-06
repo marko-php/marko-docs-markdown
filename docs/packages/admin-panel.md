@@ -88,6 +88,16 @@ mymodule/
           index.latte    # Overrides the default dashboard
 ```
 
+### Configuration
+
+`config/admin-panel.php` sets the browser title of the dashboard. `DashboardController` passes it to the template as `pageTitle`:
+
+```php title="config/admin-panel.php"
+return [
+    'page_title' => 'Marko Admin',
+];
+```
+
 ## Customization
 
 Replace the menu builder via Preferences to customize navigation behavior:
@@ -153,6 +163,5 @@ use Marko\AdminAuth\Middleware\AdminAuthMiddleware;
 interface AdminPanelConfigInterface
 {
     public function getPageTitle(): string;
-    public function getItemsPerPage(): int;
 }
 ```
