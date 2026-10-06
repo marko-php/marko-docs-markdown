@@ -105,11 +105,12 @@ class OrderNotifier
 
 ### Message Format
 
-`send()` builds an RFC 5322 message: the header section ends with an empty line before the body, so multipart messages are parsed as MIME parts rather than shown as raw source. Header values are 7-bit ASCII. A non-ASCII subject or display name in `From`, `To`, `Cc` or `Reply-To` is RFC 2047 encoded (`=?UTF-8?B?...?=`), while ASCII names are sent as is:
+`send()` builds an RFC 5322 message: the header section ends with an empty line before the body, so multipart messages are parsed as MIME parts rather than shown as raw source. Header values are 7-bit ASCII. A non-ASCII subject or display name in `From`, `To`, `Cc` or `Reply-To` is RFC 2047 encoded (`=?UTF-8?B?...?=`). An ASCII name is sent as is when it is plain words, and as an RFC 5322 quoted-string (with `\` and `"` escaped) when it contains specials such as `,`, `<`, `>`, `;`, `@` or `"`. A user-supplied name like `x <attacker@evil.com>, y` therefore stays one display name rather than adding recipients:
 
 ```text
 From: =?UTF-8?B?UsOpbXk=?= <remy@example.com>
 To: Store <orders@example.com>
+Reply-To: "x <attacker@evil.com>, y" <contact@example.com>
 ```
 
 A CR, LF or NUL byte in an address or display name throws `MessageException` (header injection) before anything is encoded.
@@ -138,7 +139,7 @@ Implements `MailerInterface`. See [`marko/mail`](/docs/packages/mail/) for the f
 | Method | Description |
 |---|---|
 | `send(Message $message): bool` | Build and send a `Message` over SMTP --- handles headers, MIME encoding, and attachments |
-| `sendRaw(string $to, string $raw): bool` | Send a pre-built raw message string to the given recipient; the envelope sender is the address in the message's `From:` header (inside `<...>` when it has a display name) |
+| `sendRaw(string $to, string $raw): bool` | Send a pre-built raw message string to the given recipient; the envelope sender is the address in the message's `From:` header (inside `<...>` when it has a display name). `$to` is validated as an `Address` first, so an invalid address throws `MessageException` before anything is sent |
 
 ### SmtpTransport
 
@@ -154,6 +155,8 @@ Low-level SMTP protocol transport --- manages the socket connection, TLS negotia
 | `rcptTo(string $address): void` | Add an envelope recipient address |
 | `data(string $content): void` | Send the message content |
 | `quit(): void` | Close the SMTP session and disconnect |
+
+`mailFrom()` and `rcptTo()` throw `TransportException::commandInjection()` when the address contains a CR, LF or NUL byte, before the command is written, so a crafted address cannot inject further SMTP commands or recipients.
 
 ### Connection and TLS Errors
 
