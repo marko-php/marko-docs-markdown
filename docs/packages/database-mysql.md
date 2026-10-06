@@ -48,6 +48,12 @@ DB_PASSWORD=your_password
 
 ## Driver-Specific Notes
 
+### Generated Primary Keys
+
+MySQL has no `INSERT ... RETURNING`, so `MySqlConnection::supportsReturning()` returns `false` and a repository can't read a key the database generated back. Saving or batch-inserting an entity whose key is marked `#[Column(generated: true)]` but not set throws a `RepositoryException` that names the entity. Set the key in PHP before saving (a UUID from `ramsey/uuid` or `symfony/uid`, for example); a `DEFAULT (UUID())` on the column still fills rows inserted outside the repository. With the key set, the entity saves normally. See [Database-generated keys](/docs/packages/database/#database-generated-keys).
+
+MariaDB 10.5+ supports `INSERT ... RETURNING`, but this driver treats MariaDB like MySQL here: generated keys must be set in PHP on MariaDB too.
+
 ### MySQL vs MariaDB
 
 This driver supports both MySQL and MariaDB. CI runs the driver integration tests against **MySQL 8.4** and **MariaDB 11.8** (LTS) on every pull request. Older releases (MySQL 8.0+, MariaDB 10.6+) are expected to work but are not tested. Where the two servers differ:
@@ -188,6 +194,7 @@ class MyService
 | `execute(string $sql, array $bindings = []): int` | Execute a statement and return the affected row count |
 | `prepare(string $sql): StatementInterface` | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Get the last auto-increment ID |
+| `supportsReturning(): bool` | Always `false`: MySQL has no `INSERT ... RETURNING`, so a [database-generated key](/docs/packages/database/#database-generated-keys) must be set in PHP |
 | `connect(): void` | Explicitly open the database connection |
 | `disconnect(): void` | Close the connection and discard the transaction depth and pending callbacks |
 | `isConnected(): bool` | Check whether the connection is open |

@@ -159,16 +159,16 @@ Values are serialized and deserialized automatically. The root value must be an 
 
 ### UUID Primary Keys
 
-PostgreSQL has native UUID support. Use the `type` and `default` parameters on the primary key column:
+PostgreSQL has native UUID support. Use the `type` and `default` parameters on the primary key column, and `generated: true` to let the database generate the key:
 
 ```php
 use Marko\Database\Attributes\Column;
 
-#[Column(primaryKey: true, type: 'uuid', default: 'gen_random_uuid()')]
+#[Column(primaryKey: true, type: 'uuid', default: 'gen_random_uuid()', generated: true)]
 public string $id;
 ```
 
-This generates `"id" UUID DEFAULT gen_random_uuid() PRIMARY KEY` (`gen_random_uuid()` is built into PostgreSQL 13+). A call to a function with no arguments is read as an expression, not a string; see [Column Defaults](/docs/packages/database/#column-defaults) for the other forms. The default fills the key of rows inserted without one. `Repository::save()` doesn't read a generated key back, so set the id in PHP before saving an entity.
+This generates `"id" UUID DEFAULT gen_random_uuid() PRIMARY KEY` (`gen_random_uuid()` is built into PostgreSQL 13+). A call to a function with no arguments is read as an expression, not a string; see [Column Defaults](/docs/packages/database/#column-defaults) for the other forms. With `generated: true`, `Repository::save()` and `insertBatch()` leave an unset key out of the `INSERT` and read the generated UUID back with `INSERT ... RETURNING`, so `$article->id` holds it after saving. `PgSqlConnection::supportsReturning()` returns `true`. Without `generated: true`, the key must be set in PHP before saving; see [Database-generated keys](/docs/packages/database/#database-generated-keys).
 
 `Repository::find()` and `findOrFail()` accept `int|string`, so UUID-keyed repositories work without any additional configuration:
 
@@ -246,6 +246,7 @@ Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInt
 | `execute(string $sql, array $bindings = []): int` | Execute a statement and return the affected row count |
 | `prepare(string $sql): StatementInterface` | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Get the last inserted ID |
+| `supportsReturning(): bool` | Always `true`: `INSERT ... RETURNING` is available, so repositories read generated keys back |
 | `beginTransaction(): void` | Start a transaction, or a savepoint when one is open |
 | `commit(): void` | Commit the innermost level (`RELEASE SAVEPOINT` when nested); throws `TransactionException` when none is open |
 | `rollback(): void` | Roll back the innermost level (`ROLLBACK TO SAVEPOINT` when nested); throws `TransactionException` when none is open |

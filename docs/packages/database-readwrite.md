@@ -118,6 +118,7 @@ After any write operation or transaction, subsequent reads within the same reque
 The sticky flag is set by:
 
 - `execute()` — any INSERT, UPDATE, DELETE, or DDL statement
+- `query()` with an INSERT, UPDATE, or DELETE — a write that returns rows, such as the `INSERT ... RETURNING` a repository runs to read a [database-generated key](/docs/packages/database/#database-generated-keys) back, so a following `find()` sees the new row
 - `beginTransaction()` — entering a transaction
 - `transaction(callable $callback, int $attempts = 1, int|Closure|null $backoff = null)` — the entire callback, every retried attempt included, runs on the primary; when the callback completes, the sticky flag goes back to what it was before the call. A nested `transaction()` therefore leaves the outer transaction's reads on the primary.
 
@@ -263,6 +264,7 @@ Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInt
 | `afterRollback(callable $callback): void` | Write | Run the callback if its transaction level rolls back |
 | `runPendingAfterCommitCallbacks(): void` | Write | Run the write connection's queued `afterCommit()` callbacks without committing (for test helpers such as `RefreshDatabase`); throws `TransactionException` when the write connection does not implement `PendingAfterCommitInterface` |
 | `driverName(): string` | Write (delegates) | Return the write connection's driver name (e.g. `'mysql'`, `'pgsql'`) |
+| `supportsReturning(): bool` | Write (delegates) | Whether the write connection supports `INSERT ... RETURNING` |
 | `resetStickyState(): void` | — | Clear the sticky flag; subsequent reads route to replicas again |
 | `reset(): void` | — | `ResettableInterface` contract method; rolls back every open transaction level (delegating to a resettable write connection) and clears the sticky flag |
 
