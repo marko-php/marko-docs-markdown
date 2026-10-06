@@ -389,9 +389,21 @@ commands: 9
 modules: 31
 global middleware: 3
 sections: routes (48), entities (12)
+skipped files: 1
+  /var/www/html/app/blog/src/Plugin/SearchPlugin.php (App\Blog\Plugin\SearchPlugin): missing Marko\Search\SearchInterface (marko/search)
 ```
 
 `discovery:cache` and `discovery:clear` always boot from live discovery, so they work even when the existing cache is stale, corrupt or from an older version.
+
+#### Skipped files
+
+Discovery skips a class file that references a class from a Marko package that is not installed, so a module can ship an integration with an optional package without a hard dependency on it. A skip is never silent:
+
+- `discovery:cache` lists every skipped file, the class it declares, and the missing class and package.
+- Outside `production`, each skip is written once to the PHP error log, e.g. `[marko] Discovery skipped App\Blog\Plugin\SearchPlugin (...): it references Marko\Search\SearchInterface, which is not available. Install marko/search if this class should be active, or fix the reference if it is a typo.`
+- `Marko\Core\Discovery\DiscoverySkips::all()` returns the skips recorded in the current process, and `ClassFileParser::skippedFiles()` returns the ones a single parser recorded.
+
+Check this list when a Preference or Plugin seems to have no effect: a typo in a `Marko\*` class name or a missing dependency drops the class and leaves the original implementation in place. A missing class outside the `Marko\` namespace is not skipped; it throws.
 
 #### Clearing the cache
 
