@@ -108,7 +108,7 @@ $errors->count();             // total error count across all fields
 | Numeric | `numeric` | Must be numeric |
 | Boolean | `boolean` | Must be boolean-like |
 | Email | `email` | Must be a valid email |
-| URL | `url` | Must be a valid URL |
+| URL | `url` or `url:http,https,ftp` | Must be a valid URL with a host and an allowed scheme (`http`/`https` unless listed; see [URLs](#validating-urls)) |
 | Alpha | `alpha` | Letters only |
 | AlphaNumeric | `alpha_num` | Letters and numbers only |
 | Min | `min:5` | Minimum value (numeric) or minimum length (string) or minimum count (array). Fails for a file --- use `min_size` |
@@ -142,6 +142,22 @@ $errors = $this->validator->validate(
 ```
 
 `In` and `NotIn` compare numeric strings numerically: `in:1,2,3` accepts `"2"` even though it is not strictly identical to the integer `2`.
+
+### Validating URLs
+
+`url` accepts only `http` and `https` URLs that have a host. Values such as `javascript://%0aalert(1)`, `file:///etc/passwd` and `gopher://127.0.0.1:6379/_x` fail, so a validated URL is safe to render as a link's `href`. List the schemes to allow others; the list replaces the default, and schemes compare case-insensitively:
+
+```php
+use Marko\Validation\Rules\Url;
+
+$errors = $this->validator->validate($input, [
+    'website' => 'nullable|url',               // http and https only
+    'mirror' => 'nullable|url:http,https,ftp', // also ftp
+    'api' => ['required', new Url('https')],   // https only
+]);
+```
+
+`url` is **not** an SSRF guard. It checks the shape and scheme of a URL, not where it points: `http://127.0.0.1/` and `http://169.254.169.254/` pass. Before your server fetches a user-supplied URL (webhooks, link previews, imports), resolve the host and reject private, loopback and link-local addresses.
 
 ### Validating File Uploads
 
