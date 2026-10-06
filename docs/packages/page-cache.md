@@ -62,22 +62,43 @@ A negative TTL is always a mistake and fails loudly with a `PageCacheException`:
 
 Responses carrying any cookie --- whether attached via `Response::withCookie()` or set directly with a raw `Set-Cookie` header --- are never cached. This is a deliberate security boundary, not a limitation to work around: a cached `Set-Cookie` would be replayed to every later visitor, leaking one user's session (or any other cookie) to everybody else. This includes responses that set analytics or session cookies --- if your response carries any cookie, it bypasses the cache entirely.
 
+### Cache Hits Skip Route Middleware
+
+`PageCacheMiddleware` is global middleware, so it runs **before any route middleware**. A cache hit is returned straight away: route-level middleware such as `AuthMiddleware` or `AuthorizationMiddleware` never runs for it. Only put `#[Cacheable]` on pages that are the same for every visitor.
+
+To make that mistake hard to ship, the application fails at boot with a `PageCacheException` when a `#[Cacheable]` route (on a cacheable method) uses route middleware whose short class name matches `page-cache.auth_middleware_patterns` (default `['*Auth*']`, case-insensitive). The check skips routes that exclude `PageCacheMiddleware` or the matched middleware via `withoutMiddleware`. If a middleware matches the pattern but does not authenticate, narrow the patterns; set them to `[]` to turn the check off.
+
+### Logged-In Visitors Bypass the Cache
+
+A request that carries credentials is never served from the cache and its response is never stored. That covers a request with:
+
+- an `Authorization` header (or the server's `PHP_AUTH_USER` / `PHP_AUTH_DIGEST` / `REDIRECT_HTTP_AUTHORIZATION`)
+- the session cookie --- when `marko/session` is installed, the name in `session.cookie.name` is always included, even if you rename it
+- any cookie matching `page-cache.bypass_cookies` (fnmatch patterns; default `['marko_session', 'remember_*']`, which covers the `marko/authentication` remember-me cookies)
+
+A request that starts a session gets a `Set-Cookie` on its response, which is never stored (see below); a request that resumes one carries the session cookie and bypasses the cache. Together these keep one user's page --- their name, their orders, their CSRF token --- out of every other visitor's response. Add your own auth cookie names to `bypass_cookies` when you authenticate with a different cookie.
+
+### Cache Keys Include Scheme and Host
+
+Entries are keyed by method, scheme, host, path and the normalized query string, so `http://` and `https://` pages and pages for different hosts are cached separately. The scheme comes from the server's `HTTPS` / `REQUEST_SCHEME` variables; forwarded headers such as `X-Forwarded-Proto` are ignored. The host comes from the `Host` header (falling back to `SERVER_NAME`), lowercased, with the scheme's default port dropped.
+
+The `Host` header is sent by the client. List your real host names in `page-cache.trusted_hosts` (fnmatch patterns such as `example.com` or `*.example.com`, matched without the port) and requests for any other host bypass the cache entirely. With an empty list every host is cached under its own key.
+
 ### Extending Cacheability Rules
 
-`CacheabilityChecker` determines whether a given request/response pair is eligible for caching. Override it via a [Preference](/docs/packages/core/) to add custom rules --- for example, skipping cache for authenticated users or based on request headers:
+`CacheabilityChecker` determines whether a given request/response pair is eligible for caching. Override it via a [Preference](/docs/packages/core/) to add custom rules --- for example, skipping the cache based on a custom request header:
 
 ```php
 use Marko\Core\Attributes\Preference;
 use Marko\PageCache\CacheabilityChecker;
 use Marko\Routing\Http\Request;
-use Marko\Routing\Http\Response;
 
 #[Preference(replaces: CacheabilityChecker::class)]
-class AuthAwareCacheabilityChecker extends CacheabilityChecker
+class PreviewAwareCacheabilityChecker extends CacheabilityChecker
 {
     public function isRequestCacheable(Request $request): bool
     {
-        if ($request->hasHeader('X-Auth-Token')) {
+        if ($request->header('X-Preview') !== null) {
             return false;
         }
 
@@ -85,6 +106,8 @@ class AuthAwareCacheabilityChecker extends CacheabilityChecker
     }
 }
 ```
+
+Call `parent::isRequestCacheable()` so the credential, cookie and trusted-host rules above still apply.
 
 ### Dynamic Tags from the Request
 
@@ -151,6 +174,9 @@ return [
     'default_ttl' => Env::int('PAGE_CACHE_TTL', 3600, min: 0),
     'cacheable_status_codes' => [200, 301],
     'cacheable_methods' => ['GET', 'HEAD'],
+    'bypass_cookies' => ['marko_session', 'remember_*'],
+    'trusted_hosts' => [],
+    'auth_middleware_patterns' => ['*Auth*'],
 ];
 ```
 
@@ -161,6 +187,9 @@ return [
 | `default_ttl` | `PAGE_CACHE_TTL` | `3600` | TTL in seconds used when `#[Cacheable]` has `ttl: 0`. `0` means pages never expire and are only removed by a purge or `page-cache:clear`. Negative values throw a `PageCacheException`. A `PAGE_CACHE_TTL` that is not a non-negative integer (`abc`, `1h`, `1.5`, `-1`) fails config load with a `ConfigException` rather than silently becoming `0`. |
 | `cacheable_status_codes` | --- | `[200, 301]` | Response status codes eligible for caching |
 | `cacheable_methods` | --- | `['GET', 'HEAD']` | Request methods eligible for caching |
+| `bypass_cookies` | --- | `['marko_session', 'remember_*']` | Cookie names (fnmatch patterns) that make a request bypass the cache. `session.cookie.name` is added automatically when `marko/session` is installed. See [Logged-In Visitors Bypass the Cache](#logged-in-visitors-bypass-the-cache). |
+| `trusted_hosts` | --- | `[]` | Host names (fnmatch patterns) the cache serves; other hosts bypass it. Empty allows every host. Also the hosts a relative `purgeUrl()` purges. |
+| `auth_middleware_patterns` | --- | `['*Auth*']` | Middleware short class name patterns that fail boot when used on a `#[Cacheable]` route. `[]` disables the check. |
 
 ## CLI Commands
 
@@ -180,8 +209,11 @@ marko page-cache:status
 # Clear all cached pages
 marko page-cache:clear
 
-# Purge a single URL
+# Purge a single URL (both http:// and https:// entries for that host)
 marko page-cache:purge https://example.com/products/42
+
+# Purge a relative URL for every exact host in page-cache.trusted_hosts
+marko page-cache:purge /products/42
 
 # Purge all entries tagged with a given tag
 marko page-cache:purge --tag products
@@ -250,10 +282,16 @@ public function getIdentities(): array;
 use Marko\PageCache\CacheKey;
 use Marko\Routing\Http\Request;
 
+public function __construct(string $method, string $scheme, string $host, string $path, string $query);
 public static function fromRequest(Request $request): self;
+public static function schemeFromRequest(Request $request): string;
+public static function hostnameFromRequest(Request $request): string;
+public static function normalizeHost(string $host, string $scheme): string;
 public static function normalizeQuery(string $rawQuery): string;
 public function hash(): string;
 ```
+
+The hash covers method, scheme, host, path and query (see [Cache Keys Include Scheme and Host](#cache-keys-include-scheme-and-host)). Drivers that purge by URL build keys with `normalizeHost()` so a purge matches the stored host exactly.
 
 `normalizeQuery()` is used by both store and purge operations. It parses the raw query string with `parse_str`, sorts keys, and re-encodes with RFC 3986 percent-encoding (`http_build_query(..., PHP_QUERY_RFC3986)`). This ensures that a URL stored with a space (`q=hello%20world`) and a URL purged with a `+` (`q=hello+world`) hash to the same cache key, so purge-by-URL never silently misses.
 
@@ -275,6 +313,9 @@ public function path(): string;
 public function defaultTtl(): int;
 public function cacheableStatusCodes(): array;
 public function cacheableMethods(): array;
+public function bypassCookies(): array;
+public function trustedHosts(): array;
+public function authMiddlewarePatterns(): array;
 ```
 
 `defaultTtl()` throws `PageCacheException` when `page-cache.default_ttl` is negative.
@@ -288,6 +329,8 @@ public function cacheableMethods(): array;
 | `PageCacheException::negativeTtl()` | Thrown when a `#[Cacheable]` attribute declares a negative `ttl` (at route discovery) |
 | `PageCacheException::negativeDefaultTtl()` | Thrown when `page-cache.default_ttl` (`PAGE_CACHE_TTL`) is negative |
 | `PageCacheException::invalidTagProvider()` | Thrown when the class named in `provider` does not implement `CacheTagProviderInterface` |
+| `PageCacheException::cacheableRouteWithAuthMiddleware()` | Thrown at boot when a `#[Cacheable]` route uses middleware matching `page-cache.auth_middleware_patterns` |
+| `PageCacheException::purgeUrlWithoutHost()` | Thrown by `purgeUrl()` for a relative URL when `page-cache.trusted_hosts` lists no exact host |
 | `PageCacheException::missingEntityBridge()` | Thrown at boot when a class implements `IdentityInterface` but `marko/page-cache-entity` is not installed |
 
 ## Related Packages
