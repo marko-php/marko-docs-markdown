@@ -67,6 +67,22 @@ class UserService
 }
 ```
 
+### Bcrypt Length Limit
+
+Bcrypt only uses the first 72 bytes of a value and cannot hash a NUL (`\0`) byte. Rather than silently truncate, `BcryptHasher::hash()` throws `InvalidValueException` for a value longer than 72 bytes (`BcryptHasher::MAX_VALUE_BYTES`) or containing a NUL byte. `verify()` returns `false` for such a value and never throws, since no stored bcrypt hash can match it.
+
+The limit is in bytes, not characters: a password of multibyte UTF-8 characters reaches it sooner. Validate password length with `strlen()` on registration and password change so users get a form error instead of an exception:
+
+```php
+use Marko\Hashing\Hash\BcryptHasher;
+
+if (strlen($password) > BcryptHasher::MAX_VALUE_BYTES || str_contains($password, "\0")) {
+    // Reject with a validation error
+}
+```
+
+If you want to allow longer passphrases, set `hashing.default` to `argon2id`, which has no length limit.
+
 ### Rehashing on Login
 
 Upgrade hashes transparently when algorithm or cost settings change:
@@ -138,5 +154,5 @@ interface HasherInterface
 
 ### Built-in Hashers
 
-- `BcryptHasher` --- bcrypt with configurable cost (default: 12, valid range: 4--31)
+- `BcryptHasher` --- bcrypt with configurable cost (default: 12, valid range: 4--31); rejects values over 72 bytes or containing a NUL byte (see [Bcrypt Length Limit](#bcrypt-length-limit))
 - `Argon2Hasher` --- Argon2id with configurable memory (default: 65536, min: 8), time (default: 4, min: 1), and threads (default: 1, min: 1)
