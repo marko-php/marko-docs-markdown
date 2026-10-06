@@ -701,6 +701,19 @@ public function updateRememberToken(AuthenticatableInterface $user, ?string $tok
 
 `retrieveByRememberToken()` receives the SHA-256 hash of the cookie's token, the same value previously passed to `updateRememberToken()`.
 
+`retrieveByCredentials()` and `validateCredentials()` receive request input as-is, so a provider must treat non-string `email` or `password` values (such as `email[]=x`) as a failed login rather than passing them to typed methods. When `retrieveByCredentials()` finds no usable account (unknown or inactive), it should call `PasswordHasherInterface::verifyDummy()` before returning `null`, so a failed login costs one password check either way and response timing does not reveal which accounts exist. `AdminUserProvider` in [admin-auth](/docs/packages/admin-auth/) does both.
+
+### PasswordHasherInterface
+
+```php
+public function hash(string $password): string;
+public function verify(string $password, string $hash): bool;
+public function needsRehash(string $hash): bool;
+public function verifyDummy(string $password): void;
+```
+
+`verifyDummy()` checks the password against a fixed dummy hash of the configured cost and discards the result. `BcryptPasswordHasher` builds that dummy hash at its own cost, so the check takes as long as verifying a real stored password.
+
 ### SessionGuard
 
 ```php
