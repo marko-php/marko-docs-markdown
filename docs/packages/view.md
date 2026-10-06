@@ -58,6 +58,18 @@ Templates follow the `module::path` pattern:
 
 The file extension is configured by the installed driver (e.g., `.latte` for `marko/view-latte`, `.twig` for `marko/view-twig`).
 
+Template names are validated strictly before any file is touched. The path is one or more `/`-separated segments made only of `A-Z`, `a-z`, `0-9`, `_`, `-` and `.`, with an optional `module::` prefix. Names containing `..` or `.` segments, a leading `/`, empty segments, backslashes, NUL bytes or any other character throw `InvalidTemplateException`. After a template file is found, its real path must also sit inside the module's `resources/views/` directory, so a symlink pointing outside it is rejected as well.
+
+Never build a template name directly from request input. Map user input to a fixed set of template names instead:
+
+```php
+$page = match ($request->query('page')) {
+    'about' => 'pages::about',
+    'contact' => 'pages::contact',
+    default => 'pages::not-found',
+};
+```
+
 ### Template File Location
 
 Place templates in your module's `resources/views/` directory:
@@ -175,6 +187,7 @@ public function autoRefresh(): bool;
 |-----------|-------------|
 | `ViewException` | Base exception for all view errors --- extends `MarkoException` |
 | `TemplateNotFoundException` | Thrown when a template cannot be found --- includes all searched paths |
+| `InvalidTemplateException` | Thrown when a template name is unsafe (path traversal, absolute path, NUL byte, backslash, disallowed characters) or resolves outside its module's `resources/views/` directory |
 | `NoDriverException` | Thrown when no view driver is installed --- suggests `composer require marko/view-latte` or `composer require marko/view-twig` |
 
 ## Related Packages
