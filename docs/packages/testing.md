@@ -345,7 +345,7 @@ it('shows a live show', function () {
 The client builds a `Marko\Routing\Http\Request` the way PHP would for a real request:
 
 - Headers become `HTTP_*` server keys; `Content-Type` and `Content-Length` become `CONTENT_TYPE` and `CONTENT_LENGTH`.
-- `REQUEST_METHOD`, `REQUEST_URI` (with the query string), `QUERY_STRING`, `HTTP_HOST` and `SERVER_NAME` (`localhost`, or the host of a full URL such as `https://shop.test/cart`), and `REMOTE_ADDR` (`127.0.0.1`) are set.
+- `REQUEST_METHOD`, `REQUEST_URI` (with the query string), `QUERY_STRING`, `HTTP_HOST` and `SERVER_NAME` (`localhost`, or the host of a full URL such as `https://shop.test/cart`), and `REMOTE_ADDR` (`127.0.0.1`) are set. A relative path is an HTTPS request (`HTTPS=on`, port 443). Only an explicit `http://` URL is plain HTTP.
 - `withServerVariables(['REMOTE_ADDR' => '203.0.113.9'])` overrides any server key for later requests.
 - Controllers read the payload exactly as in production: `$request->json('type')`, `$request->post('email')`, `$request->input('page')`.
 - Requests go through the real `Router`, so its method handling is the same as in production. A `head()` response never has a body, and HEAD falls back to the GET route when no `#[Head]` route exists. An `options()` call to a path that has no `#[Options]` route returns an automatic `204` with an `Allow` header. A method the path has no route for returns `405` with `Allow`. Global middleware runs on all of these.
@@ -385,7 +385,7 @@ The jar follows RFC 6265, so a test can't pass by sending a cookie that a browse
 
 - **Path**: a cookie set with `Path=/admin` is sent to `/admin` and `/admin/users`, but not to `/api` or `/administrator`. A cookie set without `Path` gets the directory of the request that set it: a cookie set by `/account/login` gets `/account`.
 - **Domain**: requests go to `localhost` unless the URI is a full URL (`http://shop.test/cart`). A cookie set without `Domain` is sent back only to the exact host that set it. One set with `Domain=shop.test` is also sent to its subdomains. A response that sets a `Domain` that doesn't cover the request host is ignored, as a browser would ignore it.
-- **Secure**: a `Secure` cookie is sent only over HTTPS: an `https://` URL, or `withServerVariables(['HTTPS' => 'on'])`.
+- **Secure**: a `Secure` cookie is sent only over HTTPS. A relative path such as `/dashboard` is an HTTPS request to `localhost`, so `Secure` cookies (including `marko/session`'s session cookie, which is `Secure` by default) round-trip in ordinary tests. Pass an explicit `http://` URL, or set `withServerVariables(['HTTPS' => 'off'])`, to test plain HTTP: a `Secure` cookie is then not sent.
 - **Same name**: cookies are stored per name, domain and path, so `token` on `/admin` and `token` on `/api` are separate cookies. A request that matches both gets both in its `Cookie` header, the more specific path first, and `$request->cookie('token')` returns that first one, as PHP does. When a response expires a cookie, only the cookie with that name, domain and path is removed.
 
 `withCookie($name, $value, $path = '/', ?$domain = null, $secure = false)` adds a cookie that is sent to every host unless you pass `$domain`. A response that sets or expires a cookie with the same name and path replaces it. `cookies()` returns the cookies whose path is `/` (whatever their host or `Secure` flag) as name => value pairs. `cookieJar()` returns every cookie as a `Marko\Testing\Http\JarCookie`, with its `name`, `value`, `domain`, `path`, `secure` and `hostOnly` properties:
@@ -400,7 +400,7 @@ expect($client->cookieJar()[0]->path)->toBe('/admin');
 ```
 
 :::caution
-`marko/session` sets `cookie.secure` to `true` by default, so the session cookie is `Secure`. Over plain `http://` test requests that cookie is not sent back, and a login doesn't carry over to the next request. Either request `https://` URLs (`$client->get('https://localhost/dashboard')`), set `withServerVariables(['HTTPS' => 'on'])` on the client, or set `'secure' => false` under `cookie` in your test environment's session config.
+With an explicit `http://` URL, a `Secure` session cookie (the `marko/session` default) is not sent back, so a login doesn't carry over to the next request. Use relative paths or `https://` URLs for session flows, or set `'secure' => false` under `cookie` in your test environment's session config.
 :::
 
 ### Acting as a user
