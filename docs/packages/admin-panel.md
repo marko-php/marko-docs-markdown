@@ -11,7 +11,7 @@ Server-rendered admin panel UI --- provides login, dashboard, and permission-fil
 composer require marko/admin-panel
 ```
 
-Requires [`marko/admin`](/docs/packages/admin/), [`marko/admin-auth`](/docs/packages/admin-auth/), [`marko/security`](/docs/packages/security/), a view driver, and a template sibling package. Install [`marko/admin-panel-latte`](/docs/packages/admin-panel-latte/) with [`marko/view-latte`](/docs/packages/view-latte/), or [`marko/admin-panel-twig`](/docs/packages/admin-panel-twig/) with [`marko/view-twig`](/docs/packages/view-twig/).
+Requires [`marko/admin`](/docs/packages/admin/), [`marko/admin-auth`](/docs/packages/admin-auth/), [`marko/security`](/docs/packages/security/), [`marko/ratelimiter`](/docs/packages/ratelimiter/), a cache driver (for login throttling), a view driver, and a template sibling package. Install [`marko/admin-panel-latte`](/docs/packages/admin-panel-latte/) with [`marko/view-latte`](/docs/packages/view-latte/), or [`marko/admin-panel-twig`](/docs/packages/admin-panel-twig/) with [`marko/view-twig`](/docs/packages/view-twig/).
 
 ## Usage
 
@@ -27,6 +27,8 @@ The panel registers these routes automatically:
 | GET | `/admin` | Dashboard (requires auth; lists only the sections the admin user can access) |
 
 The login and logout `POST` routes are protected by the global `CsrfMiddleware` that [`marko/security`](/docs/packages/security/) registers. The login form receives a CSRF token via the `csrfToken` template variable; the template must include it as a hidden field named `_token`. Requests without a valid token are rejected before authentication logic runs.
+
+Login is throttled in two layers. The admin guard is a `SessionGuard`, so [login throttling](/docs/packages/authentication/#login-throttling) locks out an email for a client after repeated failures. A locked-out attempt re-renders the login form with an error, status `429` and a `Retry-After` header. On top of that, `#[RateLimit(maxAttempts: 10, decaySeconds: 60, name: 'admin-login')]` with [`RateLimitMiddleware`](/docs/packages/ratelimiter/) caps login `POST`s per client IP across all emails. Both need a cache driver.
 
 Login and logout run on the [admin guard](/docs/packages/admin-auth/#the-admin-guard) (`admin-auth.guard`), which authenticates against `AdminUserProvider`. A frontend user can't sign in here, and an admin login is separate from any frontend session.
 
@@ -129,6 +131,8 @@ use Marko\Routing\Attributes\Post;
 
 #[Get(path: '/admin/login')]                    // showLoginForm
 #[Post(path: '/admin/login')]                   // authenticate — CSRF required (global CsrfMiddleware)
+#[Middleware(RateLimitMiddleware::class)]        // 10 login POSTs per minute per client IP
+#[RateLimit(maxAttempts: 10, decaySeconds: 60, name: 'admin-login')]
 #[Post(path: '/admin/logout')]                  // logout — CSRF required (global CsrfMiddleware)
 ```
 

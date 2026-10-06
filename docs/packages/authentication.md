@@ -55,6 +55,14 @@ return [
             'same_site' => 'Lax',
         ],
     ],
+
+    'throttle' => [
+        'enabled' => true,
+        'max_attempts' => 5,          // failures allowed within decay_seconds
+        'decay_seconds' => 60,
+        'lockout_seconds' => 60,       // first lockout; each further one doubles
+        'max_lockout_seconds' => 3600,
+    ],
 ];
 ```
 
@@ -62,7 +70,7 @@ Each guard's `driver` picks how it is built. `session` is built in. The shipped 
 
 Each guard's `provider` names an entry in `providers`. See [User Providers](#user-providers).
 
-See [Remember Me](#remember-me) for what each `remember` option controls.
+See [Remember Me](#remember-me) for what each `remember` option controls, and [Login Throttling](#login-throttling) for `throttle`.
 
 ## Usage
 
@@ -111,6 +119,37 @@ public function login(
     return new Response('Invalid credentials', 401);
 }
 ```
+
+`attempt()` is [throttled](#login-throttling): once a login identifier is locked out for a client, it throws `TooManyLoginAttemptsException` instead of returning `false`.
+
+### Login Throttling
+
+`SessionGuard::attempt()` throttles password guessing on every login path, so routes that call it need no extra middleware:
+
+1. Before the user is looked up, it checks for a lockout and throws `TooManyLoginAttemptsException` if there is one, even when the password is right.
+2. Every failed attempt counts, whether the user exists or the password is wrong. After `max_attempts` failures within `decay_seconds`, the identifier is locked out for `lockout_seconds`.
+3. Each further lockout doubles, up to `max_lockout_seconds`. The lockout history lasts twice `max_lockout_seconds` from the first lockout.
+4. A successful login clears the failures and the lockout history.
+
+The throttle keys on the login identifier and the client IP together. The identifier is every non-password credential, trimmed and lower-cased, so `Admin@Example.com ` and `admin@example.com` share one counter. Because the client IP is part of the key, an attacker can only lock an account out for their own network, never for the real user. When [marko/ratelimiter](/docs/packages/ratelimiter/) is installed, the client IP comes from its `RateLimitKeyResolverInterface` binding, which honours `ratelimiter.trusted_proxies` and groups IPv6 clients by /64. Without it, the throttle uses `REMOTE_ADDR`. Outside an HTTP request (CLI, queue jobs), it keys on the identifier alone.
+
+Counters live in the cache, so login throttling needs a cache driver such as [marko/cache-file](/docs/packages/cache-file/) or, across several servers, [marko/cache-redis](/docs/packages/cache-redis/). Without one, `attempt()` throws an `AuthException` that says which driver to install. Cache errors propagate, so the throttle fails closed. Set `authentication.throttle.enabled` to `false` to turn throttling off, for example when you throttle logins yourself from a [`FailedLoginEvent`](#failedloginevent) observer or at a reverse proxy.
+
+`TooManyLoginAttemptsException` implements `HttpExceptionInterface`, so if you don't catch it, the routing pipeline renders it as `429 Too Many Requests` with a `Retry-After` header. Catch it to re-render your own login form:
+
+```php
+use Marko\Authentication\Exceptions\TooManyLoginAttemptsException;
+
+try {
+    $loggedIn = $this->authManager->attempt($credentials);
+} catch (TooManyLoginAttemptsException $exception) {
+    return $this->view->render('auth/login', [
+        'error' => "Too many attempts. Try again in {$exception->getRetryAfter()} seconds.",
+    ])->withStatus(429)->withHeaders($exception->getHeaders());
+}
+```
+
+The throttle limits guesses against one account. To also cap how many accounts one IP can try, add [`#[RateLimit]`](/docs/packages/ratelimiter/) with `RateLimitMiddleware` to your login route.
 
 ### Logging Out
 
@@ -662,10 +701,12 @@ class LogFailedLoginObserver
         $credentials = $event->getCredentials(); // Secret-looking keys removed
         $guard = $event->getGuard();
 
-        // Log failed attempt, implement rate limiting, alert on suspicious activity
+        // Log failed attempt, alert on suspicious activity, add custom lockout logic
     }
 }
 ```
+
+[Login throttling](#login-throttling) is built in. `FailedLoginEvent` is the hook for anything beyond it, such as alerting or a custom lockout policy.
 
 Before the credentials are stored on the event, every key matching `FailedLoginEvent::SENSITIVE_KEY_PATTERN` (`/password|secret|token|otp|pin|passcode/i`) is removed, at any nesting depth. So `password`, `password_confirmation`, `current_password`, `otp`, `api_token` and similar never reach listeners or logs, while identifiers such as `email` or `username` are kept.
 
@@ -805,6 +846,28 @@ if (strlen($password) > BcryptPasswordHasher::MAX_PASSWORD_BYTES || str_contains
 
 ```php
 public function login(AuthenticatableInterface $user, bool $remember = false): void;
+```
+
+### LoginThrottleInterface
+
+Bound to `LoginThrottle` (or `NullLoginThrottle` when `authentication.throttle.enabled` is `false`). Replace the binding with a Preference to change the policy.
+
+```php
+public function ensureNotLockedOut(string $guard, array $credentials): void; // throws TooManyLoginAttemptsException
+public function recordFailure(string $guard, array $credentials): void;
+public function clear(string $guard, array $credentials): void;
+```
+
+### TooManyLoginAttemptsException
+
+Extends `AuthException` and implements `HttpExceptionInterface` (429, `Retry-After`).
+
+```php
+public static function lockedOut(string $guard, int $retryAfter): self;
+public function getRetryAfter(): int;
+public function getStatusCode(): int; // 429
+public function getHeaders(): array; // ['Retry-After' => '...']
+public function getResponseData(): array; // ['message' => ..., 'retry_after' => ...]
 ```
 
 ### CookieJarInterface
