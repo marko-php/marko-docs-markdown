@@ -50,7 +50,13 @@ DB_PASSWORD=your_password
 
 ### MySQL vs MariaDB
 
-This driver supports both MySQL 8.0+ and MariaDB 10.5+. Both are tested and fully supported.
+This driver supports both MySQL and MariaDB. CI runs the driver integration tests against **MySQL 8.4** and **MariaDB 11.8** (LTS) on every pull request. Older releases (MySQL 8.0+, MariaDB 10.6+) are expected to work but are not tested. Where the two servers differ:
+
+- **JSON:** MariaDB stores `JSON` as `LONGTEXT` with a `CHECK (json_valid(col))`. The introspector reads such a column back as `json`, so it diffs as unchanged. A column declared by hand as `LONGTEXT CHECK (json_valid(col))` reads as `json` too.
+- **Defaults and `ON UPDATE`:** see [Introspected Types and Defaults](#introspected-types-and-defaults).
+- **Integer display widths:** MariaDB keeps them in the native type (`int(10) unsigned`, `bigint(20)`), MySQL 8.0.19+ drops them. The native type is not part of the diff.
+- **`NOWAIT`:** MySQL reports a lock not acquired with `NOWAIT` as error `3572`, MariaDB as `1205`. Both are `LockTimeoutException`.
+- **Shared locks with a modifier:** `sharedLock()->noWait()` and `sharedLock()->skipLocked()` compile to `FOR SHARE`, which MariaDB rejects (see [Locking and upsert on MySQL and MariaDB](#locking-and-upsert-on-mysql-and-mariadb)).
 
 With `innodb_snapshot_isolation=ON` (the default from MariaDB 11.8), a `REPEATABLE READ` transaction that writes a row a concurrent transaction changed after its snapshot fails with error `1020` ("Record has changed since last read"). The driver raises it as `SerializationFailureException`, so `transaction(attempts: ...)` retries it like a deadlock. MySQL never raises `1020` for this case. See [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
@@ -115,7 +121,7 @@ The introspector reports columns in the vocabulary entities use, so an unchanged
 
 Literal defaults come back typed: `'0'` is `0` on an integer column, `'0'`/`'1'` are `false`/`true` on a `TINYINT(1)`, and `'0.00'` is `0.0` on a `DECIMAL`, `FLOAT` or `DOUBLE`. The native type (`nativeType`) still holds the full `COLUMN_TYPE`, so a `CHAR(36)` declared as `#[Column(type: 'char', length: 36)]` reads as `uuid` and diffs as changed; declare it as `uuid`.
 
-MariaDB (10.2.7+) reports defaults differently, and the introspector normalizes them: a quoted string default (`'abc'`) is unquoted, the `NULL` it reports for no default is `null`, `current_timestamp()` is `CURRENT_TIMESTAMP`, and any other unquoted non-numeric default is an `Expression`.
+MariaDB (10.2.7+) reports defaults differently, and the introspector normalizes them: a quoted string default (`'abc'`) is unquoted, the `NULL` it reports for no default is `null`, `current_timestamp()` is `CURRENT_TIMESTAMP` (as a plain string, since MariaDB has no `DEFAULT_GENERATED`), and any other unquoted non-numeric default is an `Expression`. Its `on update current_timestamp()` is read as `CURRENT_TIMESTAMP` (`current_timestamp(3)` as `CURRENT_TIMESTAMP(3)`), and a `LONGTEXT` column with a `json_valid()` check on itself as `json`, with no length or collation.
 
 A type change needs no cast: `MODIFY COLUMN` converts the existing values, and in strict mode a value that doesn't fit (`'abc'` to `INT`) fails the migration.
 
