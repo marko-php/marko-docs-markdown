@@ -54,12 +54,15 @@ Client errors such as `404`, `419` and `422` are rendered by the routing pipelin
 
 ### Sensitive Data Masking
 
-Request data displayed in error pages is automatically masked for fields matching:
+Request data displayed in error pages is automatically masked for fields and headers whose names contain:
 
-- `password`, `api_key`, `apikey`, `token`, `secret`, `session`
-- `Authorization` header
+- `password`, `api_key`, `apikey`, `token`, `secret`, `session`, `csrf`, `auth`, `key`
 
-These appear as `********` in the error output. Masking is handled by `RequestDataCollector`, which normalizes field names (stripping underscores, lowercasing) before matching --- so variations like `api_key`, `apiKey`, and `ApiKey` are all caught.
+The following headers are always masked as well:
+
+- `Authorization`, `Proxy-Authorization`, `Cookie`, `X-Api-Key`, `X-Auth-Token`, `X-Csrf-Token`, `X-Xsrf-Token`
+
+These appear as `********` in the error output. Masking is handled by `RequestDataCollector`, which normalizes names (stripping underscores and dashes, lowercasing) before matching --- so variations like `api_key`, `apiKey`, `ApiKey`, and `X-Api-Key` are all caught. Nested values (such as `?filter[status]=active`) are rendered as JSON, and list-style input with integer keys (`?ids[]=1`) is handled.
 
 ## Customization
 
