@@ -85,7 +85,7 @@ When an entity changes a column's type, nullability or default, the migration re
 | Kept from the database | When |
 |---|---|
 | Length (`VARCHAR(500)`) | The entity declares no `length` |
-| Default | The entity declares no `default`, and the new type can hold one (`TEXT`, `BLOB` and `JSON` can't) |
+| Default | The entity declares no `default`, and the new type can hold one (`TEXT`, `BLOB` and `JSON` can't hold a literal, but can hold an expression) |
 | Native type: precision, `UNSIGNED`, fractional seconds, `ENUM` values (`decimal(12,4) unsigned`) | The entity keeps the same base type and, for `CHAR`/`VARCHAR`/`BINARY`/`VARBINARY`, the same length |
 | Collation (`utf8mb4_bin`) | The column stays a string type. A collation equal to the table default is never pinned |
 | `ON UPDATE CURRENT_TIMESTAMP` | The column stays a `TIMESTAMP` or `DATETIME` |
@@ -101,6 +101,34 @@ When the entity changes the type, its type wins: `INT UNSIGNED` to `bigint` beco
 The down migration restates the column exactly as the introspector read it (native type, collation, default and `ON UPDATE`), so `db:rollback` restores the previous schema. A column whose only differences are ones the diff accepts gets no `MODIFY COLUMN` in either direction.
 
 `MODIFY COLUMN` never restates `UNIQUE`: on a column that already has a unique index, it would add a second one. The index diff handles uniqueness.
+
+A type change needs no cast: `MODIFY COLUMN` converts the existing values, and in strict mode a value that doesn't fit (`'abc'` to `INT`) fails the migration.
+
+### Expression Defaults
+
+MySQL 8.0.13+ accepts any expression as a default, as long as it is in parentheses. The generator adds them, except around the `CURRENT_TIMESTAMP` family (`CURRENT_TIMESTAMP`, `CURRENT_TIMESTAMP(6)`, `NOW()`, `LOCALTIMESTAMP`, `LOCALTIME`), which MySQL takes as written:
+
+```php
+use Marko\Database\Attributes\Column;
+use Marko\Database\Schema\Expression;
+
+#[Column(primaryKey: true, type: 'uuid', default: 'UUID()')]
+public string $id;
+
+#[Column(type: 'json', default: new Expression('JSON_ARRAY()'))]
+public array $tags = [];
+
+#[Column(type: 'timestamp', default: 'CURRENT_TIMESTAMP')]
+public DateTimeImmutable $createdAt;
+```
+
+```sql
+`id` CHAR(36) NOT NULL DEFAULT (UUID())
+`tags` JSON NOT NULL DEFAULT (JSON_ARRAY())
+`created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+```
+
+`CURRENT_TIMESTAMP(6)` is passed through as well, but needs a column with the same fractional seconds (`TIMESTAMP(6)`), which only raw DDL creates; an entity's `timestamp` is `TIMESTAMP`. The introspector reads every default MySQL marks `DEFAULT_GENERATED` back as an `Expression` (`(UUID())` comes back as `uuid()`, which the diff treats as the same default). See [Column Defaults](/docs/packages/database/#column-defaults) for the shortcut rules and `Literal`.
 
 ### Partial Indexes
 
@@ -271,7 +299,7 @@ The factory hands every connection it makes the container-bound `TransactionBack
 | `getTables(): array` | List all table names in the database |
 | `getTable(string $name): ?Table` | Get a full `Table` schema object (columns, indexes, foreign keys) |
 | `tableExists(string $name): bool` | Check whether a table exists |
-| `getColumns(string $table): array` | Get column definitions for a table, including each column's native type (`nativeType`), a collation that differs from the table default (`collation`) and its `ON UPDATE` expression (`onUpdateExpression`) |
+| `getColumns(string $table): array` | Get column definitions for a table, including each column's native type (`nativeType`), a collation that differs from the table default (`collation`) and its `ON UPDATE` expression (`onUpdateExpression`). A `DEFAULT_GENERATED` default is returned as an `Expression`, and a string literal that reads like a function (`'now()'`) as a `Literal` |
 | `getIndexes(string $table): array` | Get index definitions for a table |
 | `getForeignKeys(string $table): array` | Get foreign key definitions for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names for a table |

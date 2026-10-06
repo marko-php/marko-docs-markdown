@@ -98,6 +98,44 @@ Marko infers database types from PHP types:
 | Union type (e.g. `int\|string`) | No inference — requires an explicit `type:` |
 | Default values | From property initializers |
 
+### Column Defaults
+
+`#[Column(default: ...)]` sets the column's `DEFAULT`. A string is stored as a quoted string literal, except for two shortcuts that are SQL expressions:
+
+- the timestamp keywords `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `CURRENT_TIME`, `LOCALTIMESTAMP` and `LOCALTIME`, with or without a precision (`CURRENT_TIMESTAMP(6)`)
+- a call to a function with no arguments, such as `NOW()`, `gen_random_uuid()` or `UUID()`
+
+For any other expression, pass an `Expression`. To store a string that matches a shortcut as text, pass a `Literal`:
+
+```php
+use Marko\Database\Attributes\Column;
+use Marko\Database\Schema\Expression;
+use Marko\Database\Schema\Literal;
+
+#[Column(type: 'timestamp', default: 'CURRENT_TIMESTAMP')]
+public DateTimeImmutable $createdAt;
+
+#[Column(type: 'timestamp', default: new Expression("now() + interval '1 day'"))]
+public DateTimeImmutable $expiresAt;
+
+#[Column(default: new Literal('todo()'))]
+public string $placeholder;
+```
+
+| Default | PostgreSQL | MySQL |
+|---------|------------|-------|
+| `'draft'` | `DEFAULT 'draft'` | `DEFAULT 'draft'` |
+| `'CURRENT_TIMESTAMP(6)'` | `DEFAULT CURRENT_TIMESTAMP(6)` | `DEFAULT CURRENT_TIMESTAMP(6)` |
+| `'NOW()'` | `DEFAULT NOW()` | `DEFAULT NOW()` |
+| `'gen_random_uuid()'` | `DEFAULT gen_random_uuid()` | --- |
+| `'UUID()'` | --- | `DEFAULT (UUID())` |
+| `new Expression("lower('ABC')")` | `DEFAULT lower('ABC')` | `DEFAULT (lower('ABC'))` |
+| `new Literal('todo()')` | `DEFAULT 'todo()'` | `DEFAULT 'todo()'` |
+
+The SQL is not checked against the database: a function the database doesn't have (`UUID()` on PostgreSQL, `gen_random_uuid()` on MySQL) fails when the migration runs. MySQL needs 8.0.13 or later for any expression default except the `CURRENT_TIMESTAMP` family; the generator adds the parentheses MySQL requires.
+
+The introspectors read an expression default back as an `Expression`, so the diff compares it with the entity's. The comparison ignores case, whitespace and parentheses around the whole expression, because databases report `NOW()` as `now()` and MySQL reports `(UUID())` as `uuid()`. A database can rewrite a more complex expression (PostgreSQL reports `now() + interval '1 day'` as `(now() + '1 day'::interval)`); write it the way the database reports it, or `db:diff` keeps showing the column as changed.
+
 ### Union-Typed Columns
 
 A union type has no single PHP type to infer a column type from, so it must declare one explicitly. This is how polymorphic foreign keys are modeled — an attachment can point at entities whose primary keys are `int` or `string`:
@@ -117,7 +155,7 @@ Primary keys are not limited to integers. Any property marked `#[Column(primaryK
 
 > **Every entity must declare exactly one `#[Column(primaryKey: true)]` property.** Marko validates this at metadata-parse time and throws `MissingPrimaryKeyException` if none is found. There is no silent `id` fallback.
 
-UUID primary keys work on both drivers:
+UUID primary keys work on both drivers. A `uuid` column is `UUID` on PostgreSQL and `CHAR(36)` on MySQL, and the database can generate the value through an [expression default](#column-defaults):
 
 ```php title="app/blog/Entity/Article.php"
 <?php
@@ -133,7 +171,7 @@ use Marko\Database\Entity\Entity;
 #[Table('articles')]
 class Article extends Entity
 {
-    // PostgreSQL: uses gen_random_uuid() natively
+    // PostgreSQL: DEFAULT gen_random_uuid(). On MySQL 8.0.13+, use default: 'UUID()' instead.
     #[Column(primaryKey: true, type: 'uuid', default: 'gen_random_uuid()')]
     public string $id;
 
@@ -142,7 +180,7 @@ class Article extends Entity
 }
 ```
 
-For MySQL, generate UUIDs in PHP before persisting:
+The database default fills the key of rows inserted without one, such as rows from raw SQL or another application. `Repository::save()` doesn't read a generated key back, so set the id in PHP before saving an entity:
 
 ```php
 use Ramsey\Uuid\Uuid;
@@ -1535,8 +1573,10 @@ Answering anything other than `y` or `yes` cancels generation. When nobody can a
 Changing a column's type, nullability or default on an existing entity generates a migration that changes the column in place. On PostgreSQL, the change goes into one `ALTER TABLE`:
 
 ```sql
-ALTER TABLE "posts" ALTER COLUMN "views" TYPE BIGINT, ALTER COLUMN "views" SET DEFAULT 0
+ALTER TABLE "posts" ALTER COLUMN "views" TYPE BIGINT USING "views"::BIGINT, ALTER COLUMN "views" SET DEFAULT 0
 ```
+
+A PostgreSQL type change always casts explicitly with `USING "column"::type`, so conversions PostgreSQL won't make on its own (`VARCHAR` to `INTEGER`, `TEXT` to `JSONB`, `INTEGER` to `BOOLEAN`) work in both the up and the down migration. See [Type Changes](/docs/packages/database-pgsql/#type-changes).
 
 MySQL restates the whole column with `MODIFY COLUMN`, and keeps what the entity can't declare (precision, `UNSIGNED`, collation, `ON UPDATE`) unless the entity changes the type. See [Column Modifications](/docs/packages/database-mysql/#column-modifications). The down migration puts back the column's previous definition, so `db:rollback` reverses the change.
 
@@ -1546,6 +1586,7 @@ A few things to know:
 - **A column with nothing left to change gets no statement.** When every difference is one the diff accepts (an undeclared length or default, or uniqueness, which the index diff handles), neither the up nor the down migration touches the column.
 - **Primary key and auto-increment changes are refused on PostgreSQL.** They need a table rebuild, so generating SQL for one throws a `MigrationException` naming the column. Write that change in a migration by hand.
 - **`SET NOT NULL` needs data that satisfies it.** Making a column required fails if existing rows hold `NULL`. Fill those rows in first.
+- **A type change needs data that converts.** Changing `VARCHAR` to `INTEGER` on a table holding `'abc'` fails inside the migration's transaction. Clean up those rows first.
 
 ### Partial Indexes
 

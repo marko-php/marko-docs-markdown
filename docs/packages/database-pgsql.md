@@ -168,11 +168,27 @@ use Marko\Database\Attributes\Column;
 public string $id;
 ```
 
+This generates `"id" UUID DEFAULT gen_random_uuid() PRIMARY KEY` (`gen_random_uuid()` is built into PostgreSQL 13+). A call to a function with no arguments is read as an expression, not a string; see [Column Defaults](/docs/packages/database/#column-defaults) for the other forms. The default fills the key of rows inserted without one. `Repository::save()` doesn't read a generated key back, so set the id in PHP before saving an entity.
+
 `Repository::find()` and `findOrFail()` accept `int|string`, so UUID-keyed repositories work without any additional configuration:
 
 ```php
 $article = $articleRepository->find('018e2b3c-d1a2-7000-a1b2-c3d4e5f60708');
 ```
+
+### Type Changes
+
+Without a `USING` clause, `ALTER COLUMN ... TYPE` only makes conversions PostgreSQL considers safe, so `VARCHAR` to `INTEGER` fails with `column "quantity" cannot be cast automatically to type integer`. A generated type change always casts explicitly, in both the up and the down migration:
+
+```sql
+ALTER TABLE "items" ALTER COLUMN "quantity" DROP DEFAULT,
+    ALTER COLUMN "quantity" TYPE INTEGER USING "quantity"::INTEGER,
+    ALTER COLUMN "quantity" SET DEFAULT 0
+```
+
+- **The cast is explicit, not lenient.** A row that doesn't convert (`'abc'` to `INTEGER`) fails the migration inside its transaction, and nothing changes.
+- **The default is dropped before the type changes and set again after it.** An old default that can't be cast (`'0'` on a `VARCHAR` becoming `INTEGER`) never blocks the change. An auto-increment column keeps its sequence default, so widening an `integer` key to `bigint` keeps generating ids from the same sequence. The sequence itself stays `integer`; run `ALTER SEQUENCE ... AS bigint` by hand when the ids need to pass 2,147,483,647.
+- **Anything a cast can't express** (splitting a column, parsing a custom format) still needs a hand-written migration.
 
 ### Partial Indexes
 
@@ -293,7 +309,7 @@ Implements `IntrospectorInterface`. Reads schema metadata from `information_sche
 | `getTables(): array` | List all table names in the configured schema |
 | `getTable(string $name): ?Table` | Get full table metadata (columns, indexes, foreign keys) |
 | `tableExists(string $name): bool` | Check if a table exists |
-| `getColumns(string $table): array` | Get column definitions for a table |
+| `getColumns(string $table): array` | Get column definitions for a table. A default that isn't a literal is returned as an `Expression`, and a string literal that reads like a function (`'now()'`) as a `Literal` |
 | `getIndexes(string $table): array` | Get non-primary-key indexes for a table |
 | `getForeignKeys(string $table): array` | Get foreign key constraints for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names |
@@ -310,7 +326,7 @@ Implements `SqlGeneratorInterface`. Generates PostgreSQL DDL for schema migratio
 | `generateDropTable(string $tableName): string` | Generate a DROP TABLE statement |
 | `generateAddColumn(string $table, Column $column): string` | Generate an ALTER TABLE ADD COLUMN statement |
 | `generateDropColumn(string $table, string $columnName): string` | Generate an ALTER TABLE DROP COLUMN statement |
-| `generateModifyColumn(string $table, Column $column, Column $oldColumn): string` | Generate one ALTER TABLE with the type, nullability and default changes from `$oldColumn` to `$column`. Throws `MigrationException` when none of those differ, or when the primary key or auto-increment changes |
+| `generateModifyColumn(string $table, Column $column, Column $oldColumn): string` | Generate one ALTER TABLE with the type (cast with `USING`), nullability and default changes from `$oldColumn` to `$column`. Throws `MigrationException` when none of those differ, or when the primary key or auto-increment changes |
 | `generateAddIndex(string $table, Index $index): string` | Generate a CREATE INDEX statement |
 | `generateDropIndex(string $table, string $indexName): string` | Generate a DROP INDEX statement |
 | `generateAddForeignKey(string $table, ForeignKey $foreignKey): string` | Generate an ADD CONSTRAINT FOREIGN KEY statement |
