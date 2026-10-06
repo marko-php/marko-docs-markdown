@@ -163,7 +163,7 @@ public function scheduleWebhook(): void
 }
 ```
 
-Queued jobs are serialized into the queue backend (database, Redis, RabbitMQ), where anyone who can read the store or its backups could read them. So `WebhookQueue` never queues the plain signing secret: it wraps the payload in a `SealedWebhookPayload`, whose secret is encrypted with the bound `EncryptorInterface`, and pushes a `DispatchWebhookJob` carrying that. The job decrypts the secret only when it sends. This needs an encryption driver (such as `marko/encryption-openssl`) and `encryption.key`; rotating the key makes jobs queued under the old key fail with a `DecryptionException`. `push()` also checks the secret length up front, so a missing secret fails when you queue the webhook rather than in the worker.
+Queued jobs are serialized into the queue backend (database, Redis, RabbitMQ), where anyone who can read the store or its backups could read them. So `WebhookQueue` never queues the plain signing secret: it wraps the payload in a `SealedWebhookPayload`, whose secret is encrypted with the bound `EncryptorInterface`, and pushes a `DispatchWebhookJob` carrying that. The job decrypts the secret only when it sends. The ciphertext is bound to the delivery ID and URL (as encryption associated data), so an encrypted secret copied into another job fails to decrypt instead of signing a webhook for a different URL. This needs an encryption driver (such as `marko/encryption-openssl`) and `encryption.key`; rotating the key makes jobs queued under the old key fail with a `DecryptionException`. `push()` also checks the secret length up front, so a missing secret fails when you queue the webhook rather than in the worker.
 
 The job decides what to do from the outcome of each attempt:
 
