@@ -1386,10 +1386,10 @@ For isolating database tests (`RefreshDatabase`, `TruncateDatabase`), see [Datab
 | `marko db:status` | Show migration status |
 | `marko db:diff` | Preview changes between entities and database |
 | `marko db:migrate` | Apply migrations; in development, also generate them from entity changes |
-| `marko db:rollback` | Revert last migration batch (refused in production) |
-| `marko db:reset` | Rollback all migrations (refused in production) |
-| `marko db:rebuild` | Reset + re-run all migrations (refused in production) |
-| `marko db:seed` | Run seeders (refused in production) |
+| `marko db:rollback` | Revert the last migration batch (`--step=N` for more); see [Environment Behaviour](#environment-behaviour) |
+| `marko db:reset` | Rollback all migrations; see [Environment Behaviour](#environment-behaviour) |
+| `marko db:rebuild` | Reset + re-run all migrations; see [Environment Behaviour](#environment-behaviour) |
+| `marko db:seed` | Run seeders (`--class=name` for one); see [Environment Behaviour](#environment-behaviour) |
 
 ### Environment Behaviour
 
@@ -1398,8 +1398,32 @@ The commands read the environment from core's [`AppEnvironment`](/docs/packages/
 | Environment | `db:migrate` | `db:rollback`, `db:reset`, `db:rebuild`, `db:seed` |
 |-------------|--------------|----------------------------------------------------|
 | `development`, `dev`, `local` | Applies pending files, then generates and applies a migration for any entity change | Allowed |
-| `production`, `prod`, or unset | Applies pending files only, and warns about drift | Refused with exit code 1 |
-| Anything else (`staging`, `testing`, ...) | Applies pending files only, and warns about drift | Allowed |
+| `testing`, `test` | Applies pending files only, and warns about drift | Allowed |
+| `production`, `prod`, or unset | Applies pending files only, and warns about drift | Refused with exit code 1, even with `--force` |
+| Anything else (`staging`, `qa`, `preview`, a typo, ...) | Applies pending files only, and warns about drift | Refused with exit code 1 unless you pass `--force`; with `--force`, asks for confirmation when a terminal is attached |
+
+Destructive commands need evidence that the database is disposable, not merely the absence of the word "production". Only development and testing names count as disposable, so a staging database (which often holds a production snapshot or QA's data) or a misspelled environment name is protected by default:
+
+```
+Error: db:rebuild is refused in the 'staging' environment without --force.
+This command drops every table and re-runs all migrations. It runs without --force only in development (development, dev, local) and testing (testing, test).
+Re-run with --force if the 'staging' database may be changed.
+```
+
+With `--force`, the command asks before it runs when someone can answer:
+
+```
+db:rebuild drops every table and re-runs all migrations in the 'staging' environment. Continue? [y/N]
+```
+
+Answering anything other than `y` or `yes` cancels the command with exit code 0. When nobody can answer (CI, a deploy script, piped input, or `--no-interaction`), `--force` alone lets the command run, so a CI job that rebuilds or seeds a staging or preview database passes both flags:
+
+```bash
+APP_ENV=staging marko db:rebuild --force --no-interaction
+APP_ENV=staging marko db:seed --force --no-interaction
+```
+
+Production has no override. `SeederRunner` applies the same policy when you call it from your own code: `runAll()` and `runByName()` throw `SeederException` outside development and testing unless you pass `force: true`, and always throw in production.
 
 Generation runs only in development: staging is stricter than "not production" and never writes migration files on its own. When `db:migrate` skips generation because of the environment and the entities differ from the database, it prints the SQL it would have generated:
 
@@ -1503,7 +1527,7 @@ marko db:diff
 # 3. Generate migration and apply it
 marko db:migrate
 
-# 4. If mistake, rollback (refused in production)
+# 4. If mistake, rollback (development and testing; elsewhere needs --force, never production)
 marko db:rollback
 ```
 

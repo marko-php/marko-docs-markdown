@@ -160,8 +160,9 @@ It reads `MARKO_ENV` first, then `APP_ENV`, from `$_ENV` with a `getenv()` fallb
 |---|---|
 | `isProduction()` | `production`, `prod`, or no value at all |
 | `isDevelopment()` | `development`, `dev`, `local` |
+| `isTesting()` | `testing`, `test` |
 
-Any other name (for example `staging` or `testing`) is neither production nor development. `name()` returns the trimmed, lowercased value, or `production` when neither variable is set (or both are empty). Defaulting to production means a deployment that forgets to set the environment fails safe instead of exposing development behavior.
+Any other name (for example `staging`) is none of these. Code that should only act on a disposable environment checks for one by name rather than for the absence of production: [marko/database](/docs/packages/database/#environment-behaviour)'s destructive commands run freely only when `isDevelopment()` or `isTesting()` is true. `name()` returns the trimmed, lowercased value, or `production` when neither variable is set (or both are empty). Defaulting to production means a deployment that forgets to set the environment fails safe instead of exposing development behavior.
 
 ### Environment-Specific Bindings
 
@@ -560,6 +561,7 @@ class AppEnvironment
     public function name(): string;
     public function isProduction(): bool;
     public function isDevelopment(): bool;
+    public function isTesting(): bool;
 }
 ```
 
