@@ -262,7 +262,7 @@ expect($found)->toBe($user);
 $valid = $provider->validateCredentials($user, ['password' => 'secret']);
 expect($valid)->toBeTrue(); // Default validator always returns true
 
-$provider->updateRememberToken($user, 'new-token');
+$provider->updateRememberToken($user, 'new-token', new DateTimeImmutable('+30 days'));
 expect($provider->lastRememberTokenUpdate['token'])->toBe('new-token');
 ```
 
@@ -810,12 +810,14 @@ public function set(string $key, mixed $value): void;
 ### FakeAuthenticatable
 
 ```php
-public function __construct(int|string $id = 1, string $password = 'hashed-password', ?string $rememberToken = null, string $identifierName = 'id', string $rememberTokenName = 'remember_token');
+public function __construct(int|string $id = 1, string $password = 'hashed-password', ?string $rememberToken = null, string $identifierName = 'id', string $rememberTokenName = 'remember_token', ?DateTimeImmutable $rememberTokenExpiresAt = null);
 public function getAuthIdentifier(): int|string;
 public function getAuthIdentifierName(): string;
 public function getAuthPassword(): string;
 public function getRememberToken(): ?string;
 public function setRememberToken(?string $token): void;
+public function getRememberTokenExpiresAt(): ?DateTimeImmutable;
+public function setRememberTokenExpiresAt(?DateTimeImmutable $expiresAt): void;
 public function getRememberTokenName(): string;
 ```
 
@@ -827,7 +829,7 @@ public function retrieveById(int|string $identifier): ?AuthenticatableInterface;
 public function retrieveByCredentials(array $credentials): ?AuthenticatableInterface;
 public function validateCredentials(AuthenticatableInterface $user, array $credentials): bool;
 public function retrieveByRememberToken(int|string $identifier, string $token): ?AuthenticatableInterface;
-public function updateRememberToken(AuthenticatableInterface $user, ?string $token): void;
+public function updateRememberToken(AuthenticatableInterface $user, ?string $token, ?DateTimeImmutable $expiresAt): void;
 ```
 
 ### FakeGuard

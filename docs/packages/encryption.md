@@ -57,9 +57,33 @@ readonly class TokenService
 }
 ```
 
+### Binding Ciphertext with Associated Data
+
+`encrypt()` and `decrypt()` take an optional `$aad` (associated data) argument. The associated data is authenticated but neither encrypted nor stored in the payload, so decryption only succeeds when the same `$aad` is passed back. Use it to bind a ciphertext to where it lives, so it cannot be copied into another field and still decrypt:
+
+```php
+$encrypted = $this->encryptor->encrypt($ssn, 'users.ssn');
+
+$this->encryptor->decrypt($encrypted, 'users.ssn');      // the SSN
+$this->encryptor->decrypt($encrypted, 'users.nickname'); // throws DecryptionException
+```
+
+Values encrypted before you started passing `$aad` were bound to empty associated data. While `encryption.aad_fallback` is `true` (the default for this release), a failed decryption with a non-empty `$aad` is retried with empty associated data, so those values keep decrypting. Re-encrypt them (read and save each value) and then set `ENCRYPTION_AAD_FALLBACK=false`; until you do, legacy values can still be moved between fields. The default changes to `false` in a future release.
+
+### Rotating the Key
+
+Move the current key into `encryption.previous_keys` and set a new `ENCRYPTION_KEY`. New values are always encrypted with the current key; decryption tries the current key first, then each previous key in order:
+
+```dotenv
+ENCRYPTION_KEY=new-base64-key
+ENCRYPTION_PREVIOUS_KEYS=old-base64-key,older-base64-key
+```
+
+Once every stored value has been re-encrypted with the new key, remove the old key from the list. Each previous key must be valid for the configured cipher, or construction fails with `EncryptionException`.
+
 ### Encrypting Entity Columns
 
-To store an entity property encrypted, mark it `#[Encrypted]` instead of encrypting and decrypting by hand in a repository. `marko/database` encrypts on save and decrypts on hydration using the bound `EncryptorInterface`. See [Encrypted Columns](/docs/packages/database/#encrypted-columns).
+To store an entity property encrypted, mark it `#[Encrypted]` instead of encrypting and decrypting by hand in a repository. `marko/database` encrypts on save and decrypts on hydration using the bound `EncryptorInterface`, binding each value to its `table.column` as associated data. See [Encrypted Columns](/docs/packages/database/#encrypted-columns).
 
 ### Configuration
 
@@ -78,6 +102,8 @@ class MyService
     {
         $key = $this->encryptionConfig->key();
         $cipher = $this->encryptionConfig->cipher();
+        $previousKeys = $this->encryptionConfig->previousKeys();
+        $aadFallback = $this->encryptionConfig->aadFallback();
     }
 }
 ```
@@ -90,10 +116,19 @@ use Marko\Config\Env;
 return [
     'key' => Env::string('ENCRYPTION_KEY', ''),
     'cipher' => Env::string('ENCRYPTION_CIPHER', 'aes-256-gcm'),
+    'previous_keys' => Env::list('ENCRYPTION_PREVIOUS_KEYS', []),
+    'aad_fallback' => Env::bool('ENCRYPTION_AAD_FALLBACK', true),
 ];
 ```
 
-Generate a key with: `base64_encode(random_bytes(32))`
+| Key | Env variable | Default | Description |
+|-----|--------------|---------|-------------|
+| `key` | `ENCRYPTION_KEY` | `''` | Base64-encoded key. Its length must match the cipher: 32 bytes for `aes-256-*`, 24 for `aes-192-*`, 16 for `aes-128-*` |
+| `cipher` | `ENCRYPTION_CIPHER` | `aes-256-gcm` | AEAD cipher (`-gcm` or `-ccm`) |
+| `previous_keys` | `ENCRYPTION_PREVIOUS_KEYS` | `[]` | Comma-separated retired keys, used for decryption only (see [Rotating the Key](#rotating-the-key)) |
+| `aad_fallback` | `ENCRYPTION_AAD_FALLBACK` | `true` | Retry decryption with empty associated data (see [Binding Ciphertext with Associated Data](#binding-ciphertext-with-associated-data)) |
+
+Generate a key with: `base64_encode(random_bytes(32))` (use `random_bytes(16)` for `aes-128-gcm`)
 
 ## API Reference
 
@@ -102,11 +137,11 @@ Generate a key with: `base64_encode(random_bytes(32))`
 ```php
 use Marko\Encryption\Contracts\EncryptorInterface;
 
-public function encrypt(string $value): string;
-public function decrypt(string $encrypted): string;
+public function encrypt(string $value, string $aad = ''): string;
+public function decrypt(string $encrypted, string $aad = ''): string;
 ```
 
-`encrypt()` throws `EncryptionException` on failure. `decrypt()` throws `DecryptionException` for invalid payloads, wrong keys, or tampered data.
+`encrypt()` throws `EncryptionException` on failure. `decrypt()` throws `DecryptionException` for invalid payloads, wrong keys, mismatched associated data, or tampered data.
 
 ### EncryptionConfig
 
@@ -115,6 +150,9 @@ use Marko\Encryption\Config\EncryptionConfig;
 
 public function key(): string;
 public function cipher(): string;
+/** @return list<string> */
+public function previousKeys(): array;
+public function aadFallback(): bool;
 ```
 
 ### Exceptions
@@ -133,4 +171,16 @@ DecryptionException::invalidPayload(); // corrupted or tampered data
 DecryptionException::invalidKey();     // wrong encryption key
 DecryptionException::invalidTagLength(actual: 1, expected: 16); // truncated authentication tag
 DecryptionException::invalidIvLength(actual: 8, expected: 12);  // IV length does not match the cipher
+```
+
+`EncryptionException` factories raised when the encryptor is constructed:
+
+```php
+use Marko\Encryption\Exceptions\EncryptionException;
+
+EncryptionException::invalidKeyLength(cipher: 'aes-128-gcm', expectedLength: 16);             // key missing, not base64, or wrong length
+EncryptionException::invalidPreviousKey(index: 0, cipher: 'aes-256-gcm', expectedLength: 32); // a previous_keys entry is invalid
+EncryptionException::invalidPreviousKeys();                                                    // previous_keys is not a list of strings
+EncryptionException::invalidCipher('not-a-cipher');                                            // unknown to OpenSSL
+EncryptionException::nonAeadCipher('aes-256-cbc');                                             // not an AEAD mode
 ```
