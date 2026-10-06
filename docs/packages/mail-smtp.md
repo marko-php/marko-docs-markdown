@@ -44,11 +44,20 @@ return [
 |---|---|---|
 | `host` | `localhost` | SMTP server hostname |
 | `port` | `587` | SMTP server port |
-| `encryption` | `tls` | Encryption method --- `tls`, `ssl`, or `null` for none |
+| `encryption` | `tls` | Encryption method --- `tls` (STARTTLS), `ssl` (implicit TLS), or `null` for none |
 | `username` | `null` | SMTP authentication username |
 | `password` | `null` | SMTP authentication password |
 | `auth_mode` | `login` | Authentication mode --- `login` or `plain` |
 | `timeout` | `30` | Connection timeout in seconds |
+
+### Choosing `tls` or `ssl`
+
+The two encryption modes match the two ways mail servers offer TLS, so pick the one your provider documents for the port you use:
+
+- **`tls`** (STARTTLS, usually port `587`) opens a plain TCP connection, sends `EHLO`, upgrades the connection with `STARTTLS`, then sends `EHLO` again before authenticating. Nothing is sent in plain text after the upgrade.
+- **`ssl`** (implicit TLS, usually port `465`) negotiates TLS as soon as the connection opens, before the server's greeting. No `STARTTLS` is sent.
+
+Using `ssl` against a STARTTLS port, or `tls` against an implicit-TLS port, fails with a [`TransportException`](#connection-and-tls-errors) whose reason names the handshake error.
 
 ## Usage
 
@@ -94,6 +103,17 @@ class OrderNotifier
 }
 ```
 
+### Message Format
+
+`send()` builds an RFC 5322 message: the header section ends with an empty line before the body, so multipart messages are parsed as MIME parts rather than shown as raw source. Header values are 7-bit ASCII. A non-ASCII subject or display name in `From`, `To`, `Cc` or `Reply-To` is RFC 2047 encoded (`=?UTF-8?B?...?=`), while ASCII names are sent as is:
+
+```text
+From: =?UTF-8?B?UsOpbXk=?= <remy@example.com>
+To: Store <orders@example.com>
+```
+
+A CR, LF or NUL byte in an address or display name throws `MessageException` (header injection) before anything is encoded.
+
 ## Customization
 
 Extend `SmtpMailer` via Preference to customize message building:
@@ -118,7 +138,7 @@ Implements `MailerInterface`. See [`marko/mail`](/docs/packages/mail/) for the f
 | Method | Description |
 |---|---|
 | `send(Message $message): bool` | Build and send a `Message` over SMTP --- handles headers, MIME encoding, and attachments |
-| `sendRaw(string $to, string $raw): bool` | Send a pre-built raw message string to the given recipient |
+| `sendRaw(string $to, string $raw): bool` | Send a pre-built raw message string to the given recipient; the envelope sender is the address in the message's `From:` header (inside `<...>` when it has a display name) |
 
 ### SmtpTransport
 
