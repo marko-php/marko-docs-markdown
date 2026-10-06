@@ -226,8 +226,41 @@ marko queue:work --queue=high,default,low --sleep=1
 | `--queue` | Queue names to work, in priority order, separated by commas. Defaults to the `queue.queue` config value |
 | `--sleep` | Seconds to wait when every queue is empty (default `3`) |
 | `--once` | Process at most one job, then exit |
+| `--timeout` | Seconds one job may run before it is failed and the worker exits. Defaults to the `queue.timeout` config value (`60`); `0` turns it off. Needs `ext-pcntl` |
+| `--memory` | Exit after the current job once the worker uses this many megabytes (default `0`, no limit) |
+| `--max-jobs` | Exit after processing this many jobs (default `0`, no limit) |
 
 If popping a job throws (for example, the broker is unreachable), the worker writes the error to PHP's error log (STDERR for `queue:work`), sleeps for `--sleep` seconds and polls again, so a pop failure doesn't stop the worker. With `--once` the error is thrown instead.
+
+### Worker Limits and Shutdown
+
+Run `queue:work` under a process supervisor (systemd, Supervisor, a container restart policy) and let it recycle workers:
+
+```bash
+marko queue:work --timeout=60 --memory=128 --max-jobs=1000
+```
+
+- **Timeout** --- when a job runs longer than `--timeout` seconds, the worker fails that attempt with a `JobTimedOutException` (`Job '...' exceeded the 60-second timeout.`). The job is released for another attempt with its backoff, or recorded in the failed-job store on its last attempt, like a job that threw. The worker then logs the timeout and exits with status `1` (`Worker::EXIT_TIMED_OUT`): a job stuck in a blocking call can't be stopped safely inside the process, so the supervisor starts a fresh one.
+- **Memory and job count** --- with `--memory` or `--max-jobs`, the worker finishes the current job, then returns and `queue:work` exits with status `0`, so leaks never build up to an out-of-memory crash.
+- **SIGTERM / SIGINT** --- the worker finishes the job it is running, then exits, so a deploy or `docker stop` doesn't cut a job off halfway.
+
+The timeout must be shorter than `queue.retry_after`. Otherwise a job still running when its reservation expires is handed to a second worker and runs twice, so `queue:work` refuses to start and exits with code `1` when `--timeout` (or `queue.timeout`) is not below `retry_after`. Leave a few seconds of margin.
+
+The timeout and graceful shutdown need the `pcntl` extension. Without it, `queue:work` prints a warning and runs with **no** per-job timeout, and SIGTERM/SIGINT stop the worker immediately, mid-job. `--memory` and `--max-jobs` work without `pcntl`.
+
+From code, pass the limits as `WorkerOptions` (every limit defaults to `0`, meaning off):
+
+```php
+use Marko\Queue\WorkerOptions;
+
+$worker->work(queues: ['default'], options: new WorkerOptions(timeout: 60, memory: 128, maxJobs: 1000));
+```
+
+The worker reaches signals, the timer, memory usage and process exit through `ProcessControlInterface`, bound to `PcntlProcessControl`. Bind your own implementation to change how the worker handles them.
+
+### Failed Job Traces
+
+The `exception` text stored for a failed job holds the exception message and a stack trace in `getTraceAsString()` format, **without call arguments**. Arguments can hold passwords or tokens, and with `zend.exception_ignore_args=Off` (the PHP development default) `getTraceAsString()` would include them, so the worker builds the trace from file, line, class and function only.
 
 ### Queue Priority
 
@@ -310,6 +343,7 @@ return [
     'connection'   => 'default',
     'queue'        => 'default',
     'retry_after'  => 90,           // seconds before a reserved-but-unfinished job is reclaimed
+    'timeout'      => 60,           // seconds one job may run under queue:work; 0 = off
     'max_attempts' => 3,
     'backoff'      => null,         // int, list<int>, or null for 2^attempts * 10 seconds
 ];
@@ -321,6 +355,7 @@ return [
 | `connection` | `default` | Named connection passed to the driver |
 | `queue` | `default` | Default queue name, used by `push()`, `later()` and `pop()` when no queue is given |
 | `retry_after` | `90` | Seconds after which a reserved job that has not been deleted or released is considered crashed and becomes eligible for re-reservation. The reclaimed reservation still counts as an attempt |
+| `timeout` | `60` | Seconds one job may run under `queue:work` before it is failed and the worker exits; `0` turns it off. Must be below `retry_after`, and needs `ext-pcntl`. Overridden by `--timeout`. See [Worker Limits and Shutdown](#worker-limits-and-shutdown) |
 | `max_attempts` | `3` | How many times a job is attempted before it is moved to the failed-job store. A job's own `maxAttempts`, when set, takes precedence |
 | `backoff` | `null` | Seconds to wait before retrying a failed job that sets no `backoff` of its own: an `int` (fixed), a `list<int>` (per attempt; the last value repeats), or `null` for `2^attempts * 10` seconds. See [Retry Backoff](#retry-backoff) |
 
@@ -387,7 +422,12 @@ public static function unserialize(string $data): static;
 use Marko\Queue\WorkerInterface;
 
 /** @param list<string>|null $queues Priority order; null = the default queue */
-public function work(?array $queues = null, bool $once = false, int $sleep = 3): void;
+public function work(
+    ?array $queues = null,
+    bool $once = false,
+    int $sleep = 3,
+    WorkerOptions $options = new WorkerOptions(), // timeout, memory (MB), maxJobs; 0 = off
+): void;
 public function stop(): void;
 ```
 
@@ -416,6 +456,7 @@ public function driver(): string;
 public function connection(): string;
 public function queue(): string;
 public function retryAfter(): int;
+public function timeout(): int;
 public function maxAttempts(): int;
 public function backoff(): array|int|null; // int, list<int>, or null; throws QueueException when invalid
 ```
@@ -453,5 +494,6 @@ Implements `Marko\Core\Event\AsyncObserverDispatcherInterface` and is bound to i
 |-----------|-------------|
 | `QueueException` | Base exception for all queue errors --- includes `getContext()` and `getSuggestion()` methods |
 | `JobFailedException` | Thrown when a job fails during execution |
+| `JobTimedOutException` | Recorded as the failure of a job that ran longer than the worker timeout. See [Worker Limits and Shutdown](#worker-limits-and-shutdown) |
 | `SerializationException` | Thrown when a job payload cannot be serialized or deserialized, when an async observer's event cannot be serialized, when `encryption.key` is empty, or when an HMAC signature does not match (tampered payload) |
 | `NoDriverException` | Thrown when a queue interface can't be resolved. For `QueueInterface` and `FailedJobRepositoryInterface` it lists the driver packages to install. For any other queue interface it names the interface that has no binding and tells you to bind it in `module.php` |
