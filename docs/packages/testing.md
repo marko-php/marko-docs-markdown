@@ -632,7 +632,7 @@ beforeEach(function () {
 });
 ```
 
-`truncate()` empties the tables of every `#[Table]` entity the application discovers, and restarts their identity sequences. On PostgreSQL it runs one `TRUNCATE ... RESTART IDENTITY CASCADE`. On MySQL it truncates table by table with foreign key checks switched off. The `migrations` table, and tables created only by hand-written migrations, are left alone. It throws inside an open transaction, so don't combine it with `RefreshDatabase` in the same test, and it runs only in a testing environment (see [Test environment](#test-environment)).
+`truncate()` empties the tables of every `#[Table]` entity the application discovers, and restarts their identity sequences. On PostgreSQL it runs one `TRUNCATE ... RESTART IDENTITY CASCADE`. On MySQL it truncates table by table with foreign key checks switched off. The `migrations` table, and tables created only by hand-written migrations, are left alone. Package tables that ship an entity are entity tables too, so `jobs` and `failed_jobs` ([`marko/queue-database`](/docs/packages/queue-database/)) and `sessions` ([`marko/session-database`](/docs/packages/session-database/)) are emptied. It throws inside an open transaction, so don't combine it with `RefreshDatabase` in the same test, and it runs only in a testing environment (see [Test environment](#test-environment)).
 
 ### Fresh schema
 

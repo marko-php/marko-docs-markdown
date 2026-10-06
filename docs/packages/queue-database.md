@@ -3,7 +3,7 @@ title: marko/queue-database
 description: Database queue driver — stores and processes jobs in SQL tables with transaction-safe polling and failed job persistence.
 ---
 
-Database queue driver --- stores and processes jobs in SQL tables with atomic reservation and failed job persistence. Jobs are stored in a `jobs` table and polled by the worker process. Each job is claimed inside a transaction with the query builder's `lockForUpdate()->skipLocked()` (`FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL), so concurrent workers skip a job another worker is claiming instead of processing it twice. Crashed reservations (jobs reserved but neither deleted nor released within `queue.retry_after` seconds) are automatically reclaimed on the next poll cycle. Failed jobs are persisted to a `failed_jobs` table for later inspection and retry. Includes migrations for both tables.
+Database queue driver --- stores and processes jobs in SQL tables with atomic reservation and failed job persistence. Jobs are stored in a `jobs` table and polled by the worker process. Each job is claimed inside a transaction with the query builder's `lockForUpdate()->skipLocked()` (`FOR UPDATE SKIP LOCKED` on MySQL and PostgreSQL), so concurrent workers skip a job another worker is claiming instead of processing it twice. Crashed reservations (jobs reserved but neither deleted nor released within `queue.retry_after` seconds) are automatically reclaimed on the next poll cycle. Failed jobs are persisted to a `failed_jobs` table for later inspection and retry. The package ships entities for both tables, so `marko db:migrate` creates them.
 
 Implements `QueueInterface` from [`marko/queue`](/docs/packages/queue/) and requires [`marko/database`](/docs/packages/database/) for the database connection.
 
@@ -29,20 +29,28 @@ The factory reads these keys from `config/queue.php`:
 | `queue.retry_after` | Seconds before a reserved job that was neither deleted nor released is reclaimed |
 | `queue.max_attempts` | Default attempt limit for jobs that don't set their own `maxAttempts` |
 
-Jobs are always stored in the `jobs` table that the bundled migration creates.
+Jobs are always stored in the `jobs` table (see [Creating the Tables](#creating-the-tables)).
 
-### Running Migrations
+### Creating the Tables
 
-Run the included migrations to create the required tables:
+The package ships two entities, `DatabaseJob` and `DatabaseFailedJob` in `Marko\Queue\Database\Entity`, that own the table schemas. Create the tables with [`marko db:migrate`](/docs/packages/database/):
 
 ```bash
-marko migrate
+marko db:migrate
 ```
 
-This creates:
+In development, `db:migrate` generates a migration for the new tables in `database/migrations/` and applies it. Commit that migration; `db:migrate` on staging and production applies it, because generation only runs in development. This creates:
 
-- `jobs` --- stores pending and reserved jobs
-- `failed_jobs` --- stores jobs that exceeded max attempts
+| Table | Columns | Purpose |
+|---|---|---|
+| `jobs` | `id VARCHAR(36)` primary key, `queue VARCHAR(255)` (default `'default'`), `payload TEXT`, `attempts INT` (default `0`), `reserved_at TIMESTAMP NULL`, `available_at TIMESTAMP`, `created_at TIMESTAMP` (default `CURRENT_TIMESTAMP`); index `idx_queue_available (queue, available_at)` | Pending and reserved jobs |
+| `failed_jobs` | `id VARCHAR(36)` primary key, `queue VARCHAR(255)`, `payload TEXT`, `exception TEXT`, `failed_at TIMESTAMP` (default `CURRENT_TIMESTAMP`) | Jobs that exceeded their max attempts |
+
+The same DDL is generated on MySQL, MariaDB and PostgreSQL. The entities only own the schema: `DatabaseQueue` and `DatabaseFailedJobRepository` read and write the tables with their own SQL. Because the tables belong to entities, `db:diff` reports drift in them, and [`TruncateDatabase`](/docs/packages/testing/#truncatedatabase) empties them between tests.
+
+#### Upgrading from the migration classes
+
+Earlier versions shipped `CreateJobsTable` and `CreateFailedJobsTable` migration classes, which `db:migrate` never ran. They are removed. An application migration that returns one of them (`return new CreateJobsTable();`) now fails to load. Rewrite it as a migration that creates the table with the columns above. Tables created with the previously documented DDL already match the entities, so `db:migrate` generates nothing for them.
 
 ### Dispatching and Processing
 

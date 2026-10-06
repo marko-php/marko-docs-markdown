@@ -38,15 +38,23 @@ public function handle(): void
 
 ### Creating the Sessions Table
 
-Create the required table via migration or manually:
+The package ships a `DatabaseSession` entity (`Marko\Session\Database\Entity\DatabaseSession`) that owns the `sessions` table schema. Create the table with [`marko db:migrate`](/docs/packages/database/):
 
-```sql
-CREATE TABLE sessions (
-    id VARCHAR(128) PRIMARY KEY,
-    payload TEXT NOT NULL,
-    last_activity INT NOT NULL
-);
+```bash
+marko db:migrate
 ```
+
+In development, `db:migrate` generates a migration for the table in `database/migrations/` and applies it. Commit that migration; `db:migrate` on staging and production applies it, because generation only runs in development. The table has these columns on MySQL, MariaDB and PostgreSQL:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `VARCHAR(128)` | Primary key |
+| `payload` | `TEXT` | Serialized session data |
+| `last_activity` | `INT` | Unix timestamp of the last write or refresh |
+
+The entity only owns the schema: `DatabaseSessionHandler` reads and writes the table with its own SQL. Because the table belongs to an entity, `db:diff` reports drift in it and [`TruncateDatabase`](/docs/packages/testing/#truncatedatabase) empties it between tests.
+
+A `sessions` table created from the SQL these docs gave before the entity existed already matches it, so `db:migrate` generates nothing. For a table with a different shape (for example `id VARCHAR(255)`), `db:migrate` in development generates a migration that changes it to the columns above, and `db:diff` shows that change first. Review the migration before you commit it.
 
 ### Garbage Collection
 

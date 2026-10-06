@@ -1734,7 +1734,7 @@ This migration would remove existing database objects:
 Generate a migration with these changes? [y/N]
 ```
 
-Answering anything other than `y` or `yes` cancels generation. When nobody can answer (CI, a deploy script, piped input, or `--no-interaction`), the command exits with code 1 and generates nothing unless you pass `--force`. The question is asked through core's [`ConfirmationPrompterInterface`](/docs/packages/core/#asking-for-confirmation); in tests, pass a [`FakeConfirmationPrompter`](/docs/packages/testing/#fakeconfirmationprompter) to `MigrateCommand`. Tables no entity owns (sessions, jobs, ...) are never touched.
+Answering anything other than `y` or `yes` cancels generation. When nobody can answer (CI, a deploy script, piped input, or `--no-interaction`), the command exits with code 1 and generates nothing unless you pass `--force`. The question is asked through core's [`ConfirmationPrompterInterface`](/docs/packages/core/#asking-for-confirmation); in tests, pass a [`FakeConfirmationPrompter`](/docs/packages/testing/#fakeconfirmationprompter) to `MigrateCommand`. Tables no entity owns (such as a table an application creates in a hand-written migration) are never touched. Package tables like `sessions`, `jobs` and `failed_jobs` belong to entities that [`marko/session-database`](/docs/packages/session-database/) and [`marko/queue-database`](/docs/packages/queue-database/) ship, so `db:migrate` creates and diffs them like your own.
 
 ### Column Changes
 
