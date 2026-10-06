@@ -142,12 +142,18 @@ The middleware runs on every matched route, but not on requests that match no ro
 
 A session is only stored when the request actually used it. When the response completes, the middleware:
 
-- **saves** the session when the request resumed an existing session from a valid session cookie, or when the request **modified** it (`set()`, `remove()`, `clear()`, a flash message, `regenerate()`). Saving an unmodified resumed session keeps its expiry sliding forward.
+- **saves** the session when the request resumed a session the store knows, or when the request **modified** it (`set()`, `remove()`, `clear()`, a flash message, `regenerate()`). Saving an unmodified resumed session calls the handler's `updateTimestamp()` instead of `write()`, so its expiry slides forward without rewriting the payload.
 - **discards** it otherwise: `discard()` closes the session without calling the handler's `write()`, and no `Set-Cookie` is sent.
 
-Reading never counts as a modification. A visitor without a session cookie who only views public pages gets no session row or file and no cookie, even if the page calls `get()` or `has()` or checks for a logged-in user. The first write (logging in, adding to a cart, issuing a CSRF token, flashing a message) persists the session and sends the cookie. A malformed or tampered cookie counts as no cookie. An empty session is still read from the handler at start.
+Reading never counts as a modification. A visitor without a session cookie who only views public pages gets no session row or file and no cookie, even if the page calls `get()` or `has()` or checks for a logged-in user. The first write (logging in, adding to a cart, issuing a CSRF token, flashing a message) persists the session and sends the cookie. An empty session is still read from the handler at start.
 
-The session cookie is attached to the `Response` rather than emitted directly by PHP --- `Session::configure()` disables PHP's built-in cookie handling, so `SessionMiddleware` reads the inbound cookie off the `Request`, seeds the session ID before `start()`, and attaches an outbound cookie only when a saved session's ID changed (a new session that was written to, a regenerated ID, or an expired cookie after `destroy()` of a session the client already had). A repeat visitor whose session ID is unchanged gets no `Set-Cookie` header. An invalid or tampered inbound cookie is ignored --- the middleware falls through to a fresh session rather than raising an error.
+#### Strict session IDs
+
+A session cookie only resumes a session the store already knows. `Session` runs PHP with `session.use_strict_mode=1`, so before resuming an inbound ID PHP asks the handler's `validateId()`. An ID the store has never issued, or one whose session is older than the configured `lifetime`, is discarded: the request gets a fresh ID, starts with an empty session and stores nothing unless it writes to the session. A client can never choose its own session ID, which closes off session fixation and stops replayed or made-up cookies from creating a stored session on every request.
+
+When the inbound cookie resumed nothing (an unknown, expired, malformed or tampered ID) and the request stored nothing, the response carries an expired session cookie so the client stops sending it. If the request did write to the session, the new session's cookie replaces the old one instead.
+
+The session cookie is attached to the `Response` rather than emitted directly by PHP --- `Session::configure()` disables PHP's built-in cookie handling, so `SessionMiddleware` reads the inbound cookie off the `Request`, seeds the session ID before `start()`, and attaches an outbound cookie only when a saved session's ID changed (a new session that was written to, a regenerated ID, or an expired cookie after `destroy()` of a session the client already had), or when an inbound cookie was rejected (an expired cookie, see above). A repeat visitor whose session ID is unchanged gets no `Set-Cookie` header. An invalid or tampered inbound cookie never raises an error --- the middleware falls through to a fresh session.
 
 This matters for [`marko/page-cache`](/docs/packages/page-cache/): responses carrying any cookie are never cached, so attaching the session cookie unconditionally would silently disable page caching on every session-enabled route.
 
@@ -284,7 +290,7 @@ public function clear(): array;
 
 ### SessionHandlerInterface
 
-Extends PHP's native `SessionHandlerInterface`:
+Extends PHP's native `SessionHandlerInterface` and `SessionUpdateTimestampHandlerInterface`:
 
 ```php
 use Marko\Session\Contracts\SessionHandlerInterface;
@@ -295,7 +301,45 @@ public function read(string $id): string|false;
 public function write(string $id, string $data): bool;
 public function destroy(string $id): bool;
 public function gc(int $max_lifetime): int|false;
+public function validateId(string $id): bool;
+public function updateTimestamp(string $id, string $data): bool;
 ```
+
+### Custom Session Handlers
+
+To store sessions somewhere else, implement `SessionHandlerInterface` and bind it in your module's `module.php`. Besides PHP's six handler methods, a handler must implement the two methods strict session IDs depend on:
+
+- `validateId(string $id): bool` --- return `true` only when the store holds a session with this ID that is still within the configured lifetime. Return `false` for an unknown or expired ID; PHP then starts a fresh session instead of adopting the ID.
+- `updateTimestamp(string $id, string $data): bool` --- refresh the expiry of an existing session without rewriting its payload. PHP calls it instead of `write()` when the data didn't change. It must never create a session that doesn't exist; return `true` when there's nothing to update.
+
+```php title="app/sessions/src/Handler/RedisSessionHandler.php"
+use Marko\Session\Config\SessionConfig;
+use Marko\Session\Contracts\SessionHandlerInterface;
+
+class RedisSessionHandler implements SessionHandlerInterface
+{
+    public function __construct(
+        private readonly Redis $redis,
+        private readonly SessionConfig $sessionConfig,
+    ) {}
+
+    public function validateId(string $id): bool
+    {
+        return $this->redis->exists('session:' . $id) === 1;
+    }
+
+    public function updateTimestamp(string $id, string $data): bool
+    {
+        $this->redis->expire('session:' . $id, $this->sessionConfig->lifetime() * 60, 'XX');
+
+        return true;
+    }
+
+    // open(), close(), read(), write(), destroy() and gc() ...
+}
+```
+
+A handler that returns `true` from `validateId()` for every ID turns strict mode off: any well-formed cookie would be adopted and written back.
 
 ### SessionConfig
 

@@ -71,6 +71,8 @@ Implements all methods from `SessionHandlerInterface`. See [`marko/session`](/do
 | `write(string $id, string $data): bool` | Write session data using an exclusive lock (`LOCK_EX`); sets file mode `0600`; throws `SessionWriteException` on partial or failed write |
 | `destroy(string $id): bool` | Delete a session file from disk |
 | `gc(int $max_lifetime): int\|false` | Remove session files older than `$max_lifetime` seconds, returns count of deleted files |
+| `validateId(string $id): bool` | `true` only when `sess_{id}` exists and was last modified within the configured `lifetime`; unknown and expired IDs get a fresh session |
+| `updateTimestamp(string $id, string $data): bool` | Touch an existing session file to the current time without rewriting it; never creates a file |
 
 ### Exceptions
 
@@ -85,4 +87,6 @@ Implements all methods from `SessionHandlerInterface`. See [`marko/session`](/do
 - Each session file is created/written with mode `0600` (owner read/write only).
 - Reads acquire a shared lock (`LOCK_SH`) so multiple requests can read concurrently.
 - Writes acquire an exclusive lock (`LOCK_EX`) with truncate-then-write to prevent corruption. If the truncation or write fails (e.g. disk full or permission error), a `SessionWriteException` is thrown immediately --- no silent partial writes.
+- A session's age is its file's modification time. `write()` and `updateTimestamp()` stamp it with the current time from the injected PSR-20 clock, and `validateId()` and garbage collection compare against the same clock.
 - Garbage collection compares file modification times against the max lifetime and removes expired files.
+- `validateId()` clears PHP's stat cache for the file first, so a long-running worker (RoadRunner) never sees a stale modification time.

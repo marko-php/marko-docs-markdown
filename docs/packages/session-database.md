@@ -58,11 +58,13 @@ marko session:gc
 
 This deletes rows where `last_activity` is older than the configured session lifetime.
 
+A session cookie only resumes a row that exists and is within the lifetime (see [Strict session IDs](/docs/packages/session/#strict-session-ids)). Replaying an unknown or expired cookie inserts nothing, and a resumed session that wasn't modified only updates `last_activity`.
+
 ## API Reference
 
 ### DatabaseSessionHandler
 
-Implements `SessionHandlerInterface`. Accepts a `ConnectionInterface` connection.
+Implements `SessionHandlerInterface`. Takes a `ConnectionInterface` connection, the `SessionConfig` (for the lifetime) and a PSR-20 clock; all three are autowired.
 
 | Method | Description |
 |---|---|
@@ -72,3 +74,5 @@ Implements `SessionHandlerInterface`. Accepts a `ConnectionInterface` connection
 | `write(string $id, string $data): bool` | Write session data using a single atomic upsert. MySQL uses `ON DUPLICATE KEY UPDATE`; PostgreSQL uses `ON CONFLICT (id) DO UPDATE`. No separate delete-then-insert. |
 | `destroy(string $id): bool` | Delete a session by ID. |
 | `gc(int $max_lifetime): int\|false` | Delete sessions where `last_activity` is older than `max_lifetime` seconds. Returns the number of deleted rows. |
+| `validateId(string $id): bool` | `SELECT 1 FROM sessions WHERE id = ? AND last_activity >= ?`: `true` only for a row within the configured `lifetime`. Unknown and expired IDs get a fresh session; expired rows are left for `gc()`. |
+| `updateTimestamp(string $id, string $data): bool` | `UPDATE sessions SET last_activity = ? WHERE id = ?` for a resumed session whose data didn't change. Never rewrites the payload and never inserts a row. |
