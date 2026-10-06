@@ -253,7 +253,7 @@ public function revokeAllTokens(AuthenticatableInterface $user): void;
 
 ### TokenGuard
 
-Implements `StatelessGuardInterface`:
+Implements `StatelessGuardInterface` and `ResettableInterface`. `AuthManager::reset()` resets it between worker requests, which forgets the token it resolved last:
 
 ```php
 public function __construct(TokenRepositoryInterface $repository, CurrentRequest $currentRequest, ClockInterface $clock, UserProviderInterface $provider, string $name = 'token', ?EventDispatcherInterface $eventDispatcher = null);
@@ -269,6 +269,7 @@ public function attempt(array $credentials): bool; // throws StatelessGuardExcep
 public function login(AuthenticatableInterface $user): void; // throws StatelessGuardException
 public function loginById(int|string $id): ?AuthenticatableInterface; // throws StatelessGuardException
 public function logout(): void; // throws StatelessGuardException
+public function reset(): void;
 ```
 
 ### TokenGuardFactory
