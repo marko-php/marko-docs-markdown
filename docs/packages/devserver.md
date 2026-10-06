@@ -60,7 +60,25 @@ Detached mode needs the `posix` and `pcntl` PHP extensions. Without them, `marko
   - **Foreground mode**: the service fails if it exits with code 126 (not executable) or 127 (command not found) during the window. `start()` returns as soon as a service exits, so the window only delays services that keep running. A service that exits with any other code is reported as `[name] exited with code N` while the environment runs.
   - **Detached mode**: the service fails if it exits during the window for any reason, and the error includes its exit code, for example `(exited with code 127)`. Each detached service runs under a small PHP supervisor that leads the service's process group. The supervisor keeps the service's stdin open, waits for the service to exit, and records its exit code.
 
-In foreground mode, `marko up` also waits until the PHP server accepts connections before it starts streaming output. It returns as soon as the first connection succeeds. If the server exits first (for example, another process took the port after the check), it throws `Port N is already in use`. If the server neither accepts connections nor exits within 10 seconds, it throws a `DevServerException` naming the host and port.
+In foreground mode, `marko up` also waits until the PHP server accepts connections before it starts streaming output. It returns as soon as the first connection succeeds. If the server exits first, `marko up` checks the port again:
+
+- If the port is now taken (another process grabbed it after the first check), it throws `Port N is already in use`.
+- Otherwise it throws `PHP server exited with code N before accepting connections on HOST:PORT`, with the server's output in the exception context. Typical causes are an address that is not local to this machine, a syntax error in `public/index.php`, or a missing PHP extension.
+
+If the server neither accepts connections nor exits within 10 seconds, it throws a `DevServerException` naming the host and port.
+
+### Rollback on Failure
+
+`marko up` either starts the whole environment or leaves nothing running. If any step fails after the first service has started (a service that cannot start, the PHP server exiting, or the PHP server not accepting connections in time), `marko up`:
+
+1. Prints `Startup failed. Stopping the services that already started...`
+2. Removes any PID file left by an earlier run. Its processes have already been confirmed stopped.
+3. Stops every service it started, in both foreground and detached mode, with the same `SIGTERM` and `SIGKILL` escalation as `marko down`.
+4. Rethrows the original error.
+
+After a failed detached `marko up`, nothing is left running and there is no PID file, so the next `marko up` starts cleanly.
+
+If a service's process group survives `SIGKILL` during the rollback, `marko up` throws a `DevServerException` that names every surviving service and its PID, with the original failure as the previous exception and in the context. The suggestion gives the `kill -9` command to stop them.
 
 ### Checking Status
 
@@ -76,7 +94,7 @@ Shows the name, PID, status (running/stopped), port, and start time for each man
 marko open
 ```
 
-Opens the running PHP development server in your default browser. The URL is determined dynamically from the running process, so it works with custom ports (e.g. `--port=8080`). Throws a helpful error if no dev environment is running.
+Opens the running PHP development server in your default browser. The URL is built from the host and port the server was started with, so it works with custom ports (e.g. `--port=8080`) and hosts. Wildcard hosts (`0.0.0.0`, `::`) open `localhost`, and IPv6 hosts are bracketed (`http://[::1]:8000`). Throws a helpful error if no dev environment is running.
 
 ### Stopping the Environment
 
@@ -110,6 +128,17 @@ marko dev:up --port=8080
 
 Overrides the configured port for the PHP built-in server.
 
+### Changing the Host
+
+```bash
+marko up --host=0.0.0.0   # all IPv4 interfaces
+marko up --host=::1       # IPv6 loopback
+marko up --host=[::1]     # the same, bracketed
+marko up --host=::        # all IPv6 interfaces
+```
+
+Overrides the configured host (`localhost` by default). The host must be a hostname, an IPv4 address, or an IPv6 address with or without one pair of brackets. Anything else, including a bracketed hostname or a value with a port, throws `Invalid host value` before anything starts. IPv6 addresses are passed to the PHP server bracketed (`php -S [::1]:8000`).
+
 ## Configuration
 
 Publish or create `config/dev.php` in your application:
@@ -121,6 +150,7 @@ declare(strict_types=1);
 
 return [
     'port'      => 8000,
+    'host'      => 'localhost',
     'detach'    => true,
     'docker'    => true,
     'frontend'  => true,
@@ -134,6 +164,7 @@ return [
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `port` | `int` | `8000` | Port for the PHP built-in server |
+| `host` | `string` | `'localhost'` | Host for the PHP built-in server: a hostname, an IPv4 address, or an IPv6 address (`::1` or `[::1]`) |
 | `detach` | `bool` | `true` | Run services in background by default (default: true) |
 | `docker` | `true\|string\|false` | `true` | Auto-detect Docker (`true`), custom command (`string`), or disable (`false`) |
 | `frontend` | `true\|string\|false` | `true` | Auto-detect frontend (`true`), custom command (`string`), or disable (`false`) |
@@ -175,6 +206,7 @@ Flags passed to `dev:up` take precedence over config file values:
 | Flag | Description |
 |---|---|
 | `--port=N`, `-p=N` | Override the server port |
+| `--host=HOST` | Override the server host (`::1` and `[::1]` are both accepted) |
 | `--detach`, `-d` | Run in background (detached mode) |
 | `--foreground`, `-f` | Run in foreground mode (overrides detach default) |
 
@@ -264,13 +296,15 @@ $processManager->stopAll(): void;
 $processManager->getPid(string $name): ?int;
 $processManager->getPids(): array; // array<string, int>
 $processManager->isRunning(string $name): bool;
+$processManager->getExitCode(string $name): ?int;
+$processManager->collectOutput(string $name): string;
 $processManager->runForeground(): void;
 $processManager->isPortAvailable(string $host, int $port): bool;
 /** @throws DevServerException */
 $processManager->waitUntilAccepting(string $name, string $host, int $port): bool;
 ```
 
-`stop()` and `stopAll()` return only once each process and its whole process group are gone. They send `SIGTERM` to the process and its group, wait up to the stop timeout, then send `SIGKILL`. If a group survives `SIGKILL` (for example, a process stuck in uninterruptible I/O), they throw a `DevServerException` naming the PID. The stop timeout defaults to 3 seconds. It and the other timings are set through the constructor:
+`stop()` and `stopAll()` stop processes started with either `start()` or `startDetached()`. `stopAll()` signals the newest process first. Both return only once each process and its whole process group are gone. They send `SIGTERM` to the process and its group, wait up to the stop timeout, then send `SIGKILL`. If a group survives `SIGKILL` (for example, a process stuck in uninterruptible I/O), they throw a `DevServerException` naming the PID. Processes that did stop are released either way, and the survivors stay in `getPids()`. The stop timeout defaults to 3 seconds. It and the other timings are set through the constructor:
 
 ```php
 use Marko\DevServer\Process\ProcessManager;
@@ -287,7 +321,9 @@ $processManager = new ProcessManager(
 `start()` and `startDetached()` first look up the command's executable and throw a `DevServerException` if it is missing or not executable. Nothing is spawned in that case. They then watch the new process for `startProbeSeconds` (default 0.5 seconds):
 
 - `start()` throws if the process exits with code 126 or 127 in that window, and returns as soon as the process exits.
-- `startDetached()` throws if the process exits for any reason in that window, and includes the exit code in the message. A process that keeps running is only reported once the full window has passed.
+- `startDetached()` throws if the process exits for any reason in that window, and includes the exit code in the message. Before it throws, it stops anything the command left running in its process group. A process that keeps running is only reported once the full window has passed.
+
+`getExitCode()` returns the exit code of a process started with `start()`, or `null` while it is still running or when the name is unknown. `collectOutput()` returns the stdout and stderr the process has written that `runForeground()` has not streamed yet. Call it before `stop()`, which closes the pipes.
 
 `statusDirectory` defaults to the system temp directory. `startDetached()` removes its status files when the probe window ends.
 
@@ -323,8 +359,26 @@ readonly class ProcessEntry
         public string $command,
         public int $port,
         public string $startedAt,
+        public ?string $host = null,
     ) {}
 }
+```
+
+`host` is set on the `php` entry (unbracketed for IPv6), and `dev:open` reads it. Entries from PID files written before the host was recorded read as `null`, and `dev:open` falls back to `localhost`.
+
+### ServerHost
+
+Validates and normalizes the PHP server host.
+
+```php
+use Marko\DevServer\Process\ServerHost;
+
+$host = ServerHost::fromString('[::1]'); // throws DevServerException::invalidHost() for anything else
+$host->address;      // '::1' — unbracketed, for isPortAvailable() and waitUntilAccepting()
+$host->forUri();     // '[::1]' — for php -S and URLs
+$host->forBrowser(); // '[::1]'; 'localhost' for 0.0.0.0 and ::
+
+ServerHost::formatForUri('::1'); // '[::1]'
 ```
 
 ### DevServerException
@@ -335,3 +389,6 @@ Extends `MarkoException` with contextual error messages and suggestions:
 - `processFailedToStop(string $name, int $pid)` --- thrown when a process group survives `SIGKILL`.
 - `portInUse(int $port)` --- thrown when the PHP server port is already in use. Suggests using `--port=XXXX` to pick a different port.
 - `serverNotReady(string $host, int $port, float $timeoutSeconds)` --- thrown when the PHP server neither accepts connections nor exits within the timeout.
+- `serverExited(string $host, int $port, ?int $exitCode, string $output)` --- thrown in foreground mode when the PHP server exits before it accepts a connection and the port is still free. The message includes the exit code, and the context includes the server's output.
+- `invalidHost(string $host)` --- thrown when `--host` or `dev.host` is not a hostname, an IPv4 address, or an IPv6 address with or without one pair of brackets.
+- `rollbackFailed(Throwable $original, array $survivors)` --- thrown when `marko up` fails and some of the services it already started survive `SIGKILL`. Names each survivor and its PID, includes the `kill -9` command to stop them, and keeps `$original` as the previous exception.
