@@ -175,7 +175,17 @@ class User implements AuthenticatableInterface
 
 ## Guards
 
-Guards define how users are authenticated. `AuthManager::guard($name)` builds the guard configured under `authentication.guards.{name}` with its `driver`, and caches it for the rest of the request.
+Guards define how users are authenticated. `AuthManager::guard($name)` builds the guard configured under `authentication.guards.{name}` with its `driver`, and caches it for the rest of the request. Called without a name, it builds `authentication.default.guard`.
+
+A guard name that isn't a key of `authentication.guards` throws an `AuthException` naming the guard and listing the configured ones. A misspelt `authentication.default.guard` (or a name passed to `guard()`) never falls back to a session guard. A guard entry without a `driver` throws too:
+
+```php
+$this->authManager->guard('admni');
+// AuthException: Guard 'admni' is not defined in authentication.guards
+// Context: AuthManager was asked for guard 'admni'. Configured guards: session, token
+```
+
+`GuardInterface` is bound to `AuthManager::guard()` with the default name, so a bad `authentication.default.guard` fails every consumer of `GuardInterface` the same way. When routes use `#[Can]`, the [authorization boot check](/docs/packages/authorization/#cost-on-routes-without-can) catches it before the first request.
 
 ### SessionGuard
 
@@ -237,7 +247,7 @@ A stateless guard's `attempt()`, `login()`, `loginById()` and `logout()` must th
 
 ### Guard Drivers
 
-`AuthManager` builds guards through `Marko\Authentication\Guard\GuardDriverRegistry`, a singleton that maps driver names to factories. It checks the registry first, then the built-in `session` driver. Any other driver name throws an `AuthException` that lists the drivers available.
+`AuthManager` builds guards through `Marko\Authentication\Guard\GuardDriverRegistry`, a singleton that maps driver names to factories. Every guard entry must set `driver`; a missing, empty or non-string `driver` throws an `AuthException` naming the guard (there is no implicit `session` default). It checks the registry first, then the built-in `session` driver. Any other driver name throws an `AuthException` that lists the drivers available.
 
 Register a driver from your module's `boot` callback. The factory receives the guard name, that guard's config array and the user provider, and must return a guard whose `getName()` is the guard name (`AuthManager` throws otherwise). Resolve heavy dependencies inside the factory so booting stays cheap:
 
@@ -626,7 +636,7 @@ public function logout(): void;
 public function reset(): void;
 ```
 
-`AuthManager` implements `ResettableInterface`: `reset()` clears the per-request state (the resolved user) of every guard it has built or been given, so a long-running worker never serves one request with the previous request's user. `useGuard()` puts a guard instance in place for a guard name, replacing any guard already built for it; `guard($name)` returns it from then on. The [marko/testing](/docs/packages/testing/) HTTP test client's `actingAs()` uses it to authenticate a user without a login request.
+`AuthManager` implements `ResettableInterface`: `reset()` clears the per-request state (the resolved user) of every guard it has built or been given, so a long-running worker never serves one request with the previous request's user. `useGuard()` puts a guard instance in place for a guard name, replacing any guard already built for it; `guard($name)` returns it from then on, even for a name that isn't in `authentication.guards`. The [marko/testing](/docs/packages/testing/) HTTP test client's `actingAs()` uses it to authenticate a user without a login request.
 
 ### GuardInterface
 
