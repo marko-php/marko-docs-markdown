@@ -157,8 +157,17 @@ A route with `#[Can]` needs the full stack:
 - An authentication guard: `authorization.default_guard`, or the authentication default guard when that value is `null`, must name a guard defined under `authentication.guards`.
 - A `UserProviderInterface` binding, so the guard can load the logged-in user.
 - A session driver (such as `marko/session-file` or `marko/session-database`) when that guard is a session guard.
+- A `TokenRepositoryInterface` binding when that guard is the `token` guard from [`marko/authentication-token`](/docs/packages/authentication-token/).
 
-Misconfiguration therefore surfaces on the first request to a `#[Can]` route, not on every request: that request fails with the container or config error that names what is missing, while routes without `#[Can]` keep working. A failed build is not cached, so the next `#[Can]` request tries again. The Gate and guard are built once per middleware instance, so a long-running worker builds them on its first `#[Can]` request and reuses them after that.
+The middleware never needs this stack for routes without `#[Can]`, but the boot checks it when any route uses `#[Can]`, so a broken setup fails before the first user reaches the route:
+
+- **Live boots** (the `development` environment, or no discovery cache): after every module's `boot` callback has run, `marko/authorization` lists the routes that carry `#[Can]` and keep `AuthorizationMiddleware`. If there are any, it builds the guard once. When that fails, the boot throws `Marko\Authorization\Exceptions\AuthorizationConfigurationException`. Its message names the guard and the underlying error, its context lists up to five `#[Can]` routes, and the original exception is kept as `getPrevious()`. The check runs after all boot callbacks (on the core `ApplicationBooted` event), so a guard driver that any module registers in its `boot` callback is already there.
+- **`marko discovery:cache`**: the command always boots live, so it fails with the same exception and writes no cache. A broken setup never reaches a cached deploy.
+- **Cached boots** (production, from the discovery cache) skip the check entirely: no route reflection, no guard. Under PHP-FPM every request is a boot, so the check would otherwise put back the per-request cost that lazy building avoids. The cache was compiled by a live boot that passed the check.
+
+The check is skipped when no route uses `#[Can]`, and for a `#[Can]` route that excludes `AuthorizationMiddleware` with `#[WithoutMiddleware]`. Apps that use the Gate only from services or commands still boot without any authentication configuration. Every live boot runs the check, CLI commands included, so in development a broken setup also stops commands such as `marko discovery:clear` until it is fixed.
+
+What remains at request time: the Gate is still built lazily on the first `#[Can]` request, so a guard swapped in after boot (as the HTTP test client's `actingAs()` does) is the one it authorizes with. If the environment changes after the cache was compiled (for example a binding that now fails), a cached boot doesn't notice. The first request to a `#[Can]` route then fails with the container or config error that names what is missing, while routes without `#[Can]` keep working. A failed build is not cached, so the next `#[Can]` request tries again. The Gate and guard are built once per middleware instance, so a long-running worker builds them on its first `#[Can]` request and reuses them after that.
 
 #### Class-Level `#[Can]`
 
@@ -334,10 +343,16 @@ class AuthorizationMiddleware implements MiddlewareInterface
      * @param Closure(): GateInterface $gate
      * @param Closure(): GuardInterface $guard
      */
-    public function __construct(Closure $gate, Closure $guard);
+    public function __construct(
+        Closure $gate,
+        Closure $guard,
+        CanAttributeReader $canAttributeReader = new CanAttributeReader(),
+    );
     public function handle(Request $request, callable $next): Response;
 }
 ```
+
+`Marko\Authorization\Routing\CanAttributeReader::read(string $controller, string $action): ?Can` returns the `#[Can]` that protects an action (the method's, else the class's). The middleware and the boot check share it.
 
 ### AuthorizationException
 
@@ -374,5 +389,17 @@ class PolicyException extends MarkoException
 {
     public static function duplicatePolicy(string $entityClass, string $policyClass, string $existing): self;
     public static function missingMethod(string $policyClass, string $ability): self;
+}
+```
+
+### AuthorizationConfigurationException
+
+Thrown at boot when routes use `#[Can]` but the guard can't be built (see [Cost on Routes Without `#[Can]`](#cost-on-routes-without-can)). It is not an HTTP exception.
+
+```php
+class AuthorizationConfigurationException extends MarkoException
+{
+    /** @param array<int, string> $canRoutes "controller::action" keys */
+    public static function cannotBuildForCan(?string $guard, array $canRoutes, Throwable $previous): self;
 }
 ```

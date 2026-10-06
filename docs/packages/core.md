@@ -132,6 +132,34 @@ return [
 ];
 ```
 
+Boot callbacks run in module load order. A callback can't see what a module that boots later sets up in its own `boot` callback. To check the finished setup, observe `Marko\Core\Event\ApplicationBooted`. `Application` dispatches it once per boot, on live and cached boots, after every `boot` callback has run:
+
+```php
+use Marko\Core\Attributes\Observer;
+use Marko\Core\Discovery\CachedDiscovery;
+use Marko\Core\Event\ApplicationBooted;
+
+#[Observer(event: ApplicationBooted::class)]
+readonly class CheckWidgetSetup
+{
+    public function __construct(
+        private CachedDiscovery $cachedDiscovery,
+    ) {}
+
+    public function handle(
+        ApplicationBooted $event,
+    ): void {
+        if ($this->cachedDiscovery->isCached()) {
+            return; // checked when the discovery cache was compiled
+        }
+
+        // validate, and throw a MarkoException naming what is missing
+    }
+}
+```
+
+Under PHP-FPM every request is a boot, so keep these observers cheap. `marko/authorization` uses this event to [check `#[Can]` routes at boot](/docs/packages/authorization/#cost-on-routes-without-can).
+
 ### Application Environment
 
 `AppEnvironment` is the single answer to "which environment is this application running in?". `Application` registers one shared instance in the container at boot, so any class or boot callback can type-hint it:
@@ -605,6 +633,8 @@ interface EventDispatcherInterface
     public function dispatch(Event $event): void;
 }
 ```
+
+`Marko\Core\Event\ApplicationBooted` is the one event core dispatches itself: once per boot, after every module `boot` callback. It carries no data. See [Creating Modules](#creating-modules).
 
 ### MarkoException
 
