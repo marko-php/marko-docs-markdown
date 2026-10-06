@@ -355,8 +355,53 @@ The client builds a `Marko\Routing\Http\Request` the way PHP would for a real re
 The client behaves like a browser, so what you set stays set for later requests on the same client:
 
 - `withHeaders(array)` / `withHeader($name, $value)`: sent with every later request. Headers passed to one call win for that call only.
-- **Cookie jar**: cookies a response sets are stored and sent back with the next request (as request cookies and a `Cookie` header). A cookie the response expires is dropped. Session-backed flows such as a form login followed by a protected page, or a CSRF token round trip, just work. `withCookie($name, $value)` and `withCookies(array)` add cookies, `withoutCookies()` empties the jar, and `cookies()` returns it. Cookies are keyed by name; domain and path are not matched.
-- `withFile($field, $path, ?$clientFilename = null, ?$clientMediaType = null)`: uploads a copy of the file with the **next** request as a `Marko\Routing\Http\UploadedFile` (multipart). The original file is never moved. A missing file throws `TestClientException`.
+- **Cookie jar**: cookies a response sets are stored and sent back with later requests (as request cookies and a `Cookie` header). Session-backed flows such as a form login followed by a protected page, or a CSRF token round trip, just work. `withCookie()` and `withCookies(array)` add cookies, and `withoutCookies()` empties the jar. The jar scopes cookies the way a browser does; see [Cookie scope](#cookie-scope).
+- `withFile($field, $path, ?$clientFilename = null, ?$clientMediaType = null)`: uploads a copy of the file with the **next** request as a `Marko\Routing\Http\UploadedFile` (multipart). The original file is never moved. A missing file throws `TestClientException`. `$field` uses form notation, so one request can carry several files; see [File uploads](#file-uploads).
+
+### File uploads
+
+Name the field the way an HTML form would. The controller gets the same nested shape PHP builds from `$_FILES`:
+
+```php title="tests/Feature/GalleryTest.php"
+$client
+    ->withFile('photos[]', __DIR__ . '/fixtures/beach.jpg')
+    ->withFile('photos[]', __DIR__ . '/fixtures/sunset.jpg')
+    ->withFile('documents[passport]', __DIR__ . '/fixtures/passport.pdf')
+    ->post('/gallery')
+    ->assertOk();
+
+// In the controller:
+$request->files('photos');               // [UploadedFile (beach.jpg), UploadedFile (sunset.jpg)], in order
+$request->file('documents.passport');    // UploadedFile (passport.pdf)
+```
+
+- `photos[]` adds one more file to the `photos` list. `documents[passport]` nests the file under `documents`. Fields can nest further, e.g. `gallery[photos][]`.
+- `withFiles('photos', [$first, $second])` sends a list of files in one call. It does the same as one `withFile('photos[]', ...)` per path.
+- A plain field such as `avatar` holds one file. Calling `withFile('avatar', ...)` twice throws `TestClientException` instead of dropping the first file. Using one name in two shapes also throws: a single file and a list (`photos` and `photos[]`), or a single file and nested fields. So does a malformed name such as `photos[`.
+
+### Cookie scope
+
+The jar follows RFC 6265, so a test can't pass by sending a cookie that a browser would keep back:
+
+- **Path**: a cookie set with `Path=/admin` is sent to `/admin` and `/admin/users`, but not to `/api` or `/administrator`. A cookie set without `Path` gets the directory of the request that set it: a cookie set by `/account/login` gets `/account`.
+- **Domain**: requests go to `localhost` unless the URI is a full URL (`http://shop.test/cart`). A cookie set without `Domain` is sent back only to the exact host that set it. One set with `Domain=shop.test` is also sent to its subdomains. A response that sets a `Domain` that doesn't cover the request host is ignored, as a browser would ignore it.
+- **Secure**: a `Secure` cookie is sent only over HTTPS: an `https://` URL, or `withServerVariables(['HTTPS' => 'on'])`.
+- **Same name**: cookies are stored per name, domain and path, so `token` on `/admin` and `token` on `/api` are separate cookies. A request that matches both gets both in its `Cookie` header, the more specific path first, and `$request->cookie('token')` returns that first one, as PHP does. When a response expires a cookie, only the cookie with that name, domain and path is removed.
+
+`withCookie($name, $value, $path = '/', ?$domain = null, $secure = false)` adds a cookie that is sent to every host unless you pass `$domain`. A response that sets or expires a cookie with the same name and path replaces it. `cookies()` returns the cookies whose path is `/` (whatever their host or `Secure` flag) as name => value pairs. `cookieJar()` returns every cookie as a `Marko\Testing\Http\JarCookie`, with its `name`, `value`, `domain`, `path`, `secure` and `hostOnly` properties:
+
+```php title="tests/Feature/AdminTest.php"
+$client->post('/admin/login', ['email' => 'admin@example.com', 'password' => 'secret']);
+
+$client->get('/admin/dashboard')->assertOk();
+$client->get('/api/me')->assertStatus(401); // the /admin cookie is not sent here
+
+expect($client->cookieJar()[0]->path)->toBe('/admin');
+```
+
+:::caution
+`marko/session` sets `cookie.secure` to `true` by default, so the session cookie is `Secure`. Over plain `http://` test requests that cookie is not sent back, and a login doesn't carry over to the next request. Either request `https://` URLs (`$client->get('https://localhost/dashboard')`), set `withServerVariables(['HTTPS' => 'on'])` on the client, or set `'secure' => false` under `cookie` in your test environment's session config.
+:::
 
 ### Acting as a user
 
@@ -786,11 +831,13 @@ public function application(): Application;
 public function withHeaders(array $headers): static;
 public function withHeader(string $name, string $value): static;
 public function withServerVariables(array $variables): static;
-public function withCookie(string $name, string $value): static;
+public function withCookie(string $name, string $value, string $path = '/', ?string $domain = null, bool $secure = false): static;
 public function withCookies(array $cookies): static;
 public function withoutCookies(): static;
 public function cookies(): array;
+public function cookieJar(): array; // list<JarCookie>
 public function withFile(string $field, string $path, ?string $clientFilename = null, ?string $clientMediaType = null): static;
+public function withFiles(string $field, array $paths): static;
 public function actingAs(AuthenticatableInterface $user, ?string $guard = null): static;
 public function withoutResetting(ResettableInterface ...$services): static;
 public function get(string $uri, array $query = [], array $headers = []): TestResponse;
@@ -807,6 +854,18 @@ public function patchJson(string $uri, array $data = [], array $headers = []): T
 public function deleteJson(string $uri, array $data = [], array $headers = []): TestResponse;
 public function json(string $method, string $uri, array $data = [], array $headers = []): TestResponse;
 public function call(string $method, string $uri, array $data = [], array $headers = [], ?string $body = null): TestResponse;
+```
+
+### JarCookie
+
+```php
+public string $name;
+public string $value;
+public ?string $domain; // null: added with withCookie() without a domain, sent to any host
+public string $path;
+public bool $secure;
+public bool $hostOnly;  // set without a Domain attribute: sent to $domain exactly, not its subdomains
+public function matches(string $host, string $path, bool $secure): bool;
 ```
 
 ### TestResponse
