@@ -749,7 +749,17 @@ Use `getEntities()` / `firstEntity()` for typed domain objects. Drop to `get()` 
 
 #### Raw expressions
 
-Use `selectRaw` and `whereRaw` when the structured builder methods cannot express the SQL you need. Both accept a raw expression string and an optional array of positional `?` bindings. A denylist rejects expressions containing `;`, `--`, `/*`, `*/`, or backticks --- use `?` placeholders for user-supplied values instead of interpolating them directly.
+Use `selectRaw` and `whereRaw` when the structured builder methods cannot express the SQL you need. Both accept a raw expression string and an optional array of positional `?` bindings. A denylist rejects expressions containing `;`, `--`, `/*`, `*/`, or backticks, plus `#` on MySQL and MariaDB, where it starts a comment. PostgreSQL allows `#` because `#`, `#>` and `#>>` are operators there.
+
+The denylist is a tripwire, not a sanitizer. It cannot see quotes, so `whereRaw("name = '$name'")` is still injectable. Always pass values as `?` bindings, in raw fragments and in `raw()`, `query()` and `execute()` alike:
+
+```php
+// Injectable: the value becomes part of the SQL
+$rows = $this->query()->whereRaw("name = '$name'")->get();
+
+// Safe: the value travels separately as a binding
+$rows = $this->query()->whereRaw('LOWER(name) = LOWER(?)', [$name])->get();
+```
 
 ```php
 // Compute a derived column inline
@@ -1641,6 +1651,8 @@ For isolating database tests (`RefreshDatabase`, `TruncateDatabase`), see [Datab
 | `marko db:rebuild` | Reset + re-run all migrations; see [Environment Behaviour](#environment-behaviour) |
 | `marko db:seed` | Run seeders (`--class=name` for one); see [Environment Behaviour](#environment-behaviour) |
 
+`db:rollback` and `db:reset` read migration names from the `migrations` table, but only run files that a scan of `database/migrations/` finds. Before any migration is reverted, each name is checked: one containing `/`, `\`, `..` or a NUL byte throws `MigrationException::invalidMigrationName()`, and one with no matching file throws `MigrationException::migrationNotFound()`. Either error stops the command before anything is rolled back.
+
 ### Environment Behaviour
 
 The commands read the environment from core's [`AppEnvironment`](/docs/packages/core/#application-environment) (`MARKO_ENV`, then `APP_ENV`). When neither is set the environment is `production`, so a deployment that forgets to set it fails safe.
@@ -1737,6 +1749,8 @@ Run db:migrate in development to generate a migration, then commit and deploy it
 `--generate` and `--no-generate` cannot be combined.
 
 Generated migration files are named `{YmdHis}_{operation}_{table}.php`, with the timestamp read from the injected `ClockInterface`. When one run generates several files, each one is a second later than the previous, so they apply in dependency order.
+
+Each statement is written as a single-quoted PHP string, `$this->execute($connection, '...');`, with quotes and backslashes escaped, so no table, column or index name read from the database can end the string and add PHP to the file. A name that holds a control character (a newline, tab, NUL or similar) is never a real schema name, so generation refuses it with a `MigrationException` naming the identifier and writes no files. Rename the object in the database and run `db:migrate` again.
 
 ### Destructive Changes
 
