@@ -47,6 +47,45 @@ Once installed, `GET /health` is available automatically. The route is registere
 
 Status values: `healthy`, `degraded`, `unhealthy`. HTTP 200 for healthy/degraded, 503 for unhealthy.
 
+The path is fixed at `/health` by the route attribute; there is no config key for it. To serve the report somewhere else, replace the controller with a [Preference](/docs/concepts/preferences/) that overrides `index()` with its own route attribute:
+
+```php title="app/ops/src/Controller/OpsHealthController.php"
+use Marko\Core\Attributes\Preference;
+use Marko\Health\Controller\HealthController;
+use Marko\Routing\Attributes\Get;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+
+#[Preference(replaces: HealthController::class)]
+readonly class OpsHealthController extends HealthController
+{
+    #[Get('/_ops/health')]
+    public function index(
+        Request $request,
+    ): Response {
+        return parent::index($request);
+    }
+}
+```
+
+### Protecting the Endpoint
+
+The endpoint is public by default. Set the `HEALTH_SECRET` environment variable (read by the shipped `health.secret` config key) to require a shared secret:
+
+```bash title=".env"
+HEALTH_SECRET=your-secret
+```
+
+With a secret set, callers must send it in the `X-Health-Secret` header or the `?secret=` query parameter (for load balancers that cannot send custom headers). The value is compared with `hash_equals()`. A request without a matching secret gets a `404`, the same response as an unknown URL, and no check runs, so an anonymous caller cannot trigger the cache and filesystem writes the built-in checks perform. `null` or an empty string leaves the endpoint public; any other non-string value throws a `HealthException`.
+
+```bash
+curl -H 'X-Health-Secret: your-secret' https://example.com/health
+```
+
+### Failure Messages
+
+The response is served to whoever can reach the endpoint, so check messages are generic (`Database connection failed`, `Cache read/write failed`, `Filesystem write/delete failed`). The underlying exception, which can name hosts, users, and paths, is kept on `HealthResult::$exception` and never serialized into the response. To log it, run the registry yourself and pass each `$result->exception` to your logger.
+
 ### Built-in Checks
 
 Register built-in checks in your `module.php` bindings. Each check requires its corresponding interface:
@@ -105,14 +144,17 @@ readonly class RedisHealthCheck implements HealthCheckInterface
             return new HealthResult(
                 name: $this->getName(),
                 status: HealthStatus::Unhealthy,
-                message: $e->getMessage(),
+                message: 'Redis connection failed',
                 metadata: [],
                 duration: $duration,
+                exception: $e,
             );
         }
     }
 }
 ```
+
+Keep `message` generic: it is served in the response. Pass the exception as `exception` instead; it stays on the result and is never serialized.
 
 Register it in your `module.php`:
 
@@ -162,6 +204,7 @@ public HealthStatus $status;
 public string $message;
 public array $metadata;
 public float $duration;
+public ?Throwable $exception; // optional, defaults to null; never serialized
 
 public function isHealthy(): bool;
 public function isDegraded(): bool;
