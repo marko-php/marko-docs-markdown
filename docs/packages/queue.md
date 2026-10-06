@@ -102,7 +102,18 @@ class DeliverPartnerWebhook extends Job
 }
 ```
 
-Declare the property with exactly the type `array|int|null`, since PHP requires a redeclared property to keep its parent's type. A negative delay, an empty list, or a list with non-int entries throws `QueueException` when the worker computes the delay.
+Declare the property with exactly the type `array|int|null`, since PHP requires a redeclared property to keep its parent's type.
+
+#### Invalid Backoff Values
+
+A negative delay, an empty or keyed array, or a list with a negative or non-int entry is invalid. What happens depends on where it is set:
+
+- **`queue.backoff` config**: `queue:work` checks it before it starts. It refuses to start, prints the `Invalid queue backoff in config queue.backoff.` error with the reason, and exits with code `1`, so the mistake shows up at deploy rather than when the first job fails.
+- **A job's `backoff` property**: the worker only reads it when that job fails with attempts left. It can't release the job without a valid delay, so it fails the job instead: the job goes to the failed job repository with both its own exception and the `Invalid queue backoff in job ...` error, is deleted from the queue, and the worker moves on to the next job. One bad job class can't stop your workers, and the job's real error isn't lost.
+
+The failed job's payload keeps the `backoff` value it was dispatched with. `marko queue:retry <id>` runs it again with that same value: fine if it succeeds, but if it throws again it goes straight back to the failed jobs. After fixing the property, dispatch the job again so the new value applies.
+
+On a job's last attempt the backoff isn't read, so an invalid value there doesn't add a backoff error to the failed job. `Worker::backoffFor()` itself still throws `QueueException` for an invalid value.
 
 ### Jobs That Need Container Services
 
@@ -382,7 +393,7 @@ public function connection(): string;
 public function queue(): string;
 public function retryAfter(): int;
 public function maxAttempts(): int;
-public function backoff(): array|int|null; // int, list<int>, or null
+public function backoff(): array|int|null; // int, list<int>, or null; throws QueueException when invalid
 ```
 
 ### ContainerAwareJobInterface
