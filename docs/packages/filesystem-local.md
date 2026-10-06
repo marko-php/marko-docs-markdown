@@ -135,7 +135,7 @@ Implements all methods from `FilesystemInterface`. See [`marko/filesystem`](/doc
 | `info(string $path): FileInfo` | Get full file metadata (size, MIME type, visibility, last modified) |
 | `listDirectory(string $path = '/'): DirectoryListingInterface` | List directory entries |
 | `makeDirectory(string $path): bool` | Create a directory recursively |
-| `deleteDirectory(string $path): bool` | Delete a directory and all its contents |
+| `deleteDirectory(string $path): bool` | Delete a directory and all its contents (symlinks inside are removed as links, never followed; the disk root itself is refused) |
 | `setVisibility(string $path, string $visibility): bool` | Set file or directory permissions |
 | `visibility(string $path): string` | Get current visibility (`public` or `private`) |
 
@@ -143,6 +143,8 @@ Implements all methods from `FilesystemInterface`. See [`marko/filesystem`](/doc
 
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption.
 - Paths containing `../` are rejected with a `PathException` to prevent directory traversal.
+- Paths that resolve through a symbolic link to a location outside the disk root are rejected with a `PathException`. Paths that do not exist yet are checked against the deepest directory that does.
+- `deleteDirectory()` refuses any path that resolves to the disk root (`''`, `'/'`, `'.'`) with a `PathException`, and removes symbolic links it encounters without recursing into their targets.
 - Missing parent directories are created automatically on write, copy, and move operations.
 - MIME type detection uses `finfo_open(FILEINFO_MIME_TYPE)`, falling back to `application/octet-stream`.
 - Visibility is determined by checking the world-readable bit on the file's permissions.

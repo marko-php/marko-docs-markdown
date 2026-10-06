@@ -63,7 +63,39 @@ class ProductController
 }
 ```
 
-Route parameters, POST body values, and query string values are automatically resolved and passed to method arguments. Typed scalar parameters (`int`, `float`, `bool`, `string`) are cast to the declared type. If a required typed scalar parameter cannot be found in the route, POST body, or query string, the router returns a `400` response (via `InvalidRouteParameterException`) instead of throwing a `TypeError`.
+### Binding Request Input
+
+Controller method arguments are bound from the route path, a `Request` type hint, and the container (for class and interface types). Request input --- the query string and the body --- reaches a parameter only when it opts in with an attribute:
+
+| Attribute | Reads from |
+|---|---|
+| `#[FromQuery]` | The query string |
+| `#[FromBody]` | The JSON body for JSON requests, form data otherwise. Never the query string |
+| `#[FromInput]` | The body, falling back to the query string (the same lookup as `Request::input()`) |
+
+```php
+use Marko\Routing\Attributes\FromBody;
+use Marko\Routing\Attributes\FromQuery;
+
+#[Get('/shows/{id}/export')]
+public function export(
+    int $id,                                  // route path
+    #[FromQuery] bool $includeDeleted = false, // ?includeDeleted=1
+    #[FromQuery('per_page')] int $perPage = 25, // read a differently named key
+): Response {
+    // ...
+}
+
+#[Post('/shows')]
+public function store(#[FromBody] string $title): Response
+{
+    // ...
+}
+```
+
+A parameter without an attribute keeps its default value even when the request carries a field of the same name, so `?includeDeleted=1` cannot switch on an option the controller never exposed. A required scalar that is neither a route parameter nor attributed is a programming error: the router throws `RouteException` naming the parameter.
+
+Values are converted strictly to the declared type. `int` and `float` use `FILTER_VALIDATE_INT` and `FILTER_VALIDATE_FLOAT`; `bool` uses `FILTER_VALIDATE_BOOL`, so `"1"`, `"true"`, `"on"` and `"yes"` are `true` and `"0"`, `"false"`, `"off"` and `"no"` are `false`; `string` and `array` accept only strings (or JSON numbers) and arrays. A value that does not fit --- `?page=abc` for an `int`, `?name[]=x` for a `string` --- is answered with a `400` (`HttpException::badRequest()`), never a `TypeError`. Route path values are converted the same way, so `/shows/abc` for `int $id` is a `400` too. A required attributed parameter the request does not carry is a `400` via `InvalidRouteParameterException`; an optional one keeps its default.
 
 ### Available Methods
 
@@ -400,11 +432,11 @@ public function store(Request $request): Response
 }
 ```
 
-JSON fields also bind straight to typed controller parameters, the same way form fields do:
+JSON fields bind to controller parameters marked `#[FromBody]` (or `#[FromInput]`), the same way form fields do:
 
 ```php
 #[Post('/api/shows')]
-public function create(string $title, int $count): Response
+public function create(#[FromBody] string $title, #[FromBody] int $count): Response
 {
     // POST {"title": "Live at Five", "count": 7}
     return Response::json(['title' => $title, 'count' => $count], 201);
@@ -915,4 +947,4 @@ protected function renderHtml(int $statusCode, array $data): Response;
 
 ### Parameter Resolution
 
-The router resolves controller method parameters in priority order: route path params → request body (the JSON body for JSON requests, form data otherwise, via `Request::input()`) → query string → default value. Typed scalars (`int`, `float`, `bool`, `string`) are automatically cast. A required typed scalar with no matching source throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; both implement `HttpExceptionInterface` and the pipeline renders them as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
+The router binds each controller method parameter from, in order: a `Request` type hint → an input attribute (`#[FromQuery]`, `#[FromBody]`, `#[FromInput]`) → a route path param of the same name → the container, for class and interface types → the default value → `null` for a nullable type. Request input never binds a parameter without an attribute (see [Binding Request Input](#binding-request-input)). Values are converted strictly to `int`, `float`, `bool`, `string` or `array`, and a value that does not fit renders a `400`. A required attributed parameter with no value throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; both implement `HttpExceptionInterface` and the pipeline renders them as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.

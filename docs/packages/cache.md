@@ -216,3 +216,18 @@ public function defaultTtl(): int;
 | `CacheException` | Base exception for all cache errors --- includes `getContext()` and `getSuggestion()` methods |
 | `InvalidKeyException` | Thrown when a cache key is empty or contains reserved characters |
 | `ItemNotFoundException` | Thrown when a requested cache item does not exist |
+| `TamperedCacheValueException` | Thrown when `encryption.key` is empty, so cache values can't be signed or verified. The Redis driver also throws it when a stored value's HMAC does not verify |
+
+### CacheValueSigner
+
+`Marko\Cache\Signer\CacheValueSigner` signs serialized cache payloads with HMAC-SHA256 using `encryption.key` from [`marko/encryption`](/docs/packages/encryption/). Drivers that persist values outside the PHP process (`marko/cache-file`, `marko/cache-redis`) use it so `unserialize()` only ever sees bytes the application wrote itself. The envelope format is `{64-char-hex-hmac}.{serialized-payload}`.
+
+```php
+use Marko\Cache\Signer\CacheValueSigner;
+
+public function wrap(string $serialized): string;            // sign a payload
+public function unwrap(string $envelope): ?string;           // null when unsigned, malformed or tampered
+public function verifyAndUnwrap(string $envelope): string;   // throws TamperedCacheValueException instead of returning null
+```
+
+Every method throws `TamperedCacheValueException::emptySigningKey()` when `encryption.key` is empty.

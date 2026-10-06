@@ -13,7 +13,7 @@ Implements `CacheInterface` from [`marko/cache`](/docs/packages/cache/).
 composer require marko/cache-redis
 ```
 
-This automatically installs `marko/cache`, `predis/predis`, and [`marko/encryption`](/docs/packages/encryption/). A non-empty `encryption.key` is required; reads and writes throw `TamperedCacheValueException` if the key is empty or a stored value's HMAC does not verify.
+This automatically installs `marko/cache`, `predis/predis`, and [`marko/encryption`](/docs/packages/encryption/). A non-empty `encryption.key` is required; reads and writes throw `Marko\Cache\Exceptions\TamperedCacheValueException` if the key is empty or a stored value's HMAC does not verify. Values are signed by the shared [`CacheValueSigner`](/docs/packages/cache/#cachevaluesigner) from `marko/cache`.
 
 ```php title="config/encryption.php"
 use Marko\Config\Env;

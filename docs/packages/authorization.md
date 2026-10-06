@@ -148,6 +148,18 @@ The middleware checks authentication with the same guard the Gate uses, so the g
 
 Don't also list `AuthorizationMiddleware` in a route's `middleware` array. It already runs globally, so it would only check the same ability a second time.
 
+#### API Token Abilities
+
+When the authorization guard implements `Marko\Authentication\Contracts\AbilityScopedGuardInterface`, as the [token guard](/docs/packages/authentication-token/#checking-token-abilities) does, the Gate also asks the guard whether the credential grants the ability. For an authenticated user, `allows()`, `denies()`, `authorize()` and `#[Can]` deny any ability the token does not grant, before any gate closure or policy runs. A token can only narrow its user's authority, never widen it:
+
+```php
+// Token issued with abilities: ['posts:read']
+$gate->allows('posts:read');   // true, if the closure or policy also allows it
+$gate->allows('posts:delete'); // false, whatever the closure or policy says
+```
+
+A token issued with no abilities (`[]`) or with `'*'` grants every ability, so only the closure or policy decides. Guests are unaffected: closures and policies that allow a `null` user still run. Session guards do not implement the interface, so nothing changes for them.
+
 #### Cost on Routes Without `#[Can]`
 
 The middleware builds the Gate and the guard lazily, the first time it sees a route with `#[Can]`. For a route without `#[Can]`, and for a request that matches no route (`404`/`405`), `AuthorizationMiddleware` never resolves the Gate, the `AuthManager`, the guard or the authorization config. Those requests cost one cached attribute lookup, and they work even when authentication isn't configured. You can install `marko/authorization` just to call the Gate from a CLI command or a service without setting up the authentication stack. (An installed session driver still runs its own `SessionMiddleware` on every request; that is independent of `#[Can]`.)

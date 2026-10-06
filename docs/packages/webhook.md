@@ -37,6 +37,10 @@ The `timestamp_tolerance` controls replay-attack protection for inbound webhooks
 
 `allow_http` is read by the [webhook URL policy](#outgoing-url-policy). Leave it `false` in production so payloads and signatures are never sent in clear text; set it to `true` only for local development against a plain-HTTP receiver.
 
+### Shared secrets
+
+The shared secret must be at least `WebhookSecret::MIN_LENGTH` (16) bytes. `WebhookSignature::sign()`, `WebhookVerifier::verify()` and `WebhookReceiver::receive()` throw an `InvalidWebhookSecretException` for an empty or shorter secret instead of signing or verifying with it, because an HMAC keyed with an empty secret can be computed by anyone. This catches the common case of a secret read from an environment variable that is not set. Generate secrets with something like `bin2hex(random_bytes(32))`.
+
 ## Usage
 
 ### Sending Webhooks
@@ -322,7 +326,7 @@ UnsafeWebhookUrlException::disallowedAddress(string $url, string $host, string $
 use Marko\Routing\Http\Request;
 use Marko\Webhook\Receiving\WebhookReceiver;
 
-// @throws InvalidSignatureException
+// @throws InvalidSignatureException|InvalidWebhookSecretException
 public function receive(Request $request, string $secret): array;
 ```
 
@@ -331,6 +335,7 @@ public function receive(Request $request, string $secret): array;
 ```php
 use Marko\Webhook\Receiving\WebhookVerifier;
 
+// @throws InvalidWebhookSecretException when $secret is shorter than WebhookSecret::MIN_LENGTH
 public function verify(string $body, string $timestamp, string $signature, string $secret, int $tolerance): bool;
 ```
 
@@ -340,6 +345,7 @@ public function verify(string $body, string $timestamp, string $signature, strin
 use Marko\Webhook\Sending\WebhookSignature;
 
 // Returns "sha256={hash}"; message is "{timestamp}.{payload}"
+// @throws InvalidWebhookSecretException when $secret is shorter than WebhookSecret::MIN_LENGTH
 public static function sign(string $payload, string $secret, int $timestamp): string;
 ```
 
@@ -408,6 +414,21 @@ InvalidSignatureException::staleTimestamp(int $timestamp, int $tolerance);
 
 // Thrown when the HMAC signature does not match
 InvalidSignatureException::forRequest();
+```
+
+### InvalidWebhookSecretException
+
+```php
+use Marko\Webhook\Exceptions\InvalidWebhookSecretException;
+use Marko\Webhook\WebhookSecret;
+
+WebhookSecret::MIN_LENGTH; // 16 bytes
+
+// Thrown when signing or verifying with an empty secret
+InvalidWebhookSecretException::empty();
+
+// Thrown when the secret is shorter than WebhookSecret::MIN_LENGTH bytes
+InvalidWebhookSecretException::tooShort(int $length);
 ```
 
 ### Interfaces
