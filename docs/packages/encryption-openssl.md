@@ -78,7 +78,7 @@ try {
 }
 ```
 
-An `EncryptionException` is thrown at construction time if the key is missing or invalid, if the configured cipher is not recognized by OpenSSL (`EncryptionException::invalidCipher()`), or if the cipher is recognized but is not an AEAD mode (`EncryptionException::nonAeadCipher()`). Only AEAD ciphers (those ending in `-gcm` or `-ccm`) are accepted; the default `aes-256-gcm` satisfies this requirement. An `EncryptionException` is also thrown during `encrypt()` if the OpenSSL operation fails. A `DecryptionException` is thrown for malformed payloads, corrupted data, or key mismatches.
+An `EncryptionException` is thrown at construction time if the key is missing or invalid, if the configured cipher is not recognized by OpenSSL (`EncryptionException::invalidCipher()`), or if the cipher is recognized but is not an AEAD mode (`EncryptionException::nonAeadCipher()`). Only AEAD ciphers (those ending in `-gcm` or `-ccm`) are accepted; the default `aes-256-gcm` satisfies this requirement. An `EncryptionException` is also thrown during `encrypt()` if the OpenSSL operation fails. A `DecryptionException` is thrown for malformed payloads, corrupted data, or key mismatches. Before decrypting, the payload's IV must match the cipher's IV length (`DecryptionException::invalidIvLength()`) and its authentication tag must be the full 16 bytes (`DecryptionException::invalidTagLength()`). OpenSSL only verifies as many tag bytes as it is given, so a truncated tag would otherwise let an attacker forge ciphertext by brute-forcing a few tag bytes.
 
 ## Customization
 
@@ -118,4 +118,4 @@ The encrypted output is a base64-encoded JSON object containing three fields:
 
 - `iv` --- Base64-encoded initialization vector (random per encryption)
 - `value` --- Base64-encoded ciphertext
-- `tag` --- Base64-encoded GCM authentication tag
+- `tag` --- Base64-encoded GCM authentication tag (always 16 bytes; shorter tags are rejected)
