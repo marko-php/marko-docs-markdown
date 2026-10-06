@@ -664,11 +664,9 @@ The `ApiResponse` class provides these factory methods:
 |---|---|---|
 | `ApiResponse::success()` | 200 | Successful read/update |
 | `ApiResponse::created()` | 201 | Resource created |
-| `ApiResponse::error()` | 400 (configurable) | Validation or client errors |
 | `ApiResponse::paginated()` | 200 | Paginated list responses |
-| `ApiResponse::notFound()` | 404 | Resource not found |
-| `ApiResponse::forbidden()` | 403 | Permission denied |
-| `ApiResponse::unauthorized()` | 401 | Not authenticated |
+
+For errors, throw an `HttpException` instead (for example `throw HttpException::notFound('Post not found.');`). The routing pipeline renders it as `{"message": ...}`, the same shape the admin auth middleware uses for its `401` and `403` responses. See [Errors and HTTP Exceptions](/docs/packages/routing/#errors-and-http-exceptions).
 
 ## Step 11: Manage Roles and Permissions
 

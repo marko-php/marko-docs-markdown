@@ -3,7 +3,7 @@ title: marko/admin-api
 description: Authenticated JSON endpoints for the admin panel --- exposes sections, menu items, and current user data for headless or SPA-based admin clients.
 ---
 
-Authenticated JSON endpoints for the admin panel --- exposes admin sections, menu items, and current user data for headless or SPA-based admin clients. Controller responses follow a consistent `{data, meta}` / `{errors}` envelope format. Sections are filtered by user permissions, section detail includes nested menu items, and the current user endpoint returns roles and permissions. Routes are protected by `AdminAuthMiddleware`.
+Authenticated JSON endpoints for the admin panel --- exposes admin sections, menu items, and current user data for headless or SPA-based admin clients. Successful responses use a `{data, meta}` envelope; every error, whichever layer raises it, is a `{"message": ...}` body rendered by the routing [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions). Sections are filtered by user permissions, section detail includes nested menu items, and the current user endpoint returns roles and permissions. Routes are protected by `AdminAuthMiddleware`.
 
 ## Installation
 
@@ -17,19 +17,30 @@ Requires [`marko/admin`](/docs/packages/admin/) and `marko/admin-auth`.
 
 ### Available Endpoints
 
-All endpoints require admin authentication through `AdminAuthMiddleware`. An unauthenticated request whose `Accept` header asks for JSON gets a `401`; any other unauthenticated request is redirected to the admin login. A user without the required permission gets a `403`. These denials come from the middleware, not from the controllers, so they use the [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions) body rather than the `{errors}` envelope:
-
-```json
-{"message": "Unauthorized."}
-```
-
-Send `Accept: application/json` from API clients so they get the `401` rather than a redirect. See [Protecting Admin Routes](/docs/packages/admin-auth/#protecting-admin-routes).
+All endpoints require admin authentication through `AdminAuthMiddleware`. An unauthenticated request whose `Accept` header asks for JSON gets a `401`; any other unauthenticated request is redirected to the admin login. A user without the required permission gets a `403`. Send `Accept: application/json` from API clients so they get the `401` rather than a redirect. See [Protecting Admin Routes](/docs/packages/admin-auth/#protecting-admin-routes).
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/admin/api/v1/sections` | List all sections (filtered by permissions) |
 | GET | `/admin/api/v1/sections/{id}` | Section detail with menu items |
 | GET | `/admin/api/v1/me` | Current authenticated user profile |
+
+### Error Responses
+
+Every error from these endpoints has the same shape, whether the middleware denied the request, the router found no route, or a controller threw:
+
+```json
+{"message": "Section 'nope' not found"}
+```
+
+| Status | When | Body |
+|--------|------|------|
+| `401` | No authenticated user (JSON request) | `{"message": "Unauthorized."}`, plus a `WWW-Authenticate` header on a stateless guard |
+| `403` | Missing permission, or the authenticated user is not an admin user | `{"message": "Forbidden."}` |
+| `404` | Unknown section, or a section the user cannot see | `{"message": "Section 'nope' not found"}` |
+| `422` | A custom endpoint's validation fails | `{"message": "The given data was invalid.", "errors": {"field": ["..."]}}` |
+
+Read `message` for every error. Validation errors also carry `errors`, a map of field names to messages. All of these bodies come from the routing [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions). To send a different JSON error shape, override its `renderJson()` through a `#[Preference]` (see [Custom error pages](/docs/packages/routing/#custom-error-pages)); that one change covers the middleware, the router, validation and controllers together.
 
 ### List Sections
 
@@ -112,13 +123,14 @@ Response:
 
 ### Using ApiResponse in Custom Endpoints
 
-Build consistent JSON responses for your own admin API controllers:
+Return success responses with `ApiResponse` and throw [`HttpException`](/docs/packages/routing/#errors-and-http-exceptions) for errors, so your endpoints answer in the same shapes as the built-in ones:
 
 ```php
 use Marko\AdminApi\ApiResponse;
 use Marko\AdminAuth\Middleware\AdminAuthMiddleware;
 use Marko\Routing\Attributes\Get;
 use Marko\Routing\Attributes\Middleware;
+use Marko\Routing\Exceptions\HttpException;
 use Marko\Routing\Http\Response;
 
 #[Middleware(AdminAuthMiddleware::class)]
@@ -139,11 +151,8 @@ class OrderApiController
     public function show(
         int $id,
     ): Response {
-        $order = $this->findOrder($id);
-
-        if ($order === null) {
-            return ApiResponse::notFound("Order #$id not found");
-        }
+        $order = $this->findOrder($id)
+            ?? throw HttpException::notFound("Order #$id not found");
 
         return ApiResponse::success(data: [
             'id' => $order->id,
@@ -165,13 +174,11 @@ class ApiResponse
 {
     public static function success(array $data = [], array $meta = []): Response;
     public static function created(array $data = [], array $meta = []): Response;
-    public static function error(array $errors, int $statusCode = 400): Response;
     public static function paginated(array $data, int $page, int $perPage, int $total): Response;
-    public static function notFound(string $message = 'Not found'): Response;
-    public static function forbidden(string $message = 'Forbidden'): Response;
-    public static function unauthorized(string $message = 'Unauthorized'): Response;
 }
 ```
+
+`ApiResponse` builds success responses only. For errors, throw an `HttpException` (`notFound()`, `forbidden()`, `unauthorized()`, `badRequest()`, ...) from `marko/routing`.
 
 ### AdminApiConfigInterface
 
