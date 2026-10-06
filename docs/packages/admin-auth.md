@@ -11,6 +11,35 @@ Admin authentication and role-based authorization --- manages admin users, roles
 composer require marko/admin-auth
 ```
 
+Then create the tables:
+
+```bash
+marko db:migrate
+```
+
+The package ships no migration files. Its tables come from its entities, which `db:migrate` discovers in `vendor/marko/admin-auth/src/Entity` like any other module's. In development (or with `--generate`) the command generates a migration for them in `database/migrations/` and applies it; commit that file and deploy it like your own migrations. See [database](/docs/packages/database/) for how migrations are generated.
+
+| Table | Entity | Holds |
+|-------|--------|-------|
+| `roles` | `Role` | Roles and the `is_super_admin` flag (unique `slug`) |
+| `permissions` | `Permission` | Permission keys, labels and groups (unique `key`, index on `group`) |
+| `role_permissions` | `RolePermission` | Role to permission assignments (unique `role_id`, `permission_id`; index on `permission_id`) |
+| `admin_users` | `AdminUser` | Admin users (unique `email`) |
+| `admin_user_roles` | `AdminUserRole` | User to role assignments (unique `user_id`, `role_id`; index on `role_id`) |
+
+Both pivots cascade: deleting a role, permission or admin user deletes its assignment rows.
+
+:::note
+Earlier versions shipped hand-written MySQL migrations in `database/migrations/` that `db:migrate` never ran, so `admin_user_roles` was never created and the first admin login failed. If you created the tables from that SQL by hand, the entities differ from them: `role_permissions` and `admin_user_roles` have an auto-increment `id` primary key, `roles.is_super_admin` and `admin_users.is_active` are string columns (`'1'`/`'0'`) instead of `TINYINT(1)`, and the ids and timestamps use the entity column types. Add the two `id` columns yourself first, in a migration of your own:
+
+```sql
+ALTER TABLE role_permissions ADD COLUMN id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST;
+ALTER TABLE admin_user_roles ADD COLUMN id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST;
+```
+
+Then `marko db:migrate` generates and applies the remaining column changes. Review the generated migrations before you commit them.
+:::
+
 ## Usage
 
 ### Protecting Admin Routes
