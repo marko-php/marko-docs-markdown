@@ -134,8 +134,10 @@ public function register(string $url): void
 
 Hostnames are resolved through `HostResolverInterface` (bound to `DnsHostResolver`, which uses the system resolver). Bind your own resolver to use a different DNS source, or a fixed map in tests. To allow destinations the default policy rejects, for example a receiver on your private network, bind your own `WebhookUrlPolicyInterface` implementation.
 
-:::caution[DNS rebinding]
-`marko/http` has no option to pin a request to an already-resolved IP, so the HTTP client resolves the host again when it connects. The policy runs immediately before each request to keep that window small, but a hostname whose DNS answer changes between the check and the connection can still reach an internal address. If your receivers are untrusted and your network exposes sensitive internal services, also block egress to internal ranges at the network level (firewall or egress proxy).
+`validate()` returns the address the policy approved (the first one the host resolved to), and `WebhookDispatcher` pins the connection to it with the `marko/http` [`resolve_to`](/docs/packages/http/#pinning-the-connection-to-an-ip) option. The HTTP client never resolves the host a second time, so a hostname whose DNS answer flips to an internal address after the check (DNS rebinding) cannot redirect the delivery. The `Host` header and TLS certificate check still use the hostname. A custom `WebhookUrlPolicyInterface` implementation must return the IP address the request should connect to.
+
+:::note[HTTP driver support]
+Pinning needs an HTTP client driver that supports `resolve_to`, such as [`marko/http-guzzle`](/docs/packages/http-guzzle/#pinning-to-an-ip) with the PHP `curl` extension. A driver that cannot pin throws `InvalidRequestOptionException`, so a webhook is never sent unpinned. Deliveries are pinned to a direct connection; if your servers must reach the internet through an egress proxy, the proxy resolves the host itself, so enforce the internal-range block on the proxy too.
 :::
 
 ### Sending Asynchronously with Retry
@@ -385,7 +387,8 @@ public function __construct(
 );
 
 // Returns a WebhookResponse for every HTTP response (4xx/5xx and 3xx included; redirects are not followed).
-// Validates the URL with the URL policy first and sends webhook.timeout as the request timeout.
+// Validates the URL with the URL policy first, pins the connection to the address it approved (resolve_to),
+// and sends webhook.timeout as the request timeout.
 // Sends X-Webhook-Id, X-Webhook-Timestamp and X-Webhook-Signature headers.
 // @throws UnsafeWebhookUrlException when the URL policy rejects the URL (nothing is sent)
 // @throws InvalidWebhookPayloadException when the data cannot be encoded as JSON (nothing is sent)
@@ -405,8 +408,9 @@ public function __construct(
     HostResolverInterface $resolver,
 );
 
+// Returns the approved IP address to pin the connection to (the first address the host resolved to).
 // @throws UnsafeWebhookUrlException
-public function validate(string $url): void;
+public function validate(string $url): string;
 ```
 
 ### DnsHostResolver
