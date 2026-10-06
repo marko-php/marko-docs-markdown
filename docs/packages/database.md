@@ -2062,3 +2062,5 @@ For the underlying `boot` callback mechanism, see [Overriding another module's b
 ## Read/Write Splitting
 
 To route reads to replicas and writes to a primary, see [marko/database-readwrite](/docs/packages/database-readwrite/). It wraps any existing driver connection using the decorator pattern — no changes to application code are required.
+
+A read that must never see replica lag runs inside `onPrimary()` from `Marko\Database\Connection\PrimaryReadInterface`, which connections that route reads to replicas implement. See [Reads That Must Hit the Primary](/docs/packages/database-readwrite/#reads-that-must-hit-the-primary).
