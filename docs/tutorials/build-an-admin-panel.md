@@ -78,27 +78,7 @@ return [
 ];
 ```
 
-Configure the authentication system to include an `admin` guard:
-
-```php title="config/auth.php"
-<?php
-
-declare(strict_types=1);
-
-return [
-    'defaults' => [
-        'guard' => 'web',
-    ],
-    'guards' => [
-        'web' => [
-            'driver' => 'session',
-        ],
-        'admin' => [
-            'driver' => 'session',
-        ],
-    ],
-];
-```
+`marko/admin-auth` adds the `admin` guard to the authentication config itself: a session guard whose `admins` provider is `AdminUserProvider`. It is separate from your frontend guard, with its own session key, so admins and frontend users never share a login. You don't need to configure it. See [The Admin Guard](/docs/packages/admin-auth/#the-admin-guard).
 
 ## Step 4: Set Up the Database Schema
 
@@ -471,7 +451,7 @@ The `LoginController` from `marko/admin-panel` provides built-in login and logou
 | `/admin/login` | POST | Authenticate with email/password |
 | `/admin/logout` | POST | Log out the current admin user |
 
-Authentication uses the `GuardInterface` --- the `LoginController` calls `$guard->attempt($credentials)` with email and password from the form, and `$guard->logout()` for sign-out. The `AdminUserProvider` handles credential verification, loads the user's roles, and aggregates permission keys from the role-permission pivot table.
+Authentication uses the [admin guard](/docs/packages/admin-auth/#the-admin-guard) (`admin-auth.guard`, separate from your frontend guard) --- the `LoginController` calls `$guard->attempt($credentials)` with email and password from the form, and `$guard->logout()` for sign-out. The `AdminUserProvider` handles credential verification, loads the user's roles, and aggregates permission keys from the role-permission pivot table.
 
 ## Step 9: Build the Admin Dashboard
 
@@ -479,11 +459,11 @@ The `DashboardController` from `marko/admin-panel` renders the admin dashboard a
 
 ```php
 use Marko\Admin\Contracts\AdminSectionRegistryInterface;
-use Marko\Authentication\Contracts\GuardInterface;
+use Marko\AdminAuth\AdminGuardResolver;
 
 // Inside the dashboard controller:
-$sections = $sectionRegistry->all();    // Returns all sections sorted by sortOrder
-$currentUser = $guard->user();          // The authenticated AdminUser
+$sections = $sectionRegistry->all();            // Returns all sections sorted by sortOrder
+$currentUser = $adminGuard->guard()->user();    // The authenticated AdminUser
 ```
 
 Use the `AdminMenuBuilder` to construct the sidebar navigation filtered by the current user's permissions:
@@ -745,7 +725,7 @@ With a corresponding Latte template:
 ## What You've Learned
 
 - Installing and configuring the admin package stack (`marko/admin`, `marko/admin-panel`, `marko/admin-auth`, `marko/admin-api`)
-- Setting up admin authentication with the [`GuardInterface`](/docs/packages/authentication/)
+- Setting up admin authentication on the separate [admin guard](/docs/packages/admin-auth/#the-admin-guard)
 - Creating roles, permissions, and assigning them to admin users
 - Building admin sections with [`#[AdminSection]`](/docs/packages/admin/) and [`MenuItem`](/docs/packages/admin/) for sidebar navigation
 - Protecting controllers with [`AdminAuthMiddleware`](/docs/packages/admin-auth/) and [`#[RequiresPermission]`](/docs/packages/admin-auth/)
