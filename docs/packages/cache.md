@@ -128,6 +128,34 @@ class MyService
 }
 ```
 
+### Expiry and the Clock
+
+The bundled drivers ([`marko/cache-array`](/docs/packages/cache-array/), [`marko/cache-file`](/docs/packages/cache-file/) and [`marko/cache-redis`](/docs/packages/cache-redis/)) read the current time through the PSR-20 `ClockInterface` from [`marko/clock`](/docs/packages/clock/) instead of calling `time()`. TTLs, expiry checks and `expiresAt()` all follow that clock. To test expiry without `sleep()`, construct a driver with a [`FakeClock`](/docs/packages/testing/#fakeclock) and move it:
+
+```php
+use Marko\Cache\Config\CacheConfig;
+use Marko\Cache\Memory\Driver\ArrayCacheDriver;
+use Marko\Testing\Fake\FakeClock;
+use Marko\Testing\Fake\FakeConfigRepository;
+
+it('expires a cached value after its ttl', function (): void {
+    $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+    $cache = new ArrayCacheDriver(
+        new CacheConfig(new FakeConfigRepository(['cache.default_ttl' => 3600])),
+        $clock,
+    );
+    $cache->set('product.42', 'cached', ttl: 60);
+
+    $clock->travel('+60 seconds');
+    expect($cache->get('product.42'))->toBe('cached');
+
+    $clock->travel('+1 second');
+    expect($cache->get('product.42'))->toBeNull();
+});
+```
+
+Redis enforces TTLs on the server, so with `marko/cache-redis` the clock only anchors the reported `expiresAt()`. Moving a `FakeClock` does not expire Redis keys.
+
 ## CLI Commands
 
 | Command | Description |

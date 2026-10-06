@@ -89,6 +89,7 @@ public function clear(): bool;
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption under concurrent traffic.
 - Tag entries are similarly written atomically and updated on each `store()` call.
 - Expired entries are removed on the next `lookup()` call for that key (lazy expiration).
+- Expiry and `created_at` timestamps come from the PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)), not `time()`, so the driver follows a [`FakeClock`](/docs/packages/testing/#fakeclock) in tests.
 
 ## Related Packages
 

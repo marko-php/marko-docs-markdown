@@ -187,6 +187,36 @@ Reset the counter for a key --- for example, after a successful login:
 $this->rateLimiter->clear("login:$email");
 ```
 
+### Testing with a Frozen Clock
+
+`RateLimiter` reads the current time through the PSR-20 `ClockInterface` from [`marko/clock`](/docs/packages/clock/) to compute `retryAfter()`: the counter's expiry, as reported by the cache, minus the current time. In tests, give the limiter and an [`ArrayCacheDriver`](/docs/packages/cache-array/) the same [`FakeClock`](/docs/packages/testing/#fakeclock), then move it to check Retry-After and the window reset without `sleep()`:
+
+```php
+use Marko\Cache\Config\CacheConfig;
+use Marko\Cache\Memory\Driver\ArrayCacheDriver;
+use Marko\RateLimiter\RateLimiter;
+use Marko\Testing\Fake\FakeClock;
+use Marko\Testing\Fake\FakeConfigRepository;
+
+it('counts retry after down and then resets the window', function (): void {
+    $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+    $cache = new ArrayCacheDriver(
+        new CacheConfig(new FakeConfigRepository(['cache.default_ttl' => 3600])),
+        $clock,
+    );
+    $rateLimiter = new RateLimiter($cache, $clock);
+
+    $rateLimiter->attempt('login:ada@example.com', 1, 60);
+    $clock->travel('+20 seconds');
+    expect($rateLimiter->attempt('login:ada@example.com', 1, 60)->retryAfter())->toBe(40);
+
+    $clock->travel('+41 seconds');
+    expect($rateLimiter->attempt('login:ada@example.com', 1, 60)->allowed())->toBeTrue();
+});
+```
+
+Use the same clock for both: the limiter subtracts its own clock's time from the expiry the cache reports. With [`marko/cache-redis`](/docs/packages/cache-redis/), Redis expires counters on the server, so a fake clock can't reset the window.
+
 ## Customization
 
 Replace `RateLimiter` via [Preferences](/docs/packages/core/) to change the counting strategy:

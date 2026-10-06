@@ -92,3 +92,4 @@ Implements all methods from `CacheInterface`. See `marko/cache` for the full con
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption.
 - A `null` TTL falls back to `default_ttl` from config. A TTL of `0` or less means the entry never expires.
 - Expired entries are deleted lazily --- on the next `get()`, `has()`, or `getItem()` call for that key.
+- Expiry and `created_at` timestamps come from the PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)), not `time()`. Construct the driver with a [`FakeClock`](/docs/packages/testing/#fakeclock) to test expiry without sleeping (see [Expiry and the Clock](/docs/packages/cache/#expiry-and-the-clock)).

@@ -89,6 +89,10 @@ These packages take an injected `ClockInterface` and so require `marko/clock`:
 - [`marko/session-file`](/docs/packages/session-file/) and [`marko/session-database`](/docs/packages/session-database/) --- `last_activity` and garbage collection
 - [`marko/authentication-token`](/docs/packages/authentication-token/) --- personal access token expiry
 - [`marko/webhook`](/docs/packages/webhook/) --- signature timestamps, the freshness window, and attempt times
+- [`marko/cache-array`](/docs/packages/cache-array/) and [`marko/cache-file`](/docs/packages/cache-file/) --- cache entry expiry and `created_at`
+- [`marko/cache-redis`](/docs/packages/cache-redis/) --- the reported `expiresAt()` of a cache item (Redis itself enforces the TTL)
+- [`marko/ratelimiter`](/docs/packages/ratelimiter/) --- `Retry-After`
+- [`marko/page-cache-file`](/docs/packages/page-cache-file/) --- cached page expiry
 
 ## API Reference
 
