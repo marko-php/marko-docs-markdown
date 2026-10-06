@@ -1607,7 +1607,7 @@ Changing a column's type, nullability or default on an existing entity generates
 ALTER TABLE "posts" ALTER COLUMN "views" TYPE BIGINT USING "views"::BIGINT, ALTER COLUMN "views" SET DEFAULT 0
 ```
 
-A PostgreSQL type change always casts explicitly with `USING "column"::type`, so conversions PostgreSQL won't make on its own (`VARCHAR` to `INTEGER`, `TEXT` to `JSONB`, `INTEGER` to `BOOLEAN`) work in both the up and the down migration. See [Type Changes](/docs/packages/database-pgsql/#type-changes).
+A PostgreSQL type change always casts explicitly with `USING "column"::type`, so conversions PostgreSQL won't make on its own (`VARCHAR` to `INTEGER`, `TEXT` to `JSONB`, `INTEGER` to `BOOLEAN`) work in both the up and the down migration. An auto-increment key whose type changes (`integer` to `bigint`, for example) gets one `DO` block that changes its sequence too, so the ids can use the wider range. See [Type Changes](/docs/packages/database-pgsql/#type-changes).
 
 MySQL restates the whole column with `MODIFY COLUMN`, and keeps what the entity can't declare (precision, `UNSIGNED`, collation, `ON UPDATE`) unless the entity changes the type. See [Column Modifications](/docs/packages/database-mysql/#column-modifications). The down migration puts back the column's previous definition, so `db:rollback` reverses the change.
 

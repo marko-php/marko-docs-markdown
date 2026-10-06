@@ -187,8 +187,31 @@ ALTER TABLE "items" ALTER COLUMN "quantity" DROP DEFAULT,
 ```
 
 - **The cast is explicit, not lenient.** A row that doesn't convert (`'abc'` to `INTEGER`) fails the migration inside its transaction, and nothing changes.
-- **The default is dropped before the type changes and set again after it.** An old default that can't be cast (`'0'` on a `VARCHAR` becoming `INTEGER`) never blocks the change. An auto-increment column keeps its sequence default, so widening an `integer` key to `bigint` keeps generating ids from the same sequence. The sequence itself stays `integer`; run `ALTER SEQUENCE ... AS bigint` by hand when the ids need to pass 2,147,483,647.
+- **The default is dropped before the type changes and set again after it.** An old default that can't be cast (`'0'` on a `VARCHAR` becoming `INTEGER`) never blocks the change. An auto-increment column keeps its sequence default, so widening an `integer` key to `bigint` keeps generating ids from the same sequence.
 - **Anything a cast can't express** (splitting a column, parsing a custom format) still needs a hand-written migration.
+
+#### Auto-Increment Keys
+
+A `SERIAL` sequence has its own type, and its `MAXVALUE` comes from that type. Widening only the column would leave the sequence stopping at 2,147,483,647. When an auto-increment key changes between `smallint`, `integer` and `bigint`, the generated migration changes the column and the sequence that feeds it in one statement:
+
+```sql
+DO $$
+DECLARE
+    sequence_name text := pg_get_serial_sequence('"posts"', 'id');
+BEGIN
+    IF sequence_name IS NULL THEN
+        RAISE EXCEPTION USING MESSAGE = 'Column "id" of table "posts" is auto-increment, but no sequence is owned by it, ...';
+    END IF;
+    ALTER TABLE "posts" ALTER COLUMN "id" TYPE BIGINT USING "id"::BIGINT;
+    EXECUTE format('ALTER SEQUENCE %s AS BIGINT', sequence_name);
+END
+$$
+```
+
+- **Widening raises `MAXVALUE` with the type**, so the insert after id 2,147,483,647 gets 2,147,483,648.
+- **The down migration narrows both back.** When the sequence has already passed the smaller type's range, PostgreSQL refuses (`RESTART value (...) cannot be greater than MAXVALUE (...)`), and the column keeps its wider type.
+- **The sequence must be owned by the column.** `SERIAL` and `BIGSERIAL` columns, including every key Marko creates, already are. A key that reads from a sequence it doesn't own fails before anything changes, with an error naming the table and column. Run `ALTER SEQUENCE ... OWNED BY "posts"."id"`, then run the migration again.
+- **Identity columns** (`GENERATED ... AS IDENTITY`) work the same way. PostgreSQL already changes their sequence with the column, so the sequence step changes nothing.
 
 ### Unique Constraints
 
