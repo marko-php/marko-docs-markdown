@@ -124,7 +124,7 @@ $hubUrl = $this->mercureSubscriberToken->subscribeUrl([
 
 ### Authorizing Private Channels
 
-Private updates are delivered only to subscribers holding a JWT whose `mercure.subscribe` claim lists the topic. `MercureSubscriberToken` builds that token, including **only** the private channels the [`ChannelRegistry`](/docs/packages/broadcasting/#authorizing-private-channels) authorizes for the user. Public channels need no token and are left out of the claim. A private channel with no registered authorizer throws `ChannelAuthorizationException`.
+Private updates are delivered only to subscribers holding a JWT whose `mercure.subscribe` claim lists the topic. `MercureSubscriberToken` builds that token, including **only** the private channels the [`ChannelRegistry`](/docs/packages/broadcasting/#authorizing-private-channels) authorizes for the user. Public channels need no token and are left out of the claim. A private channel with no registered authorizer throws `ChannelAuthorizationException`. Mercure reads each claim entry as a topic selector, which can be a URI template. So a topic (`topic_prefix` + channel name) containing `{ } * ,`, whitespace or control characters throws `MercureException::unsafeTopic()` and is never signed. `subscribeUrl()` refuses such topics the same way.
 
 :::note
 Mercure has no presence protocol, so this driver does not support [presence channels](/docs/packages/broadcasting/#presence-channels). `MercureBroadcaster::broadcast()`, `MercureSubscriberToken::for()` and `subscribeUrl()` throw `BroadcastException::presenceChannelsUnsupported()` for a `PresenceChannel` instead of treating it as private or public. Use the [Pusher driver](/docs/packages/broadcasting-pusher/#presence-channels) for presence.
@@ -219,6 +219,7 @@ Readonly value object built from `config/broadcasting-mercure.php` by the module
 | `MercureException::emptySigningKey()` | A JWT is signed with an empty key |
 | `MercureException::missingPublisherCredentials()` | Neither `publisher_jwt` nor `publisher_jwt_key` is set |
 | `MercureException::missingSubscriberKey()` | A subscriber token is requested without `subscriber_jwt_key` |
+| `MercureException::unsafeTopic()` | A subscriber token or subscribe URL is built for a topic containing `{ } * ,`, whitespace or control characters |
 | `BroadcastException::rejected()` | The hub answers with a non-2xx status; the context holds the status and the capped response body |
 | `BroadcastException::publishFailed()` | The hub cannot be reached (connection or transport failure) |
 | `BroadcastException::presenceChannelsUnsupported()` | A `PresenceChannel` is broadcast to or included in a subscriber token or URL |
