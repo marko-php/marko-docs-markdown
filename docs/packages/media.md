@@ -465,6 +465,22 @@ public function crop(string $imagePath, int $x, int $y, int $width, int $height)
 public function convert(string $imagePath, string $format): string;
 ```
 
+### ImageFormatSniffer
+
+Detects a raster image's format from its magic bytes without decoding it. Image processor drivers call it before handing a file to a decoder, so the format allowlist is enforced on what the file actually is rather than on what the decoder decides after parsing it. Custom `ImageProcessorInterface` implementations should do the same.
+
+```php
+use Marko\Media\Image\ImageFormatSniffer;
+
+// Returns JPEG, PNG, GIF, WEBP, AVIF, HEIC, TIFF or BMP (ImageMagick coder names).
+// Throws ImageFormatException for anything else --- SVG, MVG, MSL, PostScript, PDF, etc.
+public function sniff(string $path): string;
+
+// Rejects empty paths, NUL bytes, ImageMagick coder prefixes ("msl:", "url:", "PNG:")
+// and PHP stream wrappers ("phar://", "http://", "data:").
+public function assertSafePath(string $path): void;
+```
+
 ### MediaConfig
 
 ```php
@@ -505,6 +521,7 @@ class Media extends Entity
 | `MediaException` | Base exception for all media errors |
 | `UploadException` | Thrown by `MediaManager::upload()` for validation failures --- file too large, MIME type not in `allowed_mime_types`, extension/MIME mismatch against `mime_extension_map`, invalid extension, or `finfo` unavailable |
 | `FileNotFoundException` | Thrown when a stored file cannot be located on disk |
+| `ImageFormatException` | Thrown by `ImageFormatSniffer` for unsafe paths (coder prefixes, stream wrappers), unreadable files, and content that is not a recognised raster image |
 
 ## Available Image Processing Drivers
 
