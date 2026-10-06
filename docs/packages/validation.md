@@ -116,9 +116,9 @@ $errors->count();             // total error count across all fields
 | Between | `between:1,100` | Value range (numeric), length range (string), or count range (array). Fails for a file --- use `min_size`/`max_size` |
 | In | `in:draft,published` | Must be one of the listed values; numeric strings are compared numerically |
 | NotIn | `not_in:admin,root` | Must not be one of the listed values; numeric strings are compared numerically |
-| Same | `same:other_field` | Must match another field |
-| Different | `different:other_field` | Must differ from another field |
-| Confirmed | `confirmed` | Must have a matching `_confirmation` field |
+| Same | `same:other_field` | Must match another field (a dot path; see [wildcards](#validating-arrays-with-wildcards)) |
+| Different | `different:other_field` | Must differ from another field (a dot path; see [wildcards](#validating-arrays-with-wildcards)) |
+| Confirmed | `confirmed` | Must have a matching `_confirmation` field next to it (`account.password` checks `account.password_confirmation`) |
 | Regex | `regex:/^\d{3}$/` | Must match the pattern |
 | Date | `date` or `date:Y-m-d` | Must be a valid date |
 | Array | `array` | Must be an array |
@@ -184,9 +184,92 @@ Every file rule fails a value that is not an uploaded file, and an upload that f
 
 Sizes are in kilobytes (1 KB = 1024 bytes) and the limits are inclusive. `max`, `min` and `between` keep their meaning for strings, numbers and arrays; given a file, they fail with a message that points to `max_size` / `min_size` (`The avatar field is a file: use max_size:2048 to limit its size in kilobytes.`). `max_size` and `min_size` without a number throw `InvalidArgumentException`, as do `mimes` and `mimetypes` without a list.
 
-For a multi-file input (`name="photos[]"`), `array` and `max:5` check the list and count its files. Per-file rules (`photos.*`) are not supported yet.
+For a multi-file input (`name="photos[]"`), `array` and `max:5` on `photos` check the list and count its files, and rules on `photos.*` check each file (see [Multi-File Uploads](#multi-file-uploads)).
 
 The file rules depend only on `Marko\Core\Contracts\UploadedFileInterface`, which `Marko\Routing\Http\UploadedFile` implements, so `marko/validation` does not require `marko/routing`.
+
+### Validating Arrays with Wildcards
+
+Rules keys use dot paths for nested data (`address.city`). A `*` segment matches every item of an array, so one rule checks each element:
+
+```php
+$this->validator->validate($input, [
+    'tags' => 'required|array',
+    'tags.*' => 'string|max:30',          // every tag
+    'items' => 'required|array|min:1',
+    'items.*.name' => 'required|string',  // the name of every item
+    'items.*.quantity' => 'required|integer|min:1',
+    'matrix.*.*' => 'integer',            // every cell of a list of lists
+]);
+```
+
+The validator expands each wildcard key against the data before it runs the rules, so `items.*.name` becomes `items.0.name`, `items.1.name`, and so on. Errors are keyed by that concrete path, which tells the client exactly which item failed:
+
+```json
+{
+    "message": "The given data was invalid.",
+    "errors": {
+        "items.1.name": ["The items.1.name field is required."],
+        "matrix.0.2": ["The matrix.0.2 field must be an integer."]
+    }
+}
+```
+
+A few rules govern expansion:
+
+- **Missing or empty parents expand to nothing.** When `items` is absent, `null`, `''` or `[]`, `items.*.name` checks nothing and reports no errors. To require at least one item, put `required|array` or `array|min:1` on the parent (`items`).
+- **A non-array where a list is expected fails loudly.** When a `*` meets any other value (a string, a number, a single uploaded file), the validator reports `The items field must be an array to apply the items.*.name rules.` under the path it reached. A wildcard rule never passes silently because the data has the wrong shape.
+- **`*` is always a wildcard.** A rules key cannot address a literal `*` array key.
+- **Rule strings are parsed up front.** An unknown rule under a wildcard key throws `InvalidArgumentException` even when the parent is empty.
+
+### Cross-Field Rules Inside Rows
+
+`confirmed` looks for its `_confirmation` field next to the field it validates, so `users.*.pin` checks `users.0.pin` against `users.0.pin_confirmation`.
+
+`same` and `different` take an absolute dot path. A `*` in that path is replaced by the current row's index, matching the key's wildcards from left to right:
+
+```php
+$this->validator->validate($input, [
+    'shipping.email' => 'same:billing.email',             // absolute path, no wildcard
+    'items.*.sku_check' => 'same:items.*.sku',            // items.3.sku_check is compared with items.3.sku
+    'routes.*.legs.*.to' => 'different:routes.*.legs.*.from',
+]);
+```
+
+A path with more `*` than its rules key (`'code' => 'same:items.*.sku'`) has no row to fill in, so the validator throws `InvalidArgumentException` instead of comparing against nothing.
+
+### Multi-File Uploads
+
+An `<input type="file" name="photos[]" multiple>` arrives as a list of uploaded files under `photos`. Validate the list on `photos` and each file on `photos.*`:
+
+```php title="app/gallery/src/Controllers/GalleryController.php"
+use Marko\Routing\Attributes\Post;
+use Marko\Routing\Http\Request;
+use Marko\Routing\Http\Response;
+use Marko\Validation\Contracts\ValidatorInterface;
+
+class GalleryController
+{
+    public function __construct(
+        private ValidatorInterface $validator,
+    ) {}
+
+    #[Post('/gallery')]
+    public function store(Request $request): Response
+    {
+        $this->validator->validateOrFail([...$request->input(), ...$request->files()], [
+            'photos' => 'required|array|max:10',
+            'photos.*' => 'image|max_size:2048',
+        ]);
+
+        // every file in $request->files('photos') is an image of at most 2 MB
+
+        return new Response('Saved');
+    }
+}
+```
+
+An invalid upload fails with a 422 whose errors are keyed per file (`photos.0`, `photos.3`). A single file sent as `photos` instead of `photos[]` fails with the "must be an array" error rather than skipping the per-file rules.
 
 ### Mixed Rule Formats
 
@@ -258,6 +341,19 @@ interface RuleInterface
     public function message(string $field, mixed $value): string;
 }
 ```
+
+Under a wildcard key, `$field` is the concrete path being checked (`items.0.name`).
+
+### WildcardAwareRuleInterface
+
+```php
+interface WildcardAwareRuleInterface extends RuleInterface
+{
+    public function forWildcardIndexes(string $key, array $indexes): RuleInterface;
+}
+```
+
+Implement it on a custom rule that refers to another field which may contain `*`. Before checking each concrete field, the validator passes the rules key and the indexes its wildcards matched (`['3']` for `items.3.sku_check` under `items.*.sku_check`), and uses the rule it returns. `Same` and `Different` implement it; throw `InvalidArgumentException` when the referenced field has more `*` than there are indexes.
 
 ### ValidationErrors
 
