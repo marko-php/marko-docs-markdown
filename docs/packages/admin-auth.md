@@ -26,8 +26,15 @@ The package ships no migration files. Its tables come from its entities, which `
 | `role_permissions` | `RolePermission` | Role to permission assignments (unique `role_id`, `permission_id`; index on `permission_id`) |
 | `admin_users` | `AdminUser` | Admin users (unique `email`), with the remember-me token hash and its `remember_token_expires_at` |
 | `admin_user_roles` | `AdminUserRole` | User to role assignments (unique `user_id`, `role_id`; index on `role_id`) |
+| `remember_tokens` | `RememberToken` | One remember-me token per device: guard, user ID, unique `selector`, `validator_hash`, `expires_at` (indexed), `user_agent` |
 
 Both pivots cascade: deleting a role, permission or admin user deletes its assignment rows.
+
+### Remember-Me Tokens
+
+The module binds `RememberTokenStorageInterface` to `RememberTokenRepository`, so remember-me tokens live in the `remember_tokens` table, one row per device. Logging in with "remember me" on a second browser no longer logs the first one out, and logging out deletes only that browser's row. The binding covers every session guard in the app, not just `admin`; the `guard` column keeps each guard's tokens apart. See [Per-Device Tokens](/docs/packages/authentication/#per-device-tokens) for how the cookie is checked and rotated.
+
+Run `marko db:migrate` after upgrading to create the table, before deploying the new code: remember-me logins write to it. Admins remembered through the old `admin_users.remember_token` column stay signed in; their next visit moves them onto a device row and clears the column. Schedule `marko auth:clear-tokens` to purge rows that expired on devices that never came back.
 
 :::note
 `admin_users.remember_token_expires_at` holds when an admin's remember-me token stops being accepted; the expiry is enforced server-side rather than trusted from the cookie. Run `marko db:migrate` after upgrading to add the column. Remember tokens issued before the column existed have no expiry and are rejected, so admins who were remembered sign in again once.
@@ -492,6 +499,7 @@ public function discoverFromClass(string $className): void;
 |---------|-------------|
 | `admin-auth:permissions:sync` | Inserts missing permissions, updates changed labels and groups, and lists permissions that are no longer registered with how many roles hold each. Deletes nothing |
 | `admin-auth:permissions:sync --prune` | Also deletes the unregistered permissions and their role assignments in one transaction. Never deletes a key containing `*`. Outside development and testing, needs `--force`; asks for confirmation when someone can answer |
+| `auth:clear-tokens` | From marko/authentication: deletes expired rows from `remember_tokens` (`--force` deletes every row). See [Remember-Me Tokens](#remember-me-tokens) |
 
 ### RequiresPermission Attribute
 
