@@ -340,6 +340,7 @@ The client builds a `Marko\Routing\Http\Request` the way PHP would for a real re
 - `REQUEST_METHOD`, `REQUEST_URI` (with the query string), `QUERY_STRING`, `HTTP_HOST` and `SERVER_NAME` (`localhost`, or the host of a full URL such as `https://shop.test/cart`), and `REMOTE_ADDR` (`127.0.0.1`) are set.
 - `withServerVariables(['REMOTE_ADDR' => '203.0.113.9'])` overrides any server key for later requests.
 - Controllers read the payload exactly as in production: `$request->json('type')`, `$request->post('email')`, `$request->input('page')`.
+- Requests go through the real `Router`, so its method handling is the same as in production. A `head()` response never has a body, and HEAD falls back to the GET route when no `#[Head]` route exists. An `options()` call to a path that has no `#[Options]` route returns an automatic `204` with an `Allow` header. A method the path has no route for returns `405` with `Allow`. Global middleware runs on all of these.
 
 ### Client state
 
