@@ -3,7 +3,7 @@ title: marko/security
 description: CSRF protection and security headers middleware -- secure your routes with drop-in middleware.
 ---
 
-CSRF protection and security headers middleware --- secure your routes with drop-in middleware. Two middleware classes cover the most common web security needs: `CsrfMiddleware`, registered globally, validates tokens on every state-changing request, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). Both are configured via `config/security.php`.
+CSRF protection and security headers middleware --- secure your routes with drop-in middleware. Two middleware classes, both registered globally, cover the most common web security needs: `CsrfMiddleware` validates tokens on every state-changing request, and `SecurityHeadersMiddleware` adds protective response headers (HSTS, CSP, X-Frame-Options, etc.). Both are configured via `config/security.php`.
 
 For cross-origin requests, install [marko/cors](/docs/packages/cors/). `marko/security` used to ship its own `CorsMiddleware` with `security.cors.*` config; it was removed so there is a single CORS implementation. Replace any `#[Middleware]` reference to the old class with `marko/cors` (which registers itself globally) and move the `cors` block of `config/security.php` to `config/cors.php`.
 
@@ -27,7 +27,7 @@ return [
     'headers' => [
         'x_content_type_options' => 'nosniff',
         'x_frame_options' => 'SAMEORIGIN',
-        'x_xss_protection' => '1; mode=block',
+        'x_xss_protection' => '0',
         'strict_transport_security' => 'max-age=31536000; includeSubDomains',
         'referrer_policy' => 'strict-origin-when-cross-origin',
         'content_security_policy' => "default-src 'self'",
@@ -124,18 +124,46 @@ Whenever a response persists the session (the request resumed the visitor's sess
 
 A request whose session is only read and then discarded (a cookieless visitor on a page that never issues a token) gets no `XSRF-TOKEN` cookie, so bots and health checks still create no sessions. If the first page of your SPA neither starts a session nor renders a form, issue the token there --- for example call `$this->csrfTokenManager->get()` in the controller that renders the SPA's root view --- so the first `POST` already has a cookie to echo.
 
-### Security Headers Middleware
+### Security Headers
 
-Add protective HTTP headers to all responses:
+Installing `marko/security` adds protective headers to every response. Its `module.php` registers `SecurityHeadersMiddleware` as **global** middleware, outside `CsrfMiddleware` so a `419` carries the headers too. It declares `#[RunsOnUnmatched]`, so 404 and 405 responses get them as well (see [Which middleware runs](/docs/packages/routing/#which-middleware-runs)).
+
+Headers are configured in `config/security.php` under the `headers` key (see [Configuration](#configuration) above):
+
+- An empty value omits that header.
+- A header the response already carries is left alone (names compared case-insensitively). A controller or inner middleware that sets its own `Content-Security-Policy` or `X-Frame-Options` keeps it, so one route can send a stricter or looser policy than the default.
+- `Strict-Transport-Security` is sent only on HTTPS responses: when the server reports `HTTPS` (anything but `off`), `REQUEST_SCHEME` is `https`, or the first `X-Forwarded-Proto` value is `https` (a TLS-terminating proxy). Browsers ignore HSTS on plain HTTP, so a forged `X-Forwarded-Proto` gains nothing.
+- `X-XSS-Protection` defaults to `0`, which turns off the legacy browser XSS auditor. The old `1; mode=block` value is deprecated and opened XS-Leak attacks in the browsers that still honoured it. Set the value to `''` to omit the header.
 
 ```php
-use Marko\Routing\Attributes\Middleware;
-use Marko\Security\Middleware\SecurityHeadersMiddleware;
+use Marko\Routing\Attributes\Get;
+use Marko\Routing\Http\Response;
 
-#[Middleware(SecurityHeadersMiddleware::class)]
+class ReportController
+{
+    #[Get('/reports/embed')]
+    public function embed(): Response
+    {
+        // Kept as-is: the global middleware only fills in headers that are missing
+        return new Response('<p>Report</p>', 200, [
+            'Content-Security-Policy' => "frame-ancestors https://partner.example.com",
+        ]);
+    }
+}
 ```
 
-Headers are configured in `config/security.php` under the `headers` key (see [Configuration](#configuration) above). Empty values are omitted from the response --- only headers with non-empty values are added.
+To drop the headers from a route entirely, exclude the middleware with [`#[WithoutMiddleware]`](/docs/packages/routing/#skipping-middleware), on one route or a whole controller:
+
+```php
+use Marko\Routing\Attributes\WithoutMiddleware;
+use Marko\Security\Middleware\SecurityHeadersMiddleware;
+
+#[WithoutMiddleware(SecurityHeadersMiddleware::class)]
+```
+
+:::caution[Upgrading from per-route security headers]
+In earlier releases, `SecurityHeadersMiddleware` only ran on routes that declared `#[Middleware(SecurityHeadersMiddleware::class)]`, and its headers replaced any the controller had set. Now every response gets them, and the controller's own headers win. Remove the redundant `#[Middleware(SecurityHeadersMiddleware::class)]` attributes, check that the default `Content-Security-Policy` (`default-src 'self'`) does not block assets your pages load from other origins (set `content_security_policy` in `config/security.php`, or `''` to omit it), and change `x_xss_protection` to `'0'` if your published `config/security.php` still has `'1; mode=block'`.
+:::
 
 ### Using the CSRF Token Manager Directly
 
@@ -232,6 +260,8 @@ public function __construct(
 ```php
 use Marko\Security\Middleware\SecurityHeadersMiddleware;
 
+#[RunsOnUnmatched]
+public function __construct(SecurityConfig $securityConfig);
 public function handle(Request $request, callable $next): Response;
 ```
 
