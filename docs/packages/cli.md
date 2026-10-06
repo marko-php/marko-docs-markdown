@@ -194,8 +194,25 @@ use Marko\Core\Attributes\Command;
     description: 'What it does',
     aliases: ['alias'],          // Optional alternative names
     flags: ['force', 'f'],       // Optional value-less options that never consume the next token
+    destructive: true,           // Optional: the command changes or deletes stored state (default false)
 )]
 ```
+
+### Destructive Commands
+
+Mark a command that changes or deletes stored state (database rows or schema, cache entries, queued jobs, log files, sessions, tokens) with `destructive: true`:
+
+```php
+use Marko\Core\Attributes\Command;
+
+#[Command(name: 'report:purge', description: 'Delete old reports', flags: ['force'], destructive: true)]
+```
+
+The marker is how callers that run commands on someone else's behalf tell a state-changing command from a read-only one, without guessing from its name or options. The [MCP `run_console_command` tool](/docs/packages/mcp/#run_console_command-safety) refuses every destructive command unless the server operator sets `mcp.console.allow_destructive`. The marker is copied onto the command's `CommandDefinition` as `$definition->destructive`, so your own tooling can read it from the `CommandRegistry`.
+
+The marker does not change how the command runs from a terminal. Asking for `--force` or a confirmation is still the command's job: database commands use [`DestructiveCommandGuard`](/docs/packages/database/#using-the-policy-in-your-own-commands), and any command can use [`ConfirmationPrompterInterface`](/docs/packages/core/#asking-for-confirmation).
+
+Every shipped command that changes or deletes stored state carries the marker: `db:migrate`, `db:reset`, `db:rollback`, `db:rebuild`, `db:seed`, `cache:clear`, `page-cache:clear`, `page-cache:purge`, `queue:clear`, `log:clear`, `session:gc`, `auth:clear-tokens`, `discovery:clear`, `indexer:rebuild`, `admin-auth:permissions:sync` and `devai:install`. A repository test fails when a shipped command named `*:clear`, `*:reset`, `*:rollback`, `*:rebuild`, `*:fresh`, `*:seed`, `*:truncate`, `*:purge` or `*:clear-tokens`, or one that uses `DestructiveCommandGuard`, is missing it.
 
 ### Exceptions
 
