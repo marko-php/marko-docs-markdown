@@ -3,7 +3,7 @@ title: marko/authentication
 description: Session and token-based authentication — guards protect routes, events track activity, middleware controls access.
 ---
 
-Session and token-based authentication — guards protect routes, events track activity, middleware controls access. The auth package provides flexible authentication with two built-in guards: `SessionGuard` for web applications and `TokenGuard` for APIs. Configure multiple guards, implement custom user providers, and react to authentication events via observers.
+Session and token-based authentication — guards protect routes, events track activity, middleware controls access. The auth package ships `SessionGuard` for web applications and a guard driver registry for everything else: install [marko/authentication-token](/docs/packages/authentication-token/) for API tokens, or register your own driver. Configure multiple guards, implement custom user providers, and react to authentication events via observers.
 
 ## Installation
 
@@ -60,6 +60,8 @@ return [
     ],
 ];
 ```
+
+Each guard's `driver` picks how it is built. `session` is built in. The shipped `token` guard needs [marko/authentication-token](/docs/packages/authentication-token/); until it is installed, resolving that guard throws an `AuthException` that tells you to install it. See [Guard Drivers](#guard-drivers).
 
 See [Remember Me](#remember-me) for what each `remember` option controls.
 
@@ -173,7 +175,7 @@ class User implements AuthenticatableInterface
 
 ## Guards
 
-Guards define how users are authenticated. The package includes two built-in guards.
+Guards define how users are authenticated. `AuthManager::guard($name)` builds the guard configured under `authentication.guards.{name}` with its `driver`, and caches it for the rest of the request.
 
 ### SessionGuard
 
@@ -206,36 +208,80 @@ if ($guard instanceof ResettableInterface) {
 
 `reset()` only clears the cached user --- it does not call `logout()` or otherwise touch the session. The next call to `user()` re-reads the authenticated user from the session as normal.
 
-### TokenGuard
+### Token Guards
 
-For API authentication via Bearer tokens in the `Authorization` header:
+API token authentication lives in [marko/authentication-token](/docs/packages/authentication-token/). Installing it registers the `token` driver, so the `token` guard in the default config (or any guard with `'driver' => 'token'`) resolves to `Marko\AuthenticationToken\Guard\TokenGuard`:
 
 ```php
 $guard = $this->authManager->guard('token');
 
-// TokenGuard extracts token from Authorization header
 // Authorization: Bearer your-api-token
 if ($guard->check()) {
     $user = $guard->user();
 }
 ```
 
+### Stateless Guards
+
+A guard that authenticates each request from credentials the request carries implements `Marko\Authentication\Contracts\StatelessGuardInterface`. It adds one method to `GuardInterface`, `getChallenge()`, which returns the `WWW-Authenticate` challenge (for example `Bearer`). `AuthMiddleware` never redirects a stateless guard and sends its challenge with the `401`. Its `attempt()`, `login()`, `loginById()` and `logout()` must throw and explain what to do instead, never silently do nothing.
+
+### Guard Drivers
+
+`AuthManager` builds guards through `Marko\Authentication\Guard\GuardDriverRegistry`, a singleton that maps driver names to factories. It checks the registry first, then the built-in `session` driver. Any other driver name throws an `AuthException` that lists the drivers available.
+
+Register a driver from your module's `boot` callback. The factory receives the guard name, that guard's config array and the user provider, and must return a guard whose `getName()` is the guard name (`AuthManager` throws otherwise). Resolve heavy dependencies inside the factory so booting stays cheap:
+
+```php title="module.php"
+use Marko\Authentication\Contracts\GuardInterface;
+use Marko\Authentication\Contracts\UserProviderInterface;
+use Marko\Authentication\Guard\GuardDriverRegistry;
+use Marko\Core\Container\ContainerInterface;
+
+return [
+    'boot' => function (GuardDriverRegistry $guardDriverRegistry, ContainerInterface $container): void {
+        $guardDriverRegistry->extend(
+            'jwt',
+            fn (string $name, array $config, UserProviderInterface $provider): GuardInterface => new JwtGuard(
+                decoder: $container->get(JwtDecoder::class),
+                provider: $provider,
+                name: $name,
+                header: $config['header'] ?? 'Authorization',
+            ),
+        );
+    },
+];
+```
+
+```php title="config/authentication.php"
+'guards' => [
+    'partner-api' => ['driver' => 'jwt', 'provider' => 'users', 'header' => 'X-Partner-Token'],
+],
+```
+
+Registering a driver name again replaces the earlier factory, so a later module (your app, for example) can override `token` or even `session`.
+
 ### Custom Guards
 
-Implement `GuardInterface` to create custom guards:
+Implement `GuardInterface` to create custom guards, then register them as a driver. A stateless guard implements `StatelessGuardInterface` instead and throws from the stateful methods:
 
 ```php title="JwtGuard.php"
 use Marko\Authentication\AuthenticatableInterface;
-use Marko\Authentication\Contracts\GuardInterface;
+use Marko\Authentication\Contracts\StatelessGuardInterface;
 use Marko\Authentication\Contracts\UserProviderInterface;
+use Marko\Authentication\Exceptions\AuthException;
 
-class JwtGuard implements GuardInterface
+class JwtGuard implements StatelessGuardInterface
 {
-    public UserProviderInterface $provider {
-        set {
-            $this->provider = $value;
-        }
-    }
+    public function __construct(
+        private JwtDecoder $decoder,
+        public UserProviderInterface $provider {
+            set {
+                $this->provider = $value;
+            }
+        },
+        private string $name = 'jwt',
+        private string $header = 'Authorization',
+    ) {}
 
     public function check(): bool
     {
@@ -260,29 +306,22 @@ class JwtGuard implements GuardInterface
     public function attempt(
         array $credentials,
     ): bool {
-        // JWT guards typically don't use attempt()
-        return false;
+        throw new AuthException(
+            message: "Cannot call attempt() on JWT guard '$this->name': it is stateless",
+            suggestion: 'Issue a JWT from your login endpoint instead',
+        );
     }
 
-    public function login(
-        AuthenticatableInterface $user,
-    ): void {
-        // Generate and return JWT
-    }
-
-    public function loginById(
-        int|string $id,
-    ): ?AuthenticatableInterface {
-        return null;
-    }
-
-    public function logout(): void {
-        // Invalidate token
-    }
+    // login(), loginById() and logout() throw the same way
 
     public function getName(): string
     {
-        return 'jwt';
+        return $this->name;
+    }
+
+    public function getChallenge(): string
+    {
+        return 'Bearer';
     }
 }
 ```
@@ -404,8 +443,8 @@ class DashboardController
 
 When the request is not authenticated, `AuthMiddleware` does one of two things:
 
-- **Redirects** to `redirectTo` (default `/login`) when the guard is stateful, such as `SessionGuard`. A redirect is a real response, not an error.
-- **Throws `HttpException::unauthorized()`** when `redirectTo` is `null`, and always for `TokenGuard`, because API clients can't follow a login redirect.
+- **Redirects** to `redirectTo` (default `/login`) when the guard is stateful, such as `SessionGuard`, and the request does not want JSON. A redirect is a real response, not an error.
+- **Throws a `401` `HttpException`** otherwise: when `redirectTo` is `null`, when the request wants JSON (`Request::wantsJson()`, whatever the guard), and always for a [stateless guard](#stateless-guards) such as the token guard, because API clients can't follow a login redirect. A stateless guard's `401` also carries its `WWW-Authenticate` challenge (`WWW-Authenticate: Bearer` for the token guard).
 
 The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), so the format comes from the request, not from the guard. It is JSON when the `Accept` header asks for `application/json` or a `+json` type (or when the request has a JSON `Content-Type` and no `Accept`), and a minimal HTML page otherwise:
 
@@ -453,7 +492,7 @@ Authenticated users are redirected to a configured path (default: `/`).
 
 The auth package dispatches [events](/docs/packages/events/) during the authentication lifecycle. Create observers to react to these events.
 
-`SessionGuard` dispatches `LoginEvent`, `LogoutEvent` and `FailedLoginEvent` through core's `EventDispatcherInterface`, which `AuthManager` passes to every session guard it builds. Any guard you get from `AuthManager::guard()` or by injecting `GuardInterface` fires them. `TokenGuard` is stateless (no login or logout) and dispatches no events.
+`SessionGuard` dispatches `LoginEvent`, `LogoutEvent` and `FailedLoginEvent` through core's `EventDispatcherInterface`, which `AuthManager` passes to every session guard it builds. Any guard you get from `AuthManager::guard()` or by injecting `GuardInterface` fires them. Stateless guards have no login or logout, so they never fire these events. The token guard has its own token lifecycle events instead; see [marko/authentication-token events](/docs/packages/authentication-token/#events).
 
 ### LoginEvent
 
@@ -572,6 +611,23 @@ public function loginById(int|string $id): ?AuthenticatableInterface;
 public function logout(): void;
 public UserProviderInterface $provider { set; }
 public function getName(): string;
+```
+
+### StatelessGuardInterface
+
+Extends `GuardInterface`:
+
+```php
+public function getChallenge(): string;
+```
+
+### GuardDriverRegistry
+
+```php
+public function extend(string $driver, Closure $factory): void; // Closure(string $name, array $config, UserProviderInterface $provider): GuardInterface
+public function has(string $driver): bool;
+public function drivers(): array; // list<string>
+public function create(string $driver, string $name, array $config, UserProviderInterface $provider): ?GuardInterface;
 ```
 
 ### AuthenticatableInterface

@@ -41,6 +41,8 @@ return [
 ];
 ```
 
+The `session` driver is built in. The `token` driver comes from [marko/authentication-token](/docs/packages/authentication-token/) (`composer require marko/authentication-token`); until it is installed, resolving the `api` guard throws an error telling you so. Other drivers can be registered with `GuardDriverRegistry`. See [Guard Drivers](/docs/packages/authentication/#guard-drivers).
+
 ## Using Authentication
 
 Inject `AuthManager` to check authentication state:
@@ -109,6 +111,8 @@ For APIs using bearer tokens:
 $this->auth->guard('api')->user();
 ```
 
+The token guard is stateless: `login()`, `logout()` and `attempt()` throw, and you issue or revoke tokens with `TokenManager` instead. `AuthMiddleware` answers an unauthenticated token request with a `401` and `WWW-Authenticate: Bearer`, never a login redirect.
+
 ## Middleware
 
 Marko provides two authentication middleware classes:
@@ -128,7 +132,7 @@ public function loginForm(): Response { /* ... */ }
 
 ## Custom Guard
 
-Create your own authentication strategy by implementing `GuardInterface`:
+Create your own authentication strategy by implementing `GuardInterface`, or `StatelessGuardInterface` for a guard that authenticates each request from credentials it carries:
 
 ```php title="app/myapp/Auth/ApiKeyGuard.php"
 <?php
@@ -137,11 +141,22 @@ declare(strict_types=1);
 
 namespace App\MyApp\Auth;
 
-use Marko\Authentication\Contracts\GuardInterface;
 use Marko\Authentication\AuthenticatableInterface;
+use Marko\Authentication\Contracts\StatelessGuardInterface;
+use Marko\Authentication\Contracts\UserProviderInterface;
+use Marko\Authentication\Exceptions\AuthException;
 
-class ApiKeyGuard implements GuardInterface
+class ApiKeyGuard implements StatelessGuardInterface
 {
+    public function __construct(
+        public UserProviderInterface $provider {
+            set {
+                $this->provider = $value;
+            }
+        },
+        private string $name = 'api-key',
+    ) {}
+
     public function check(): bool
     {
         return $this->user() !== null;
@@ -164,43 +179,48 @@ class ApiKeyGuard implements GuardInterface
 
     public function attempt(array $credentials): bool
     {
-        // Validate API key credentials
+        throw new AuthException(
+            message: "Cannot call attempt() on API key guard '$this->name': it is stateless",
+            suggestion: 'Issue an API key to the client instead',
+        );
     }
 
-    public function login(AuthenticatableInterface $user): void
-    {
-        // Store the authenticated user
-    }
-
-    public function loginById(int|string $id): ?AuthenticatableInterface
-    {
-        // Find and log in a user by ID
-    }
-
-    public function logout(): void
-    {
-        // Invalidate the API key
-    }
+    // login(), loginById() and logout() throw the same way
 
     public function getName(): string
     {
-        return 'api-key';
+        return $this->name;
+    }
+
+    public function getChallenge(): string
+    {
+        return 'ApiKey';
     }
 }
 ```
 
-Register it via Preference in your `module.php`:
+Register it as a guard driver from your module's `boot` callback, then point a guard at it in your authentication config (`'partner' => ['driver' => 'api-key']`):
 
 ```php title="module.php"
-use Marko\Authentication\Contracts\GuardInterface;
 use App\MyApp\Auth\ApiKeyGuard;
+use Marko\Authentication\Contracts\GuardInterface;
+use Marko\Authentication\Contracts\UserProviderInterface;
+use Marko\Authentication\Guard\GuardDriverRegistry;
 
 return [
-    'bindings' => [
-        GuardInterface::class => ApiKeyGuard::class,
-    ],
+    'boot' => function (GuardDriverRegistry $guardDriverRegistry): void {
+        $guardDriverRegistry->extend(
+            'api-key',
+            fn (string $name, array $config, UserProviderInterface $provider): GuardInterface => new ApiKeyGuard(
+                provider: $provider,
+                name: $name,
+            ),
+        );
+    },
 ];
 ```
+
+`AuthMiddleware` answers an unauthenticated request on a stateless guard with a `401` carrying its `getChallenge()` value as `WWW-Authenticate`. See [Guard Drivers](/docs/packages/authentication/#guard-drivers).
 
 ## Events
 
@@ -212,6 +232,8 @@ The authentication system dispatches events you can observe:
 | `LogoutEvent` | User logs out |
 | `FailedLoginEvent` | Login attempt fails |
 | `PasswordResetEvent` | Password is reset |
+
+Token guards have no login or logout. [marko/authentication-token](/docs/packages/authentication-token/#events) dispatches token lifecycle events instead (`TokenCreatedEvent`, `TokenRevokedEvent`, `AllTokensRevokedEvent`, `TokenAuthenticationFailedEvent`).
 
 ```php title="app/security/src/Observer/LockoutAfterFailures.php"
 use Marko\Authentication\Event\FailedLoginEvent;
