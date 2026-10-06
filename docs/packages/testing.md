@@ -340,6 +340,8 @@ KnownDriversValidator::assertSkeletonSuggestContainsAll(
 );
 ```
 
+Both methods check through `PHPUnit\Framework\Assert`, so each checked driver counts as an assertion and a test that only calls the validator is not reported as risky. `assertSkeletonSuggestContainsAll()` skips the test when the skeleton `composer.json` is missing or has no `suggest` block.
+
 ## HTTP Tests
 
 `TestClient` sends requests through your application in process: the real router, global and route middleware (sessions, CSRF, auth, CORS, rate limits) and controllers all run, with no web server and no superglobals. It boots the application once and serves any number of requests, so a feature test costs about as much as a unit test.

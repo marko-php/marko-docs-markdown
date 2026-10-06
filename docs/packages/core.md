@@ -691,6 +691,6 @@ Named constructors:
 | `DiscoveryCacheException::invalidContributor($module, $class, $reason)` | A `discovery` entry in `module.php` is not an existing `DiscoveryCacheContributorInterface` (thrown by `discovery:cache`) |
 | `DiscoveryCacheException::duplicateContributorKey($key, $first, $second)` | Two contributors use the same `key()` (thrown by `discovery:cache`) |
 | `DiscoveryCacheException::unexportableSection($key, $class, $reason)` | A contributor returned objects or closures (thrown by `discovery:cache`) |
-| `DiscoveryCacheException::notWritable($path)` | Cache directory or file is not writable (thrown by `discovery:cache`) |
+| `DiscoveryCacheException::notWritable($path, $reason)` | Cache directory or file is not writable (thrown by `discovery:cache`); the context carries the operating system's reason, such as `Permission denied` |
 
 Fix for a bad cache file: `marko discovery:cache` (or `marko discovery:clear` to fall back to live discovery). Both commands boot without the cache, so they work while it is broken.
