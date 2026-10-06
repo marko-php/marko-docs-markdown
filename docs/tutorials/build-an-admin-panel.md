@@ -507,7 +507,7 @@ Templates use the `admin-panel::layout/base` layout provided by `marko/admin-pan
 
 The `#[Middleware(AdminAuthMiddleware::class)]` attribute on the class applies authentication to every route in this controller. The `AdminAuthMiddleware` does two things:
 
-1. Checks that the user is logged in --- unauthenticated users are redirected to `/admin/login`
+1. Checks that the user is logged in --- an unauthenticated browser request on the session guard is redirected to `/admin/login`, while a request that wants JSON, or any request on a stateless guard such as the token guard, gets a 401
 2. Checks the `#[RequiresPermission]` attribute on each action --- users without the required permission get a 403 Forbidden response
 
 Super admin users (those with a role where `isSuperAdmin` is true) automatically bypass all permission checks.

@@ -17,7 +17,7 @@ Requires [`marko/admin`](/docs/packages/admin/) and `marko/admin-auth`.
 
 ### Available Endpoints
 
-All endpoints require admin authentication through `AdminAuthMiddleware`. An unauthenticated request whose `Accept` header asks for JSON gets a `401`; any other unauthenticated request is redirected to the admin login. A user without the required permission gets a `403`. Send `Accept: application/json` from API clients so they get the `401` rather than a redirect. See [Protecting Admin Routes](/docs/packages/admin-auth/#protecting-admin-routes).
+All endpoints require admin authentication through `AdminAuthMiddleware`. When the default guard is stateless (the token guard from [`marko/authentication-token`](/docs/packages/authentication-token/), the usual setup for a headless admin), an unauthenticated request always gets a `401` with the guard's `WWW-Authenticate` challenge, whatever its `Accept` header. On a stateful (session) guard, an unauthenticated request whose `Accept` header asks for JSON gets a `401` and any other unauthenticated request is redirected to the admin login, so send `Accept: application/json` from API clients that authenticate with the session. A user without the required permission gets a `403`. See [Protecting Admin Routes](/docs/packages/admin-auth/#protecting-admin-routes).
 
 | Method | Path | Description |
 |--------|------|-------------|

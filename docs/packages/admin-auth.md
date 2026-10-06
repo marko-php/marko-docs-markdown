@@ -35,8 +35,10 @@ class CatalogController
 
 When no admin is logged in, `AdminAuthMiddleware` does one of two things:
 
-- **Redirects** to `{prefix}/login` (`/admin/login` by default) when the request does not want JSON.
-- **Throws a `401` `UnauthenticatedException`** (an `HttpException` from `marko/authentication`) when the request wants JSON (`Request::wantsJson()`: an `Accept` header with `application/json` or a `+json` type), because an API client can't follow a login redirect.
+- **Redirects** to `{prefix}/login` (`/admin/login` by default) when the guard is stateful (the session guard) and the request does not want JSON.
+- **Throws a `401` `UnauthenticatedException`** (an `HttpException` from `marko/authentication`) in every other case: when the request wants JSON (`Request::wantsJson()`: an `Accept` header with `application/json` or a `+json` type), and always when the guard is stateless (`StatelessGuardInterface`, such as the token guard), whatever the `Accept` header, because an API client can't follow a login redirect. On a stateless guard the `401` carries the guard's `WWW-Authenticate` challenge (`Bearer` for the token guard), the same response [`AuthMiddleware`](/docs/packages/authentication/) sends.
+
+`AdminAuthMiddleware` uses the default guard (`GuardInterface`), so an application whose default guard is the token guard, such as a headless admin served through [`marko/admin-api`](/docs/packages/admin-api/), never redirects.
 
 The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), so it looks like every other HTTP error in the application:
 
@@ -244,7 +246,7 @@ class AdminAuthMiddleware implements MiddlewareInterface
 }
 ```
 
-Throws `Marko\Authentication\Exceptions\UnauthenticatedException` with status `401` for an unauthenticated request that wants JSON (with the guard's `WWW-Authenticate` challenge when the guard is stateless), or `Marko\Routing\Exceptions\HttpException` with status `403` for a missing permission. Unauthenticated requests that don't want JSON get a redirect response to `{prefix}/login`.
+Throws `Marko\Authentication\Exceptions\UnauthenticatedException` with status `401` for an unauthenticated request that wants JSON or whose guard is stateless (with the guard's `WWW-Authenticate` challenge when the guard is stateless), or `Marko\Routing\Exceptions\HttpException` with status `403` for a missing permission. An unauthenticated request on a stateful guard that doesn't want JSON gets a redirect response to `{prefix}/login`; a stateless guard never redirects.
 
 Permission enforcement relies on the router attaching route context to the request before middleware runs (see [`marko/routing`](/docs/packages/routing/) --- `Request::withRoute()`). If no route context is present, `#[RequiresPermission]` is not evaluated and the request passes through authenticated.
 

@@ -233,7 +233,7 @@ if ($guard->check()) {
 
 ### Stateless Guards
 
-A guard that authenticates each request from credentials the request carries implements `Marko\Authentication\Contracts\StatelessGuardInterface`. It adds one method to `GuardInterface`, `getChallenge()`, which returns the `WWW-Authenticate` challenge (for example `Bearer`). `AuthMiddleware` never redirects a stateless guard. Every `401` the framework sends for a guest (from `AuthMiddleware`, from `#[Can]` in [marko/authorization](/docs/packages/authorization/#failure-responses), and from `AdminAuthMiddleware`) carries the guard's challenge, because each one is built by `UnauthenticatedException::forGuard()`. Throw the same exception from your own middleware so its `401` looks identical:
+A guard that authenticates each request from credentials the request carries implements `Marko\Authentication\Contracts\StatelessGuardInterface`. It adds one method to `GuardInterface`, `getChallenge()`, which returns the `WWW-Authenticate` challenge (for example `Bearer`). Neither `AuthMiddleware` nor [`AdminAuthMiddleware`](/docs/packages/admin-auth/#protecting-admin-routes) redirects a guest on a stateless guard. Every `401` the framework sends for a guest (from `AuthMiddleware`, from `#[Can]` in [marko/authorization](/docs/packages/authorization/#failure-responses), and from `AdminAuthMiddleware`) carries the guard's challenge, because each one is built by `UnauthenticatedException::forGuard()`. Throw the same exception from your own middleware so its `401` looks identical:
 
 ```php title="ApiKeyMiddleware.php"
 use Marko\Authentication\Exceptions\UnauthenticatedException;
