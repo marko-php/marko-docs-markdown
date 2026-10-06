@@ -71,7 +71,7 @@ $response->headerValues('x-missing');     // []
 
 `headerValues()` returns every value in the order the server sent them. A driver passes them as `headerValues`. When a response is built without `headerValues` (for example by a driver written before it existed), each `headers` entry becomes a one-element list, which is lossless for headers that appear once.
 
-`headers()` only reflects the `headers` argument; it is never rebuilt from `headerValues`. Pass both when you construct a response yourself.
+When a response is built with only `headerValues`, `headers()` returns those values joined with `", "`. When `headers` is passed, `headers()` returns it unchanged.
 
 ### Request Options
 
@@ -181,7 +181,7 @@ public function __construct(
 
 public function statusCode(): int;
 public function body(): string;
-public function headers(): array;                     // array<string, string>, exact-case keys
+public function headers(): array;                     // array<string, string>, exact-case keys; joined from headerValues when headers is empty
 public function header(string $name): ?string;        // values joined with ", ", or null when absent
 public function headerValues(string $name): array;    // list<string>, or [] when absent
 public function json(): mixed;          // throws JsonException on invalid JSON

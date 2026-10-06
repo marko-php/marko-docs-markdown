@@ -240,17 +240,12 @@ $http->assertSentCount(1);
 $http->assertNotSent(fn (RecordedRequest $r) => str_contains($r->url, '/fail'));
 ```
 
-To fake repeated headers such as two `Set-Cookie` values, pass them as `headerValues`. The code under test reads them back with `headerValues()`. `headers()` only returns what you pass as `headers`, so pass both if the code under test also reads `headers()`:
+To fake repeated headers such as two `Set-Cookie` values, pass them as `headerValues`. The code under test reads them back with `headerValues()`, and `headers()` returns them joined with `", "`:
 
 ```php
-$cookies = ['session=abc; Expires=Wed, 21 Oct 2026 07:28:00 GMT', 'theme=dark'];
-
-$http->stub('https://sso.example.com/*', new HttpResponse(
-    200,
-    '',
-    headers: ['Set-Cookie' => implode(', ', $cookies)],
-    headerValues: ['Set-Cookie' => $cookies],
-));
+$http->stub('https://sso.example.com/*', new HttpResponse(200, '', headerValues: [
+    'Set-Cookie' => ['session=abc; Expires=Wed, 21 Oct 2026 07:28:00 GMT', 'theme=dark'],
+]));
 ```
 
 Each request is resolved in this order: the first registered stub whose pattern matches the URL, then the next queued response. A request that matches neither is a **stray request** and throws `AssertionFailedException`, so a test never silently talks to an unexpected endpoint. Call `$http->preventStrayRequests(false)` to answer stray requests with an empty `200` response instead.
