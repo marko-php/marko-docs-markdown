@@ -69,7 +69,7 @@ class UserService
 
 ### Bcrypt Length Limit
 
-Bcrypt only uses the first 72 bytes of a value and cannot hash a NUL (`\0`) byte. Rather than silently truncate, `BcryptHasher::hash()` throws `InvalidValueException` for a value longer than 72 bytes (`BcryptHasher::MAX_VALUE_BYTES`) or containing a NUL byte. `verify()` returns `false` for such a value and never throws, since no stored bcrypt hash can match it.
+Bcrypt only uses the first 72 bytes of a value and cannot hash a NUL (`\0`) byte. Rather than silently truncate, `BcryptHasher::hash()` throws `InvalidValueException` for a value longer than 72 bytes (`BcryptHasher::MAX_VALUE_BYTES`) or containing a NUL byte. `verify()` returns `false` for such a value and never throws, since no stored bcrypt hash can match it. Before returning `false` it still verifies the value against a dummy hash of the configured cost, so rejecting an over-long or NUL-containing value takes as long as checking a wrong password and `HashManager::verify()` leaks no timing difference between the two.
 
 The limit is in bytes, not characters: a password of multibyte UTF-8 characters reaches it sooner. Validate password length with `strlen()` on registration and password change so users get a form error instead of an exception:
 
