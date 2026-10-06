@@ -227,6 +227,8 @@ marko queue:work --queue=high,default,low --sleep=1
 | `--sleep` | Seconds to wait when every queue is empty (default `3`) |
 | `--once` | Process at most one job, then exit |
 
+If popping a job throws (for example, the broker is unreachable), the worker writes the error to PHP's error log (STDERR for `queue:work`), sleeps for `--sleep` seconds and polls again, so a pop failure doesn't stop the worker. With `--once` the error is thrown instead.
+
 ### Queue Priority
 
 Give `--queue` several names to work them in priority order from one worker process:

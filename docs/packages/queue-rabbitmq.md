@@ -107,11 +107,27 @@ readonly class OrderProcessor
 |---|---|
 | `push(JobInterface $job, ?string $queue = null): string` | Publish a job as a persistent AMQP message, returning the job ID |
 | `later(int $delay, JobInterface $job, ?string $queue = null): string` | Publish a delayed job via a dead-letter exchange --- `$delay` is in seconds |
-| `pop(?string $queue = null): ?JobInterface` | Consume the next message from the queue, or `null` if empty |
+| `pop(?string $queue = null): ?JobInterface` | Consume the next valid message from the queue, or `null` if empty --- rejects messages it can't decode (see [Malformed Messages](#malformed-messages)) |
 | `size(?string $queue = null): int` | Return the number of messages in the queue |
 | `clear(?string $queue = null): int` | Purge all messages from the queue, returning the count removed |
 | `delete(string $jobId): bool` | Acknowledge a consumed message by job ID |
-| `release(string $jobId, int $delay = 0): bool` | Reject and requeue a message --- with optional delay via dead-letter exchange |
+| `release(string $jobId, int $delay = 0): bool` | Republish the job with its attempt count incremented (optionally delayed via dead-letter exchange), wait for the broker to confirm it, then acknowledge the original message |
+
+#### Malformed Messages
+
+`pop()` rejects a message without requeueing it (`basic_reject`, `requeue: false`) when its HMAC signature doesn't match, its `job_id` header is missing, or its payload isn't a serialized job. The rejection is written to PHP's error log (STDERR for a CLI worker) with the queue, delivery tag and reason, and `pop()` moves on to the next message. One bad message --- a tampered payload, or jobs left queued across an `encryption.key` rotation --- can't crash every worker in turn.
+
+A rejected message is dropped unless the queue has a dead-letter exchange. To keep rejected messages for inspection, add a RabbitMQ policy that dead-letters them, for example:
+
+```bash
+rabbitmqctl set_policy marko-dlx "^default$" '{"dead-letter-exchange":"marko-dead-letter"}' --apply-to queues
+```
+
+An empty `encryption.key` is a configuration error, not a bad message: `pop()` requeues the message and throws `SerializationException`, so no job is dropped because the key is missing.
+
+#### Release and Publisher Confirms
+
+`release()` puts the channel into publisher-confirm mode the first time it runs, publishes the retry, and waits up to 10 seconds for the broker to confirm it before it acknowledges the original message. A crash between the two steps can deliver the job twice, but never loses it. If the broker nacks the retry, the original message is requeued and `release()` throws `RabbitmqException`.
 
 Constructor (the module binding supplies every argument from config, with `defaultQueue` taken from `queue.queue`):
 
@@ -139,12 +155,14 @@ $rabbitmqQueue = new RabbitmqQueue(
 
 Stores failed jobs in a dedicated `failed_jobs` RabbitMQ queue as JSON messages with persistent delivery.
 
+Reads fetch every message without acknowledging it, then requeue them all with `basic_nack(requeue: true)`. Nothing is acknowledged until the read is done, so an error partway through (such as a corrupt record) or a crashed process leaves every failed job on the queue.
+
 | Method | Description |
 |---|---|
 | `store(FailedJob $failedJob): void` | Publish a failed job record to the failed jobs queue |
 | `all(): array` | Retrieve all failed jobs without removing them |
 | `find(string $id): ?FailedJob` | Find a specific failed job by ID |
-| `delete(string $id): bool` | Acknowledge and remove a failed job by ID |
+| `delete(string $id): bool` | Acknowledge and remove the matching failed job, requeueing the rest |
 | `clear(): int` | Purge all failed jobs, returning the count removed |
 | `count(): int` | Return the number of failed jobs |
 
