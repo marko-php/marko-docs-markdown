@@ -1390,6 +1390,22 @@ Generate a migration with these changes? [y/N]
 
 Answering anything other than `y` cancels generation. When nobody can answer (CI, a deploy script, piped input), the command exits with code 1 and generates nothing unless you pass `--force`. Tables no entity owns (sessions, jobs, ...) are never touched.
 
+### Column Changes
+
+Changing a column's type, nullability or default on an existing entity generates a migration that changes the column in place. On PostgreSQL, the change goes into one `ALTER TABLE`:
+
+```sql
+ALTER TABLE "posts" ALTER COLUMN "views" TYPE BIGINT, ALTER COLUMN "views" SET DEFAULT 0
+```
+
+MySQL restates the whole column with `MODIFY COLUMN`. The down migration puts back the column's previous type, nullability and default, so `db:rollback` reverses the change.
+
+A few things to know:
+
+- **An undeclared default or length is kept.** If the entity declares no `default`, or no `length`, the column keeps the one the database already has. A migration never drops a default or resizes a `VARCHAR` just because the entity leaves it out.
+- **Primary key and auto-increment changes are refused on PostgreSQL.** They need a table rebuild, so generating SQL for one throws a `MigrationException` naming the column. Write that change in a migration by hand.
+- **`SET NOT NULL` needs data that satisfies it.** Making a column required fails if existing rows hold `NULL`. Fill those rows in first.
+
 ### Partial Indexes
 
 Add `where:` to `#[Index]` to create a partial index. The predicate is raw SQL, copied into the `CREATE INDEX` statement:

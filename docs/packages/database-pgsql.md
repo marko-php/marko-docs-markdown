@@ -297,7 +297,7 @@ Implements `SqlGeneratorInterface`. Generates PostgreSQL DDL for schema migratio
 | `generateDropTable(string $tableName): string` | Generate a DROP TABLE statement |
 | `generateAddColumn(string $table, Column $column): string` | Generate an ALTER TABLE ADD COLUMN statement |
 | `generateDropColumn(string $table, string $columnName): string` | Generate an ALTER TABLE DROP COLUMN statement |
-| `generateModifyColumn(string $table, Column $column, Column $oldColumn): string` | Generate ALTER COLUMN type/nullability/default changes |
+| `generateModifyColumn(string $table, Column $column, Column $oldColumn): string` | Generate one ALTER TABLE with the type, nullability and default changes from `$oldColumn` to `$column`. Throws `MigrationException` when none of those differ, or when the primary key or auto-increment changes |
 | `generateAddIndex(string $table, Index $index): string` | Generate a CREATE INDEX statement |
 | `generateDropIndex(string $table, string $indexName): string` | Generate a DROP INDEX statement |
 | `generateAddForeignKey(string $table, ForeignKey $foreignKey): string` | Generate an ADD CONSTRAINT FOREIGN KEY statement |
