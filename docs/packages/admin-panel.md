@@ -26,7 +26,7 @@ The panel registers these routes automatically:
 | POST | `/admin/logout` | Logout (requires valid CSRF token) |
 | GET | `/admin` | Dashboard (requires auth) |
 
-The login and logout `POST` routes are protected by `CsrfMiddleware` from [`marko/security`](/docs/packages/security/). The login form receives a CSRF token via the `csrfToken` template variable; the template must include it as a hidden field named `_token`. Requests without a valid token are rejected before authentication logic runs.
+The login and logout `POST` routes are protected by the global `CsrfMiddleware` that [`marko/security`](/docs/packages/security/) registers. The login form receives a CSRF token via the `csrfToken` template variable; the template must include it as a hidden field named `_token`. Requests without a valid token are rejected before authentication logic runs.
 
 ### Building the Sidebar Menu
 
@@ -123,15 +123,11 @@ interface AdminMenuBuilderInterface
 
 ```php
 use Marko\Routing\Attributes\Get;
-use Marko\Routing\Attributes\Middleware;
 use Marko\Routing\Attributes\Post;
-use Marko\Security\Middleware\CsrfMiddleware;
 
 #[Get(path: '/admin/login')]                    // showLoginForm
-#[Post(path: '/admin/login')]
-#[Middleware(CsrfMiddleware::class)]             // authenticate — CSRF required
-#[Post(path: '/admin/logout')]
-#[Middleware(CsrfMiddleware::class)]             // logout — CSRF required
+#[Post(path: '/admin/login')]                   // authenticate — CSRF required (global CsrfMiddleware)
+#[Post(path: '/admin/logout')]                  // logout — CSRF required (global CsrfMiddleware)
 ```
 
 ### DashboardController Routes
