@@ -98,7 +98,8 @@ Implements all methods from `CacheInterface`. See `marko/cache` for the full con
 
 - Each cache key is hashed with `xxh128` and stored as a `.cache` file in the configured path.
 - Each file holds an HMAC-SHA256 envelope (`{hmac}.{serialized-entry}`) signed by [`CacheValueSigner`](/docs/packages/cache/#cachevaluesigner). The HMAC is checked with `hash_equals()` before `unserialize()` runs, so a file planted in the cache directory can't inject objects.
-- A file that is unsigned, malformed, tampered with or signed with a different key is treated as a miss and deleted; `increment()` restarts such a counter at `1`. Entries written before signing was introduced are unsigned, so upgrading (or rotating `encryption.key`) empties the file cache.
+- The HMAC is bound to the cache key, so a file copied over another key's file does not verify.
+- A file that is unsigned, malformed, tampered with, copied from another key, or signed with a different key is treated as a miss and deleted; `increment()` restarts such a counter at `1`. Entries signed by an older release (before signing, or before HKDF subkeys and key binding) don't verify, so upgrading (or rotating `encryption.key`) empties the file cache.
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption.
 - The cache directory is created on the first write. Later writes check `is_dir()` and never call `mkdir()` again.
 - A `null` TTL falls back to `default_ttl` from config. A TTL of `0` or less means the entry never expires.

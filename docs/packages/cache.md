@@ -220,14 +220,19 @@ public function defaultTtl(): int;
 
 ### CacheValueSigner
 
-`Marko\Cache\Signer\CacheValueSigner` signs serialized cache payloads with HMAC-SHA256 using `encryption.key` from [`marko/encryption`](/docs/packages/encryption/). Drivers that persist values outside the PHP process (`marko/cache-file`, `marko/cache-redis`) use it so `unserialize()` only ever sees bytes the application wrote itself. The envelope format is `{64-char-hex-hmac}.{serialized-payload}`.
+`Marko\Cache\Signer\CacheValueSigner` signs serialized cache payloads with HMAC-SHA256. Drivers that persist values outside the PHP process (`marko/cache-file`, `marko/cache-redis`) use it so `unserialize()` only ever sees bytes the application wrote itself. The envelope format is `{64-char-hex-hmac}.{serialized-payload}`.
+
+- **Derived key.** The HMAC key is a subkey derived from `encryption.key` ([`marko/encryption`](/docs/packages/encryption/)) with `hash_hkdf('sha256', $key, 32, 'marko-cache-signer')`. The key that encrypts data is never reused for signing, and the cache subkey differs from the [queue envelope's](/docs/packages/queue/#payload-envelope-format).
+- **Bound to the storage key.** Every method takes a `$context` string, and the MAC covers it along with the payload. Drivers pass the key the entry is stored under (the prefixed Redis key, or the cache key for files), so a validly signed value copied to another key does not verify.
 
 ```php
 use Marko\Cache\Signer\CacheValueSigner;
 
-public function wrap(string $serialized): string;            // sign a payload
-public function unwrap(string $envelope): ?string;           // null when unsigned, malformed or tampered
-public function verifyAndUnwrap(string $envelope): string;   // throws TamperedCacheValueException instead of returning null
+public function wrap(string $serialized, string $context): string;            // sign a payload for $context
+public function unwrap(string $envelope, string $context): ?string;           // null when unsigned, malformed, tampered or signed for another context
+public function verifyAndUnwrap(string $envelope, string $context): string;   // throws TamperedCacheValueException instead of returning null
 ```
 
 Every method throws `TamperedCacheValueException::emptySigningKey()` when `encryption.key` is empty.
+
+Entries signed by a release before HKDF subkeys and key binding no longer verify. The file driver treats them as misses and deletes them. The Redis driver throws `TamperedCacheValueException` for them, so run `marko cache:clear` when you deploy the upgrade.
