@@ -770,6 +770,16 @@ public function verifyDummy(string $password): void;
 
 `verifyDummy()` checks the password against a fixed dummy hash of the configured cost and discards the result. `BcryptPasswordHasher` builds that dummy hash at its own cost, so the check takes as long as verifying a real stored password.
 
+Bcrypt only uses the first 72 bytes of a password and cannot hash a NUL (`\0`) byte. Rather than silently truncate, `BcryptPasswordHasher::hash()` throws `InvalidPasswordException` for a password longer than 72 bytes (`BcryptPasswordHasher::MAX_PASSWORD_BYTES`) or containing a NUL byte. `verify()` returns `false` for such a password and never throws; it still runs the dummy check first, so rejecting an oversize password at login takes as long as checking a real one. The limit is in bytes, not characters, so validate passwords with `strlen()` on registration and password change to show a form error instead of an exception:
+
+```php
+use Marko\Authentication\Hashing\BcryptPasswordHasher;
+
+if (strlen($password) > BcryptPasswordHasher::MAX_PASSWORD_BYTES || str_contains($password, "\0")) {
+    // Reject with a validation error
+}
+```
+
 ### SessionGuard
 
 ```php
