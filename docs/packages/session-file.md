@@ -28,6 +28,10 @@ return [
 
 The `path` directory is created automatically if it does not exist.
 
+A relative `path` resolves against the project root (`ProjectPaths->base`), not the process working directory, so it lands in the same place under the CLI, PHP-FPM, CGI, and Apache `mod_php`. Absolute paths are used as-is.
+
+Session files must never be web-reachable. If the resolved `path` is the project's `public/` directory or anything inside it, `FileSessionHandler` throws `InsecureSessionPathException` instead of starting.
+
 ## Usage
 
 Installing `marko/session-file` is all that is required to activate file-based sessions. The package registers `FileSessionHandler` as the `SessionHandlerInterface` implementation, binds `SessionInterface` to `Session` as a singleton, and adds `SessionMiddleware` globally --- no manual configuration is needed.
@@ -79,6 +83,7 @@ Implements all methods from `SessionHandlerInterface`. See [`marko/session`](/do
 | Exception | Description |
 |---|---|
 | `SessionWriteException` | Thrown when the session file cannot be truncated or the write is incomplete (e.g. disk full, permissions error) |
+| `InsecureSessionPathException` | Thrown on construction when the resolved `session.path` is inside the project's `public/` directory |
 
 ### Storage Details
 
