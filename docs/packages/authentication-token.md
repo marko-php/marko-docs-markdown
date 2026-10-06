@@ -130,7 +130,7 @@ Clients send the token in the `Authorization` header on every request:
 Authorization: Bearer <plain-text-token>
 ```
 
-`TokenGuard` hashes the token, looks it up in `personal_access_tokens`, rejects it once `expires_at` has passed, and resolves the user through the configured user provider. `expires_at` and `created_at` are written by `TokenManager` and read by `TokenGuard` in the [database timezone](/docs/packages/database/#datetimes-and-timezones) (`database.timezone`, UTC by default), so an expiry passed in any timezone is honoured to the second whatever the server's PHP default timezone. Protect routes with `AuthMiddleware` on the token guard:
+`TokenGuard` hashes the token, looks it up in `personal_access_tokens`, rejects it once `expires_at` has passed, and resolves the user through the configured user provider by `tokenable_id`. The resolved user must be an instance of the token's `tokenable_type` (the class the token was issued for, or a subclass of it); otherwise the request is a guest, so a token issued for a `Customer` with id 1 never authenticates an `AdminUser` with id 1. Point each token guard at the provider for the model its tokens are issued to. `expires_at` and `created_at` are written by `TokenManager` and read by `TokenGuard` in the [database timezone](/docs/packages/database/#datetimes-and-timezones) (`database.timezone`, UTC by default), so an expiry passed in any timezone is honoured to the second whatever the server's PHP default timezone. Protect routes with `AuthMiddleware` on the token guard:
 
 ```php title="ApiController.php"
 use Marko\Authentication\AuthManager;
@@ -163,7 +163,19 @@ The token guard keeps no login state. `attempt()`, `login()`, `loginById()` and 
 
 ### Checking Token Abilities
 
-After authentication, check whether the resolved token has a specific ability. `hasAbility()` lives on `TokenGuard`, so narrow the guard first:
+A token's abilities can only narrow what its user may do. Three rules decide what a token grants:
+
+| `abilities` passed to `createToken()` | Grants |
+|---|---|
+| `[]` (the default), or a `NULL` column | Every ability: the token has the full authority of its user |
+| A list containing `'*'` | Every ability |
+| Any other list, e.g. `['posts:read']` | Exactly the listed abilities. Matching is exact and case-sensitive: `posts:read` does not grant `posts`, `posts:*` or `POSTS:READ` |
+
+An `abilities` column that is not a JSON array grants nothing.
+
+**`#[Can]` and the `Gate` enforce abilities for you.** `TokenGuard` implements `Marko\Authentication\Contracts\AbilityScopedGuardInterface`, and when the [authorization](/docs/packages/authorization/#api-token-abilities) guard is a token guard, `Gate::allows('x')` (and so `#[Can('x')]`, `denies()` and `authorize()`) first requires the token to grant `x`. A token scoped to `['posts:read']` is denied `#[Can('posts:delete')]` with a `403`, even when the user's own gate closure or policy would allow it. Name your token abilities after your gate abilities and policy methods so the two line up.
+
+For a route that is not behind `#[Can]`, check the ability yourself. `hasAbility()` lives on `TokenGuard`, so narrow the guard first:
 
 ```php
 use Marko\AuthenticationToken\Guard\TokenGuard;
@@ -181,7 +193,7 @@ public function update(
 }
 ```
 
-Abilities are stored as a JSON array on the token record. Pass an empty `abilities` array to `createToken()` for a token with no scoping (full access).
+`hasAbility()` returns `false` when the request carries no valid token.
 
 ### Revoking Tokens
 
@@ -275,7 +287,7 @@ use Marko\AuthenticationToken\Contracts\TokenRepositoryInterface;
 use Marko\Core\Event\EventDispatcherInterface;
 use Psr\Clock\ClockInterface;
 
-public function __construct(TokenRepositoryInterface $repository, TokenConfig $config, ClockInterface $clock, ?EventDispatcherInterface $eventDispatcher = null);
+public function __construct(TokenRepositoryInterface $repository, TokenConfig $config, ClockInterface $clock, DatabaseTimezoneConfig $databaseTimezoneConfig, ?EventDispatcherInterface $eventDispatcher = null);
 public function createToken(AuthenticatableInterface $user, string $name, array $abilities = [], ?DateTimeInterface $expiresAt = null): NewAccessToken;
 public function revokeToken(int $tokenId): void;
 public function revokeAllTokens(AuthenticatableInterface $user): void;
@@ -294,15 +306,15 @@ public function expirationDays(): ?int; // positive int or null; anything else t
 
 ### TokenGuard
 
-Implements `StatelessGuardInterface` and `ResettableInterface`. `AuthManager::reset()` resets it between worker requests, which forgets the token it resolved last:
+Implements `StatelessGuardInterface`, `AbilityScopedGuardInterface` and `ResettableInterface`. `AuthManager::reset()` resets it between worker requests, which forgets the token it resolved last:
 
 ```php
-public function __construct(TokenRepositoryInterface $repository, CurrentRequest $currentRequest, ClockInterface $clock, UserProviderInterface $provider, string $name = 'token', ?EventDispatcherInterface $eventDispatcher = null);
+public function __construct(TokenRepositoryInterface $repository, CurrentRequest $currentRequest, ClockInterface $clock, DatabaseTimezoneConfig $databaseTimezoneConfig, UserProviderInterface $provider, string $name = 'token', ?EventDispatcherInterface $eventDispatcher = null);
 public function check(): bool;
 public function guest(): bool;
 public function user(): ?AuthenticatableInterface;
 public function id(): int|string|null;
-public function hasAbility(string $ability): bool;
+public function hasAbility(string $ability): bool; // [] / NULL / '*' grant every ability; false without a valid token
 public function extractToken(): ?string;
 public function getName(): string;
 public function getChallenge(): string; // 'Bearer'

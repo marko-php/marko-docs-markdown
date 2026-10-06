@@ -131,4 +131,6 @@ use Marko\Encryption\Exceptions\DecryptionException;
 
 DecryptionException::invalidPayload(); // corrupted or tampered data
 DecryptionException::invalidKey();     // wrong encryption key
+DecryptionException::invalidTagLength(actual: 1, expected: 16); // truncated authentication tag
+DecryptionException::invalidIvLength(actual: 8, expected: 12);  // IV length does not match the cipher
 ```

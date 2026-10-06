@@ -243,7 +243,9 @@ public function __construct(
 public function format(): string;
 ```
 
-The constructor validates `event` and `id`: if either contains a CR (`\r`) or LF (`\n`) character, `SseException::invalidField()` is thrown. SSE field values must be single-line.
+The constructor validates `event` and `id`: if either contains a CR (`\r`), LF (`\n`) or NUL (`\0`) character, `SseException::invalidField()` is thrown. SSE field values must be single-line.
+
+Multi-line string `data` is safe: `format()` treats CRLF, a lone CR and a lone LF all as line breaks (as the SSE spec does) and writes each line as its own `data:` field, so a payload can never end the event early or inject `event`, `id` or `retry` fields.
 
 ### SseStream
 
@@ -324,6 +326,6 @@ Extends [`MarkoException`](/docs/packages/core/). Includes factory methods:
 
 - `SseException::ambiguousSource()` --- thrown when both a `dataProvider` and a `subscription` are passed to `SseStream`.
 - `SseException::noSource()` --- thrown when neither a `dataProvider` nor a `subscription` is provided.
-- `SseException::invalidField(string $field, string $value)` --- thrown by `SseEvent` constructor when the `event` or `id` field contains a CR (`\r`) or LF (`\n`) character. SSE field values must not span multiple lines; passing a value with embedded newlines is an error.
+- `SseException::invalidField(string $field, string $value)` --- thrown by `SseEvent` constructor when the `event` or `id` field contains a CR (`\r`), LF (`\n`) or NUL (`\0`) character. SSE field values must not span multiple lines; passing a value with embedded newlines is an error.
 - `SseException::invalidMaxConnections(int $maxConnections)` --- thrown when `sse.max_connections` is below 1.
 - `SseException::processLocalCache(string $cacheClass)` --- thrown when the connection guard is enabled but `CacheInterface` is bound to a process-local driver such as `marko/cache-array`.

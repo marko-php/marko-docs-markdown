@@ -28,6 +28,8 @@ The panel registers these routes automatically:
 
 The login and logout `POST` routes are protected by the global `CsrfMiddleware` that [`marko/security`](/docs/packages/security/) registers. The login form receives a CSRF token via the `csrfToken` template variable; the template must include it as a hidden field named `_token`. Requests without a valid token are rejected before authentication logic runs.
 
+Login and logout run on the [admin guard](/docs/packages/admin-auth/#the-admin-guard) (`admin-auth.guard`), which authenticates against `AdminUserProvider`. A frontend user can't sign in here, and an admin login is separate from any frontend session.
+
 ### Building the Sidebar Menu
 
 `AdminMenuBuilderInterface` produces a navigation structure filtered by the user's permissions:

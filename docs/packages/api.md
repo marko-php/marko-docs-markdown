@@ -178,6 +178,40 @@ class PostResource extends JsonResource
 
 `internal` is always omitted from the JSON output.
 
+### Collections and Nested Resources
+
+`when()` and `missing()` are honoured everywhere a resource is serialized, not only for a single top-level resource:
+
+- Every item in a `ResourceCollection` is resolved through its resource's filtered output, so `ResourceCollection::toArray()` and `toResponse()` hide the same fields as `JsonResource::toResponse()`.
+- A resource or resource collection returned as a field value inside `toArray()` is filtered the same way.
+- Filtering recurses into nested plain arrays. Hidden entries removed from a list are re-indexed, so the list still encodes as a JSON array.
+
+```php
+use Marko\Api\Resource\JsonResource;
+use Marko\Api\Resource\ResourceCollection;
+
+class UserResource extends JsonResource
+{
+    public function toArray(): array
+    {
+        return [
+            'id'        => $this->resource->id,
+            'api_token' => $this->when($this->resource->isOwner, $this->resource->apiToken),
+            'profile'   => [
+                'name'  => $this->resource->name,
+                'email' => $this->when($this->resource->isOwner, $this->resource->email),
+            ],
+        ];
+    }
+}
+
+// Both omit api_token and profile.email for non-owners:
+new UserResource($user)->toResponse();
+new ResourceCollection($users, UserResource::class)->toResponse();
+```
+
+`toArray()` returns the raw mapping with the `ConditionalValue` and `MissingValue` wrappers still in it. Call `resolve()` when you need the filtered array yourself. `ConditionalValue` and `MissingValue` implement `JsonSerializable` and throw an `ApiResourceException` if they reach `json_encode()` unresolved, so a hidden field fails loudly instead of leaking.
+
 ## Customization
 
 To override the resource response format application-wide, use a [Preference](/docs/packages/core/) to extend `JsonResource` or `ResourceCollection`:
@@ -193,7 +227,7 @@ class WrappedJsonResource extends JsonResource
     public function toResponse(): Response
     {
         return Response::json([
-            'data'    => $this->filterArray($this->toArray()),
+            'data'    => $this->resolve(),
             'version' => '1.0',
         ]);
     }
@@ -214,9 +248,11 @@ abstract class JsonResource implements ResourceInterface
 {
     public function __construct(public readonly mixed $resource);
     abstract public function toArray(): array;
+    public function resolve(): array;
     public function toResponse(): Response;
     protected function when(bool $condition, mixed $value): ConditionalValue;
     protected function missing(): MissingValue;
+    protected function filterArray(array $array): array;
 }
 ```
 
@@ -266,17 +302,21 @@ interface ResourceCollectionInterface
 ### ConditionalValue
 
 ```php
-class ConditionalValue
+readonly class ConditionalValue implements JsonSerializable
 {
-    public function __construct(public readonly bool $condition, public readonly mixed $value);
+    public function __construct(public bool $condition, public mixed $value);
     public function resolve(): mixed;
+    public function jsonSerialize(): never; // throws ApiResourceException
 }
 ```
 
 ### MissingValue
 
 ```php
-class MissingValue {}
+class MissingValue implements JsonSerializable
+{
+    public function jsonSerialize(): never; // throws ApiResourceException
+}
 ```
 
 ### ApiResourceException
@@ -285,7 +325,10 @@ class MissingValue {}
 use Marko\Api\Exceptions\ApiResourceException;
 use Marko\Core\Exceptions\MarkoException;
 
-class ApiResourceException extends MarkoException {}
+class ApiResourceException extends MarkoException
+{
+    public static function unresolvedValue(string $valueClass): self;
+}
 ```
 
 Inherits `getContext()` and `getSuggestion()` from `MarkoException`.

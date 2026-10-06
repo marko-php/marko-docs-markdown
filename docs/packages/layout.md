@@ -142,6 +142,8 @@ Handles control which pages a component appears on:
 
 Register `LayoutMiddleware` in your application middleware stack. When a controller has a `#[Layout]` attribute, it delegates rendering to `LayoutProcessor` automatically.
 
+`LayoutMiddleware` is registered as global middleware, so it wraps every route-level middleware. It runs the route middleware and controller action first, and only replaces a **successful** result (a 2xx response without a `Location` header) with the rendered layout. Any other response passes through untouched — an auth redirect to `/login`, a 401/403 from `#[Can]`, a 419 CSRF mismatch, a 429 rate limit, or a 404 thrown by the controller reaches the client instead of the layout, so layout components never render for a denied request.
+
 ## Customization
 
 Override any component via [Preferences](/docs/packages/core/) to swap implementations without modifying vendor code.

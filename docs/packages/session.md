@@ -25,7 +25,7 @@ return [
     'driver' => 'file',
     'lifetime' => 120, // minutes
     'expire_on_close' => false,
-    'path' => 'storage/sessions',
+    'path' => 'storage/sessions', // relative to the project root; never inside public/
     'cookie' => [
         'name' => 'marko_session',
         'path' => '/',

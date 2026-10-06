@@ -34,10 +34,7 @@ return [
     ],
 
     'providers' => [
-        'users' => [
-            'driver' => 'database',
-            'table' => 'users',
-        ],
+        'users' => [], // no 'class': the app's UserProviderInterface binding
     ],
 
     'password' => [
@@ -62,6 +59,8 @@ return [
 ```
 
 Each guard's `driver` picks how it is built. `session` is built in. The shipped `token` guard needs [marko/authentication-token](/docs/packages/authentication-token/); until it is installed, resolving that guard throws an `AuthException` that tells you to install it. See [Guard Drivers](#guard-drivers).
+
+Each guard's `provider` names an entry in `providers`. See [User Providers](#user-providers).
 
 See [Remember Me](#remember-me) for what each `remember` option controls.
 
@@ -282,6 +281,8 @@ Registering a driver name again replaces the earlier factory, so a later module 
 
 ### Custom Guards
 
+A guard whose credentials can be scoped to a subset of what the user may do (an API token issued with abilities, for example) implements `Marko\Authentication\Contracts\AbilityScopedGuardInterface`, which adds `hasAbility(string $ability): bool`. The [authorization Gate](/docs/packages/authorization/#api-token-abilities) denies an authenticated user any ability the guard's `hasAbility()` rejects, so `#[Can]` respects token scopes.
+
 Implement `GuardInterface` to create custom guards, then register them as a driver. A stateless guard implements `StatelessGuardInterface` instead and throws from the stateful methods:
 
 ```php title="JwtGuard.php"
@@ -345,6 +346,53 @@ class JwtGuard implements StatelessGuardInterface
     }
 }
 ```
+
+## User Providers
+
+A user provider (`UserProviderInterface`) loads users for a guard. Each guard gets its own provider, so one application can authenticate different kinds of users, for example customers on the frontend and admins in the admin panel, without one store standing in for the other.
+
+`AuthManager` picks a guard's provider with `UserProviderResolver`:
+
+1. The guard's `provider` key names an entry in `authentication.providers`. A guard without one uses `authentication.default.provider`.
+2. The entry's `class` key names a `UserProviderInterface` implementation, resolved from the container.
+3. A guard with no provider name, a provider entry without a `class`, or an application with no `authentication.providers` at all uses the container's `UserProviderInterface` binding.
+
+A single-provider application therefore needs nothing more than the binding:
+
+```php title="app/web/module.php"
+use App\Web\Auth\CustomerProvider;
+use Marko\Authentication\Contracts\UserProviderInterface;
+
+return [
+    'bindings' => [
+        UserProviderInterface::class => CustomerProvider::class,
+    ],
+];
+```
+
+Give a guard its own provider with a `class`:
+
+```php title="config/authentication.php"
+return [
+    'guards' => [
+        'session' => ['driver' => 'session', 'provider' => 'users'],
+        'partner' => ['driver' => 'session', 'provider' => 'partners'],
+    ],
+    'providers' => [
+        'users' => [],
+        'partners' => ['class' => App\Partner\Auth\PartnerProvider::class],
+    ],
+];
+```
+
+Each provider is built once and shared by every guard that names it. A guard naming a provider missing from `authentication.providers`, or a `class` that does not implement `UserProviderInterface`, throws an `AuthException`:
+
+```php
+// AuthException: User provider 'partners' is not defined in authentication.providers
+// Context: Guard 'partner' uses provider 'partners'. Configured providers: users
+```
+
+Every session guard keeps its user in its own session key, `auth_{guard}_user_id`, and its own remember-me cookie, `remember_{guard}`. Logging in on one guard never authenticates another. [marko/admin-auth](/docs/packages/admin-auth/#the-admin-guard) uses this to ship a separate `admin` guard backed by `AdminUserProvider`.
 
 ## Remember Me
 
@@ -689,6 +737,12 @@ public function setRememberToken(?string $token): void;
 public function getRememberTokenName(): string;
 ```
 
+### UserProviderResolver
+
+```php
+public function forGuard(string $guard, array $guardConfig): UserProviderInterface;
+```
+
 ### UserProviderInterface
 
 ```php
@@ -700,6 +754,19 @@ public function updateRememberToken(AuthenticatableInterface $user, ?string $tok
 ```
 
 `retrieveByRememberToken()` receives the SHA-256 hash of the cookie's token, the same value previously passed to `updateRememberToken()`.
+
+`retrieveByCredentials()` and `validateCredentials()` receive request input as-is, so a provider must treat non-string `email` or `password` values (such as `email[]=x`) as a failed login rather than passing them to typed methods. When `retrieveByCredentials()` finds no usable account (unknown or inactive), it should call `PasswordHasherInterface::verifyDummy()` before returning `null`, so a failed login costs one password check either way and response timing does not reveal which accounts exist. `AdminUserProvider` in [admin-auth](/docs/packages/admin-auth/) does both.
+
+### PasswordHasherInterface
+
+```php
+public function hash(string $password): string;
+public function verify(string $password, string $hash): bool;
+public function needsRehash(string $hash): bool;
+public function verifyDummy(string $password): void;
+```
+
+`verifyDummy()` checks the password against a fixed dummy hash of the configured cost and discards the result. `BcryptPasswordHasher` builds that dummy hash at its own cost, so the check takes as long as verifying a real stored password.
 
 ### SessionGuard
 
