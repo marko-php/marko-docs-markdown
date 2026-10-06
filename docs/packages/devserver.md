@@ -48,6 +48,20 @@ marko up --detach
 
 Use `marko status` and `marko down` to manage background services.
 
+Detached mode needs the `posix` and `pcntl` PHP extensions. Without them, `marko up` throws a `DevServerException` that tells you to enable them or use `--foreground`.
+
+### Startup Failures
+
+`marko up` reports a service that cannot start with a `DevServerException`, instead of printing it as running. It checks the following in both modes:
+
+- **Port in use**: before starting any service, `marko up` checks whether the PHP server's port is free. If another process is listening on it, it throws `Port 8000 is already in use` and starts nothing.
+- **Missing command**: before spawning each service, the first word of its command is looked up (`command -v` for a bare name, or a file check for a path such as `./tailwindcss`). A command that does not exist or is not executable fails right away with a message such as `Failed to start process 'tailwind' with command: ./tailwindcss --watch ('./tailwindcss' does not exist)`. Leading `VAR=value` assignments, `env` and `exec` are skipped. Commands the shell has to interpret first, such as quoted words, `$(...)` or `if ...; fi`, are not looked up. They are caught by the startup probe below.
+- **Early exit**: each service is watched for a short probe window (0.5 seconds by default) after it starts:
+  - **Foreground mode**: the service fails if it exits with code 126 (not executable) or 127 (command not found) during the window. `start()` returns as soon as a service exits, so the window only delays services that keep running. A service that exits with any other code is reported as `[name] exited with code N` while the environment runs.
+  - **Detached mode**: the service fails if it exits during the window for any reason, and the error includes its exit code, for example `(exited with code 127)`. Each detached service runs under a small PHP supervisor that leads the service's process group. The supervisor keeps the service's stdin open, waits for the service to exit, and records its exit code.
+
+In foreground mode, `marko up` also waits until the PHP server accepts connections before it starts streaming output. It returns as soon as the first connection succeeds. If the server exits first (for example, another process took the port after the check), it throws `Port N is already in use`. If the server neither accepts connections nor exits within 10 seconds, it throws a `DevServerException` naming the host and port.
+
 ### Checking Status
 
 ```bash
@@ -243,15 +257,20 @@ use Marko\DevServer\Process\ProcessManager;
 
 /** @throws DevServerException */
 $processManager->start(string $name, string $command): int;
+/** @throws DevServerException */
+$processManager->startDetached(string $name, string $command): int;
 $processManager->stop(string $name): void;
 $processManager->stopAll(): void;
 $processManager->getPid(string $name): ?int;
 $processManager->getPids(): array; // array<string, int>
 $processManager->isRunning(string $name): bool;
 $processManager->runForeground(): void;
+$processManager->isPortAvailable(string $host, int $port): bool;
+/** @throws DevServerException */
+$processManager->waitUntilAccepting(string $name, string $host, int $port): bool;
 ```
 
-`stop()` and `stopAll()` return only once each process and its whole process group are gone. They send `SIGTERM` to the process and its group, wait up to the stop timeout, then send `SIGKILL`. If a group survives `SIGKILL` (for example, a process stuck in uninterruptible I/O), they throw a `DevServerException` naming the PID. The stop timeout defaults to 3 seconds and is set through the constructor:
+`stop()` and `stopAll()` return only once each process and its whole process group are gone. They send `SIGTERM` to the process and its group, wait up to the stop timeout, then send `SIGKILL`. If a group survives `SIGKILL` (for example, a process stuck in uninterruptible I/O), they throw a `DevServerException` naming the PID. The stop timeout defaults to 3 seconds. It and the other timings are set through the constructor:
 
 ```php
 use Marko\DevServer\Process\ProcessManager;
@@ -259,11 +278,20 @@ use Marko\DevServer\Process\ProcessManager;
 $processManager = new ProcessManager(
     output: $output,
     stopTimeoutSeconds: 10.0, // grace period between SIGTERM and SIGKILL
-    startProbeSeconds: 0.5, // how long start() watches for "command not found"
+    startProbeSeconds: 1.0, // how long start()/startDetached() watch a new process for an early exit
+    statusDirectory: '/tmp', // where startDetached() keeps its short-lived exit status files
+    serverReadyTimeoutSeconds: 30.0, // how long waitUntilAccepting() waits for a connection
 );
 ```
 
-`start()` watches the new process for `startProbeSeconds` (default 0.15 seconds) and throws a `DevServerException` if it exits with code 126 or 127 (not executable or not found) in that window. It returns as soon as the process exits, so a longer window only delays commands that keep running.
+`start()` and `startDetached()` first look up the command's executable and throw a `DevServerException` if it is missing or not executable. Nothing is spawned in that case. They then watch the new process for `startProbeSeconds` (default 0.5 seconds):
+
+- `start()` throws if the process exits with code 126 or 127 in that window, and returns as soon as the process exits.
+- `startDetached()` throws if the process exits for any reason in that window, and includes the exit code in the message. A process that keeps running is only reported once the full window has passed.
+
+`statusDirectory` defaults to the system temp directory. `startDetached()` removes its status files when the probe window ends.
+
+`isPortAvailable()` returns false when something already accepts connections on the host and port, or when binding it fails with "address already in use". Wildcard hosts (`0.0.0.0`, `::`) are probed through loopback. `waitUntilAccepting()` returns true as soon as a connection to the host and port succeeds, and false if the named process exits first. If neither happens within `serverReadyTimeoutSeconds` (default 10 seconds), it throws a `DevServerException`.
 
 ### PidFile
 
@@ -303,5 +331,7 @@ readonly class ProcessEntry
 
 Extends `MarkoException` with contextual error messages and suggestions:
 
-- `processFailedToStart(string $name, string $command)` --- thrown when a process fails to start. Suggests checking the command and running `marko status`.
+- `processFailedToStart(string $name, string $command, ?string $reason = null)` --- thrown when a process fails to start. The reason (for example `Executable 'npx' was not found in PATH` or `exited with code 127`) is appended to the message. Suggests checking the command and running `marko status`.
+- `processFailedToStop(string $name, int $pid)` --- thrown when a process group survives `SIGKILL`.
 - `portInUse(int $port)` --- thrown when the PHP server port is already in use. Suggests using `--port=XXXX` to pick a different port.
+- `serverNotReady(string $host, int $port, float $timeoutSeconds)` --- thrown when the PHP server neither accepts connections nor exits within the timeout.
