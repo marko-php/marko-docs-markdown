@@ -1740,6 +1740,8 @@ Run db:migrate in development to generate a migration, then commit and deploy it
 
 Generated migration files are named `{YmdHis}_{operation}_{table}.php`, with the timestamp read from the injected `ClockInterface`. When one run generates several files, each one is a second later than the previous, so they apply in dependency order.
 
+Each statement is written as a single-quoted PHP string, `$this->execute($connection, '...');`, with quotes and backslashes escaped, so no table, column or index name read from the database can end the string and add PHP to the file. A name that holds a control character (a newline, tab, NUL or similar) is never a real schema name, so generation refuses it with a `MigrationException` naming the identifier and writes no files. Rename the object in the database and run `db:migrate` again.
+
 ### Destructive Changes
 
 The entity is the source of truth for the tables it owns, so a column, index or foreign key the entity no longer declares is dropped. Before generating a migration that drops anything, `db:migrate` lists each destructive statement and asks for confirmation:
