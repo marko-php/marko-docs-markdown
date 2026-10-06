@@ -110,6 +110,8 @@ With `force` declared, `marko report:send --force 42 --to a@example.com --to b@e
 
 Declared flags are applied by the command runner, so they take effect when the command runs through `marko` or the `CommandRunner`. In unit tests that call `execute()` directly, pass the same flags to `Input`: `new Input(['marko', 'report:send', '--force', '42'], ['force', 'f'])`.
 
+`--no-interaction` is a global flag: every command accepts it without declaring it, and it never takes a value. It tells commands not to ask questions; see [Asking for Confirmation](/docs/packages/core/#asking-for-confirmation).
+
 ### Command Namespacing
 
 Group related commands with colons:
@@ -166,6 +168,7 @@ class Input
     public function getOption(string $name): ?string;   // Last value, 'true' for a bare flag, null if absent
     public function getOptionValues(string $name): array; // list<string> of every value given
     public function hasOption(string $name): bool;
+    public function isInteractive(): bool;              // false when --no-interaction is passed
 }
 ```
 

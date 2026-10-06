@@ -1433,7 +1433,7 @@ This migration would remove existing database objects:
 Generate a migration with these changes? [y/N]
 ```
 
-Answering anything other than `y` cancels generation. When nobody can answer (CI, a deploy script, piped input), the command exits with code 1 and generates nothing unless you pass `--force`. Tables no entity owns (sessions, jobs, ...) are never touched.
+Answering anything other than `y` or `yes` cancels generation. When nobody can answer (CI, a deploy script, piped input, or `--no-interaction`), the command exits with code 1 and generates nothing unless you pass `--force`. The question is asked through core's [`ConfirmationPrompterInterface`](/docs/packages/core/#asking-for-confirmation); in tests, pass a [`FakeConfirmationPrompter`](/docs/packages/testing/#fakeconfirmationprompter) to `MigrateCommand`. Tables no entity owns (sessions, jobs, ...) are never touched.
 
 ### Column Changes
 

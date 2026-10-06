@@ -271,6 +271,59 @@ class RefundCommand implements CommandInterface
 
 `marko billing:refund --force 1001 --reason late` and `marko billing:refund 1001 --reason=late --force` are equivalent. Arguments and options can come in any order, `--` ends option parsing, and repeated options are read with `getOptionValues()`. See [marko/cli](/docs/packages/cli/#arguments-and-options) for the full option syntax.
 
+The running command's `Input` and `Output` are also registered in the container, so a console service the command depends on reads the same options and writes to the same stream.
+
+### Asking for Confirmation
+
+Inject `ConfirmationPrompterInterface` to ask the person running the command a yes/no question. The prompter writes the question with a `[y/N]` or `[Y/n]` hint through the command's `Output` and reads the answer from standard input:
+
+```php title="app/billing/src/Command/PurgeCommand.php"
+use Marko\Core\Attributes\Command;
+use Marko\Core\Command\CommandInterface;
+use Marko\Core\Command\ConfirmationPrompterInterface;
+use Marko\Core\Command\Input;
+use Marko\Core\Command\Output;
+
+#[Command(name: 'billing:purge', description: 'Delete archived invoices', flags: ['force'])]
+class PurgeCommand implements CommandInterface
+{
+    public function __construct(
+        private ConfirmationPrompterInterface $confirmationPrompter,
+    ) {}
+
+    public function execute(Input $input, Output $output): int
+    {
+        if (!$input->hasOption('force')) {
+            if (!$this->confirmationPrompter->isInteractive()) {
+                $output->writeLine('Error: Refusing to purge without confirmation. Re-run with --force.');
+
+                return 1;
+            }
+
+            if (!$this->confirmationPrompter->confirm('Delete all archived invoices?')) {
+                return 0;
+            }
+        }
+
+        // ...
+
+        return 0;
+    }
+}
+```
+
+| Answer | Result |
+|--------|--------|
+| `y`, `yes` (any case) | `true` |
+| `n`, `no` (any case) | `false` |
+| Empty, end of input, anything else | `$default` (`false` unless you pass `default: true`) |
+
+**`--no-interaction`** is accepted by every command; you don't declare it. When it is passed, `isInteractive()` is `false`, `$input->isInteractive()` is `false`, and `confirm()` asks nothing and returns `$default`. `isInteractive()` is also `false` when standard input is not a terminal (CI, a pipe), although `confirm()` still reads a piped answer such as `echo y | marko billing:purge`.
+
+A command that must not go ahead without a person (a destructive action) checks `isInteractive()` first and refuses loudly with a flag such as `--force`, as above. Relying on the default is for optional offers that are safe to skip.
+
+`StdinConfirmationPrompter` is the default implementation, bound by `Application`. To replace it, bind `ConfirmationPrompterInterface` in your module's `module.php`. In tests, use [`FakeConfirmationPrompter`](/docs/packages/testing/#fakeconfirmationprompter) from `marko/testing`.
+
 ### Discovery Cache
 
 Without a cache, every boot discovers the application from scratch: it scans every `vendor/*/*` package and parses its `composer.json` to find modules, sorts them by dependency, scans every module PHP file for `#[Preference]`, `#[Plugin]`, `#[Observer]`, `#[Command]` and route attributes, resolves global middleware, and (with `marko/database`) scans for entities. Boot cost grows with every class in the app. In production all of this is compiled once into a single PHP file --- the discovery cache --- so a request skips every scan.
@@ -474,6 +527,26 @@ interface ContainerInterface extends PsrContainerInterface
 `has()` returns `true` for existing classes, interface bindings and instances registered with `instance()`, so it works for an interface that only has a pre-built instance and no binding.
 
 The concrete `Container` class additionally provides `resolvedInstances(?string $interface = null): array` --- not part of `ContainerInterface`. It returns only instances already built, optionally filtered to those implementing `$interface`, and never triggers resolution as a side effect. See [Resetting Request-Scoped State](#resetting-request-scoped-state-in-long-running-processes) above.
+
+### Console
+
+```php
+interface ConfirmationPrompterInterface
+{
+    public function isInteractive(): bool;
+    public function confirm(string $question, bool $default = false): bool;
+}
+
+readonly class Input
+{
+    public const string NO_INTERACTION = 'no-interaction';
+
+    public function isInteractive(): bool; // false when --no-interaction is passed
+    // getCommand(), getArguments(), getArgument(), hasOption(), getOption(), getOptionValues(), withFlags()
+}
+```
+
+`StdinConfirmationPrompter(Input $input, Output $output, mixed $stream = null)` is the default binding for `ConfirmationPrompterInterface`. See [Asking for Confirmation](#asking-for-confirmation) above.
 
 ### AppEnvironment
 

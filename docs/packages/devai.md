@@ -19,7 +19,7 @@ To enable docs search (`search_docs`), a docs driver is required — `marko/docs
 No docs search driver installed. Install marko/docs-fts to enable search_docs? [Y/n]
 ```
 
-Answering yes runs `composer require --dev marko/docs-fts` and builds the index. In non-interactive mode, CI, or when `--no-interaction` is passed, the prompt is skipped. To install manually:
+Answering yes runs `composer require --dev marko/docs-fts` and builds the index. Without a terminal (CI) or when `--no-interaction` is passed, the prompt is skipped; the question goes through core's [`ConfirmationPrompterInterface`](/docs/packages/core/#asking-for-confirmation). To install manually:
 
 ```bash
 composer require --dev marko/docs-fts

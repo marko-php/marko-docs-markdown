@@ -52,7 +52,7 @@ When you run `marko devai:install` in an interactive terminal and no docs driver
 No docs search driver installed. Install marko/docs-fts to enable search_docs? [Y/n]
 ```
 
-Answering yes runs `composer require --dev marko/docs-fts` and then builds the index automatically. In non-interactive mode, CI, or when `--no-interaction` is passed, the prompt is skipped and a hint is printed instead — the install never blocks.
+Answering yes runs `composer require --dev marko/docs-fts` and then builds the index automatically. In non-interactive mode, CI, or when `--no-interaction` is passed, the prompt is skipped — the install never blocks.
 
 To install and build manually:
 

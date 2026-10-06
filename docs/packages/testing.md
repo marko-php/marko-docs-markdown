@@ -3,9 +3,9 @@ title: marko/testing
 description: Reusable fakes with built-in assertions that eliminate test boilerplate.
 ---
 
-Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, and the clock. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. An in-process HTTP test client (`TestClient`) sends requests through your real routes, middleware and controllers for feature tests. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`, `toHaveStatus`, `toHaveJsonPath`) are included for fluent assertions.
+Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, the clock, and console confirmations. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. An in-process HTTP test client (`TestClient`) sends requests through your real routes, middleware and controllers for feature tests. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`, `toHaveStatus`, `toHaveJsonPath`) are included for fluent assertions.
 
-Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`.
+Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`, `FakeConfirmationPrompter`.
 
 ## Installation
 
@@ -190,6 +190,25 @@ $clock->assertNowIs('2026-06-01 09:00:00 UTC');
 ```
 
 `travel()` accepts any `DateTimeImmutable::modify()` string; a malformed modifier throws `DateMalformedStringException`. With no argument, the fake is frozen at the moment it was created.
+
+### FakeConfirmationPrompter
+
+`FakeConfirmationPrompter` implements core's [`ConfirmationPrompterInterface`](/docs/packages/core/#asking-for-confirmation). Script one answer per question; it records each question asked:
+
+```php
+use Marko\Core\Command\Input;
+use Marko\Testing\Fake\FakeConfirmationPrompter;
+
+$prompter = new FakeConfirmationPrompter(answers: [true]);
+$command = new PurgeCommand($prompter);
+
+$command->execute(new Input(['marko', 'billing:purge']), $output);
+
+$prompter->assertAsked('Delete all archived invoices?');
+$prompter->asked; // ['Delete all archived invoices?']
+```
+
+Pass `interactive: false` to test the `--no-interaction` / no-terminal path: like the real prompter, `confirm()` then asks nothing and returns its `$default`, and `assertNothingAsked()` passes. Asking more questions than answers were scripted throws `AssertionFailedException`.
 
 ### FakeAuthenticatable and FakeUserProvider
 
@@ -820,6 +839,17 @@ public function setNow(DateTimeImmutable|string $now): void;
 public function travel(string $modifier): void;
 public function travelTo(DateTimeImmutable|string $now): void;
 public function assertNowIs(DateTimeImmutable|string $expected): void;
+```
+
+### FakeConfirmationPrompter
+
+```php
+public private(set) array $asked; // list<string>
+public function __construct(array $answers = [], bool $interactive = true);
+public function isInteractive(): bool;
+public function confirm(string $question, bool $default = false): bool;
+public function assertAsked(string $question): void;
+public function assertNothingAsked(): void;
 ```
 
 ### TestClient
