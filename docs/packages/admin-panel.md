@@ -24,7 +24,7 @@ The panel registers these routes automatically:
 | GET | `/admin/login` | Login form |
 | POST | `/admin/login` | Authenticate (requires valid CSRF token) |
 | POST | `/admin/logout` | Logout (requires valid CSRF token) |
-| GET | `/admin` | Dashboard (requires auth) |
+| GET | `/admin` | Dashboard (requires auth; lists only the sections the admin user can access) |
 
 The login and logout `POST` routes are protected by the global `CsrfMiddleware` that [`marko/security`](/docs/packages/security/) registers. The login form receives a CSRF token via the `csrfToken` template variable; the template must include it as a hidden field named `_token`. Requests without a valid token are rejected before authentication logic runs.
 
