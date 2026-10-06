@@ -104,7 +104,15 @@ The `guzzle` key is **not portable**: any other `HttpClientInterface` driver, an
 
 ### Response Headers
 
-Guzzle exposes each response header as a list of values. `HttpResponse::headers()` returns one string per header, so repeated values are joined with `", "`. This is lossy for `Set-Cookie`, whose values can themselves contain commas (for example in `Expires`). If you need each cookie separately, read the raw response through a custom `createClient()` middleware.
+Guzzle exposes each response header as a list of values, and the driver passes that list through unchanged. `HttpResponse::headers()` returns one string per header, with repeated values joined by `", "`, which is lossy for `Set-Cookie` (its `Expires` attribute contains a comma). Read each cookie with [`headerValues()`](/docs/packages/http/#reading-response-headers):
+
+```php
+$response = $client->get('https://sso.example.com/handoff');
+
+foreach ($response->headerValues('set-cookie') as $cookie) {
+    // one complete Set-Cookie value per iteration
+}
+```
 
 ## Customization
 

@@ -57,6 +57,22 @@ if ($response->isSuccessful()) {
 
 By default a 4xx or 5xx response throws `HttpException` (see [Error Responses](#error-responses)), so `isClientError()` and `isServerError()` are useful when the request opts out with `'http_errors' => false`.
 
+### Reading Response Headers
+
+`headers()` returns one string per header name, keyed exactly as the server sent it, with repeated values joined by `", "`. That join is lossy for `Set-Cookie`, whose values contain commas of their own (`Expires=Wed, 21 Oct 2026 07:28:00 GMT`). Read headers through `header()` and `headerValues()` instead. Both match the name case-insensitively:
+
+```php
+$response = $client->post('https://sso.example.com/handoff');
+
+$response->header('content-type');        // 'application/json', or null when absent
+$response->headerValues('set-cookie');    // ['session=abc; Expires=Wed, 21 Oct 2026 07:28:00 GMT', 'theme=dark']
+$response->headerValues('x-missing');     // []
+```
+
+`headerValues()` returns every value in the order the server sent them. A driver passes them as `headerValues`. When a response is built without `headerValues` (for example by a driver written before it existed), each `headers` entry becomes a one-element list, which is lossless for headers that appear once.
+
+`headers()` only reflects the `headers` argument; it is never rebuilt from `headerValues`. Pass both when you construct a response yourself.
+
 ### Request Options
 
 All methods accept an `$options` array. The keys are a portable set defined as constants on `Marko\Http\RequestOptions`, so the same call works with any driver:
@@ -151,14 +167,23 @@ public function delete(string $url, array $options = []): HttpResponse;
 
 ### HttpResponse
 
-A `readonly` value object constructed with a status code, body, and headers.
+A `readonly` value object constructed with a status code, body, headers, and (optionally) every value of each header.
 
 ```php
 use Marko\Http\HttpResponse;
 
+public function __construct(
+    int $statusCode,
+    string $body,
+    array $headers = [],       // array<string, string>: one string per header name
+    array $headerValues = [],  // array<string, list<string>>: every value, in order
+);
+
 public function statusCode(): int;
 public function body(): string;
-public function headers(): array;
+public function headers(): array;                     // array<string, string>, exact-case keys
+public function header(string $name): ?string;        // values joined with ", ", or null when absent
+public function headerValues(string $name): array;    // list<string>, or [] when absent
 public function json(): mixed;          // throws JsonException on invalid JSON
 public function isSuccessful(): bool;   // 2xx
 public function isRedirect(): bool;     // 3xx
