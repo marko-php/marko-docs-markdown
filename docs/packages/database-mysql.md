@@ -66,6 +66,28 @@ This driver supports both MySQL and MariaDB. CI runs the driver integration test
 
 With `innodb_snapshot_isolation=ON` (the default from MariaDB 11.8), a `REPEATABLE READ` transaction that writes a row a concurrent transaction changed after its snapshot fails with error `1020` ("Record has changed since last read"). The driver raises it as `SerializationFailureException`, so `transaction(attempts: ...)` retries it like a deadlock. MySQL never raises `1020` for this case. See [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
+### Session Time Zone
+
+Every connection runs `SET time_zone` as its init command (`PDO\Mysql::ATTR_INIT_COMMAND`), so the session follows [`database.timezone`](/docs/packages/database/#the-database-session-time-zone) whatever the server's `time_zone` is, and a reconnect is pinned again:
+
+| `database.timezone` | Session `time_zone` |
+|---|---|
+| `UTC` (default) | `'+00:00'` |
+| A region such as `America/New_York` | `'America/New_York'` |
+| A fixed offset or abbreviation such as `+05:30` or `CEST` | `'+05:30'` / `'+02:00'` |
+
+`TIMESTAMP` columns, `DEFAULT CURRENT_TIMESTAMP` and `NOW()` then all work in `database.timezone`. MySQL and MariaDB behave the same here.
+
+UTC and fixed offsets need nothing from the server. A region zone needs the server's time zone tables. The official MySQL and MariaDB Docker images load them, but many other installs don't. Without them, `connect()` throws a `ConnectionException`:
+
+```text
+MySQL does not know the time zone 'America/New_York' that database.timezone pins the session to
+```
+
+Load the tables (`mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql`, or `mariadb-tzinfo-to-sql` on MariaDB), or set `database.timezone` to `UTC` or a fixed offset. MySQL accepts offsets from `-13:59` to `+14:00`.
+
+Upgrading from a server that wasn't on UTC changes how existing `TIMESTAMP` values read back. See [Upgrading from a non-UTC server](/docs/packages/database/#upgrading-from-a-non-utc-server).
+
 ### Character Set
 
 The default charset is `utf8mb4` which supports the full Unicode range including emojis. This is the recommended setting for new applications.

@@ -329,7 +329,7 @@ return [
 ];
 ```
 
-An invalid identifier fails loudly (a `ConfigurationException` naming the value) the first time a datetime is converted.
+An invalid identifier fails loudly (a `ConfigurationException` naming the value) when the database config is loaded or the first time a datetime is converted.
 
 > **Behaviour change:** before casts were introduced, datetimes were formatted in whatever timezone the object carried and read back in the PHP default timezone, so a value saved from a non-UTC object came back as a different instant. Rows written that way by a non-UTC application hold local wall-clock times; convert them to UTC (or set `timezone` to the zone they were written in) when upgrading.
 
@@ -365,6 +365,57 @@ In tests, `DatabaseTimezoneConfig::fromName('UTC')` builds one without reading `
 > **Behaviour change:** the tables above used to be written in the clock's timezone (PHP's default timezone for `SystemClock`). An app whose PHP default timezone isn't its database timezone has existing rows holding local wall-clock times. See [upgrading the queue tables](/docs/packages/queue-database/#upgrading-rows-written-in-the-old-timezone) for the drain-or-convert steps; the same conversion SQL applies to the other tables.
 
 Datetimes are stored to the second (`Y-m-d H:i:s`). Declare the column type explicitly --- `#[Column(type: 'timestamp')]` or `#[Column(type: 'datetime')]` --- because a `DateTimeImmutable` property does not infer one.
+
+#### The database session time zone
+
+The MySQL/MariaDB and PostgreSQL drivers pin the database session to `database.timezone` every time they connect, including after a reconnect. Times the database produces itself then agree with the times Marko writes:
+
+- `DEFAULT CURRENT_TIMESTAMP`, `NOW()` and `CURRENT_TIMESTAMP` in raw SQL give the current time in `database.timezone`, not in the server's zone.
+- MySQL `TIMESTAMP` columns convert from and to the session zone, so with the default UTC a value is stored as written, even when it falls in a daylight-saving gap of the server's zone.
+- Every process (web, CLI workers, replicas through [`marko/database-readwrite`](/docs/packages/database-readwrite/)) uses the same zone, whatever each server's own zone is.
+
+| `database.timezone` | MySQL / MariaDB | PostgreSQL |
+|---|---|---|
+| `UTC` (default) | `SET time_zone = '+00:00'` | `SET TIME ZONE 'UTC'` |
+| A region such as `America/New_York` | `SET time_zone = 'America/New_York'` | `SET TIME ZONE 'America/New_York'` |
+| A fixed offset or abbreviation such as `+05:30` or `CEST` | `SET time_zone = '+05:30'` | `SET TIME ZONE INTERVAL '+05:30' HOUR TO MINUTE` |
+
+A region zone on MySQL or MariaDB needs the server's time zone tables. Without them the connection fails with a `ConnectionException` naming the zone; see [Session Time Zone](/docs/packages/database-mysql/#session-time-zone). UTC and fixed offsets need no tables.
+
+> **Behaviour change:** connections used to run in the server's own zone. On a server that isn't on UTC (for example a MySQL server whose `time_zone` is `SYSTEM` on a machine set to New York):
+> - MySQL `TIMESTAMP` values Marko wrote were converted from the server's zone on write, so they now read back shifted by its offset.
+> - Rows filled by `DEFAULT CURRENT_TIMESTAMP` or `NOW()` (on MySQL `DATETIME` and PostgreSQL `TIMESTAMP` columns) hold the server's local time. Marko reads them in `database.timezone`.
+>
+> See [Upgrading from a non-UTC server](#upgrading-from-a-non-utc-server) below. A server already running on UTC (the default in most managed databases and Docker images) needs no change.
+
+#### Upgrading from a non-UTC server
+
+First find the zone the server ran in (`SELECT @@GLOBAL.time_zone, @@system_time_zone` on MySQL, `SHOW TimeZone` on PostgreSQL). Stop the writers, then convert the affected columns. The examples assume a server in `America/New_York` and the default UTC `database.timezone`; use your own zones.
+
+**MySQL `TIMESTAMP` columns Marko wrote** (the `jobs` and `failed_jobs` tables of [`marko/queue-database`](/docs/packages/queue-database/), and entity columns declared `type: 'timestamp'`). The server read each UTC string Marko sent as New York time, so the stored instant is off by the offset. Run in a UTC session (any connection Marko opens, or `SET time_zone = '+00:00'` first):
+
+```sql title="MySQL / MariaDB"
+SET time_zone = '+00:00';
+UPDATE jobs SET
+    available_at = CONVERT_TZ(available_at, '+00:00', 'America/New_York'),
+    created_at = CONVERT_TZ(created_at, '+00:00', 'America/New_York'),
+    reserved_at = CONVERT_TZ(reserved_at, '+00:00', 'America/New_York');
+UPDATE failed_jobs SET failed_at = CONVERT_TZ(failed_at, '+00:00', 'America/New_York');
+```
+
+A `TIMESTAMP` the database filled itself (`DEFAULT CURRENT_TIMESTAMP` with no value from Marko) already holds the right instant and needs no change.
+
+**`DATETIME` (MySQL) and `TIMESTAMP` (PostgreSQL) columns the database filled** with `DEFAULT CURRENT_TIMESTAMP` or `NOW()` hold New York wall-clock times:
+
+```sql title="MySQL / MariaDB"
+UPDATE comments SET created_at = CONVERT_TZ(created_at, 'America/New_York', '+00:00');
+```
+
+```sql title="PostgreSQL"
+UPDATE comments SET created_at = created_at AT TIME ZONE 'America/New_York' AT TIME ZONE 'UTC';
+```
+
+Values Marko wrote to `DATETIME` or PostgreSQL `TIMESTAMP` columns (through `DateTimeCast` or `DatabaseTimezoneConfig`) are already in `database.timezone`; leave them alone. Named zones in `CONVERT_TZ()` need the time zone tables (it returns `NULL` without them); a fixed offset such as `'-05:00'` works without tables but ignores daylight saving time.
 
 ### Casts
 

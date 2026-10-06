@@ -131,6 +131,20 @@ This driver supports PostgreSQL 14+. Older versions may work but are not tested.
 
 Connections use the database role's default `search_path` (normally `public`). There is no `schema` configuration key; to work in a different schema, set the role's `search_path` in PostgreSQL (for example, `ALTER ROLE app SET search_path TO my_schema;`).
 
+### Session Time Zone
+
+After `SET NAMES`, every connection runs `SET TIME ZONE`, so the session follows [`database.timezone`](/docs/packages/database/#the-database-session-time-zone) whatever the server's or the role's `TimeZone` is, and a reconnect is pinned again:
+
+| `database.timezone` | Statement |
+|---|---|
+| `UTC` (default) | `SET TIME ZONE 'UTC'` |
+| A region such as `America/New_York` | `SET TIME ZONE 'America/New_York'` |
+| A fixed offset or abbreviation such as `+05:30` or `CEST` | `SET TIME ZONE INTERVAL '+05:30' HOUR TO MINUTE` |
+
+A fixed offset is sent as an interval because PostgreSQL reads a bare `'+05:30'` as a POSIX zone and inverts its sign. `DEFAULT CURRENT_TIMESTAMP`, `NOW()` and `LOCALTIMESTAMP` on `TIMESTAMP` columns then give the time in `database.timezone`. PostgreSQL ships its own zone data, so any zone in `pg_timezone_names` works. One the server rejects fails `connect()` with a `ConnectionException` naming the zone.
+
+Behind PgBouncer in transaction pooling mode, session settings (`SET NAMES` and `SET TIME ZONE` alike) don't stick to the server connection your next statement runs on. Use session pooling, or set the same zone on the role (`ALTER ROLE app SET timezone = 'UTC'`).
+
 ### Native Types
 
 PostgreSQL has excellent support for advanced data types. Marko leverages these native types:

@@ -64,8 +64,9 @@ return [
 | `connections.read` | `array[]` | Yes | One or more replica connection configs |
 | `connections.read_strategy` | `string` | No | Replica selection strategy: `random` (default) or `weighted` |
 | `read[n].weight` | `int` | No | Required when `read_strategy` is `weighted`; positive integer |
+| `timezone` | `string` | No | Top-level [`database.timezone`](/docs/packages/database/#datetimes-and-timezones) (default `UTC`) |
 
-Each connection config inside `write` and `read[]` follows the same structure as a standalone driver config (e.g., `marko/database-pgsql`).
+Each connection config inside `write` and `read[]` follows the same structure as a standalone driver config (e.g., `marko/database-pgsql`). The time zone is the exception: every node's session is pinned to the top-level `timezone` ([the database session time zone](/docs/packages/database/#the-database-session-time-zone)), so the primary and the replicas agree. A `timezone` inside a node config is ignored.
 
 ## Replica Strategies
 

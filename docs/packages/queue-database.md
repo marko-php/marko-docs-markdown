@@ -149,7 +149,7 @@ UPDATE failed_jobs SET failed_at = failed_at AT TIME ZONE 'America/New_York' AT 
 
 If you set `database.timezone` to a zone other than UTC, use it as the target instead of `'+00:00'` / `'UTC'`.
 
-> **MySQL note:** the jobs columns are `TIMESTAMP`, which MySQL converts from the connection's session `time_zone` to UTC on write and back on read. Marko doesn't set a session time zone, so a server whose system zone observes DST can still shift values that land in its skipped or repeated hour. Run the server (or the session) on `+00:00` to rule that out.
+> **MySQL note:** the jobs columns are `TIMESTAMP`, which MySQL converts from the session `time_zone` to UTC on write and back on read. The driver [pins the session to `database.timezone`](/docs/packages/database-mysql/#session-time-zone) on connect, so with the default UTC the values are stored as written, whatever the server's own zone is. If the server wasn't on UTC before that change, existing `jobs` and `failed_jobs` rows need converting; see [Upgrading from a non-UTC server](/docs/packages/database/#upgrading-from-a-non-utc-server).
 
 ### PostgreSQL and Payload Encoding
 
