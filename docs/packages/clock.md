@@ -93,6 +93,12 @@ These packages take an injected `ClockInterface` and so require `marko/clock`:
 - [`marko/cache-redis`](/docs/packages/cache-redis/) --- the reported `expiresAt()` of a cache item (Redis itself enforces the TTL)
 - [`marko/ratelimiter`](/docs/packages/ratelimiter/) --- `Retry-After`
 - [`marko/page-cache-file`](/docs/packages/page-cache-file/) --- cached page expiry
+- [`marko/notification`](/docs/packages/notification/) and [`marko/notification-database`](/docs/packages/notification-database/) --- `created_at` and `read_at` timestamps
+- [`marko/broadcasting-amphp`](/docs/packages/broadcasting-amphp/) --- subscriber token expiry, event id timestamps, and replay buffer eviction
+- [`marko/broadcasting-mercure`](/docs/packages/broadcasting-mercure/) --- subscriber JWT and cookie expiry
+- [`marko/broadcasting-pusher`](/docs/packages/broadcasting-pusher/) --- request signature timestamps
+- [`marko/media`](/docs/packages/media/) --- the `YYYY/MM` upload path
+- [`marko/sse`](/docs/packages/sse/) --- stream heartbeats and timeouts (`SseStream` defaults to `SystemClock` when you construct it without one)
 
 ## API Reference
 

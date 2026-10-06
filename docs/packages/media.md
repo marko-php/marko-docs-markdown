@@ -136,6 +136,8 @@ class PostController
 
 `upload()` derives the MIME type from the file's actual binary content using `finfo` (not the client-supplied value), then validates it against `allowed_mime_types`. It also cross-checks the file extension against `mime_extension_map` to ensure the extension matches the detected MIME type. Finally it checks `allowed_extensions`, writes the file to the configured disk under a `YYYY/MM/<unique>.<ext>` path, and returns a persisted `Media` entity. All three checks throw `UploadException` on failure.
 
+The `YYYY/MM` prefix comes from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/), so a test that constructs `MediaManager` with a [`FakeClock`](/docs/packages/testing/#fakeclock) knows exactly where the file lands.
+
 ### Generating a Public URL
 
 ```php

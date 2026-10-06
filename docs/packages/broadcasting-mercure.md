@@ -180,6 +180,8 @@ public function withAuthorizationCookie(Response $response, array $channels, ?Au
 public function subscribeUrl(array $channels): string;
 ```
 
+The JWT `exp` claim and the cookie expiry are `subscriber_jwt_ttl` seconds after the injected PSR-20 [`ClockInterface`](/docs/packages/clock/). In tests, construct `MercureSubscriberToken` with a [`FakeClock`](/docs/packages/testing/#fakeclock) to assert an exact expiry.
+
 ### MercureJwt
 
 A minimal HS256 encoder used for publisher and subscriber tokens --- no JWT library dependency.

@@ -54,6 +54,8 @@ $this->notificationRepository->markAsRead($notificationId);
 $this->notificationRepository->markAllAsRead($user);
 ```
 
+`read_at` is read from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/). In tests, construct `DatabaseNotificationRepository` with a [`FakeClock`](/docs/packages/testing/#fakeclock) to get a known timestamp.
+
 ### Fetching Unread Notifications
 
 ```php

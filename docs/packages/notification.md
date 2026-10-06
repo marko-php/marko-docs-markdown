@@ -264,7 +264,7 @@ class SmsChannel implements ChannelInterface, BatchChannelInterface
 }
 ```
 
-The built-in `DatabaseChannel` implements `BatchChannelInterface` and persists multiple recipients via a single chunked multi-row INSERT.
+The built-in `DatabaseChannel` implements `BatchChannelInterface` and persists multiple recipients via a single chunked multi-row INSERT. It stamps `created_at` from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/), so a test that passes a [`FakeClock`](/docs/packages/testing/#fakeclock) gets a known timestamp.
 
 ```php
 use Marko\Notification\Contracts\BatchChannelInterface;

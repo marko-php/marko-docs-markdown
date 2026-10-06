@@ -145,6 +145,8 @@ public function broadcast(string|Channel $channel, string $event, array $data, ?
 public function dispatch(BroadcastableInterface $broadcastable): void;
 ```
 
+Each request is signed with `auth_timestamp` read from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/). In tests, a [`FakeClock`](/docs/packages/testing/#fakeclock) makes the signed query string predictable.
+
 ### PusherSignature
 
 ```php

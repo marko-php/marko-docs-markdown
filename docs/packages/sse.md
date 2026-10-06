@@ -198,6 +198,33 @@ return new StreamingResponse($stream);
 
 **Middleware compatibility:** Any middleware in front of an SSE route must [decorate the response rather than rebuild it](/docs/packages/routing/#decorating-responses) --- for example `$response->withHeader(...)` instead of `new Response($response->body(), ...)`. Rebuilding discards the concrete class, so a `StreamingResponse` would be silently downgraded to a plain `Response` and the stream would never send.
 
+### Testing heartbeats and timeouts
+
+`SseStream` measures `heartbeatInterval` and `timeout` with a PSR-20 [`ClockInterface`](/docs/packages/clock/). Since you construct the stream yourself, the `clock` parameter defaults to a `SystemClock`. In tests, pass a [`FakeClock`](/docs/packages/testing/#fakeclock) and move it from the data provider. With `pollInterval: 0`, the stream runs without sleeping:
+
+```php
+use Marko\Sse\SseStream;
+use Marko\Testing\Fake\FakeClock;
+
+it('sends a keepalive after 15 idle seconds and closes after 20', function (): void {
+    $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+
+    $stream = new SseStream(
+        dataProvider: function () use ($clock): array {
+            $clock->travel('+5 seconds');
+
+            return [];
+        },
+        heartbeatInterval: 15,
+        timeout: 20,
+        pollInterval: 0,
+        clock: $clock,
+    );
+
+    expect(iterator_to_array($stream, preserve_keys: false))->toBe([": keepalive\n\n"]);
+});
+```
+
 ## API Reference
 
 ### SseEvent
@@ -221,8 +248,10 @@ The constructor validates `event` and `id`: if either contains a CR (`\r`) or LF
 ### SseStream
 
 ```php
+use Marko\Clock\SystemClock;
 use Marko\Sse\SseStream;
 use Marko\PubSub\Subscription;
+use Psr\Clock\ClockInterface;
 
 public function __construct(
     private ?Closure $dataProvider = null,
@@ -230,6 +259,7 @@ public function __construct(
     private int $heartbeatInterval = 15,
     private int $timeout = 300,
     private int $pollInterval = 1,
+    private ClockInterface $clock = new SystemClock(),
 )
 
 public function timeout(): int;
@@ -244,6 +274,7 @@ public function getIterator(): Generator;
 | `timeout` | Yes | Yes |
 | `pollInterval` | Yes | No — events arrive instantly |
 | `heartbeatInterval` | Yes | Yes — keepalive emitted when no messages arrive within the interval |
+| `clock` | Yes | Yes — measures `timeout` and `heartbeatInterval` |
 
 ### StreamingResponse
 

@@ -246,6 +246,23 @@ public function verify(string $token): ?AmphpTokenClaims;
 
 Tokens are `base64url(JSON {u, c, e}) . "." . base64url(HMAC-SHA256(app_key, "u|c1,c2|e"))`. `verify()` returns `null` for forged, expired or malformed tokens.
 
+### Time
+
+The package reads time through the PSR-20 [`ClockInterface`](/docs/packages/clock/): token expiry in `AmphpSubscriberToken` and `AmphpSignature`, the millisecond prefix of generated event ids, and `replay_ttl` eviction in the server's replay buffer. In tests, construct these classes with a [`FakeClock`](/docs/packages/testing/#fakeclock) to check expiry without sleeping:
+
+```php
+use Marko\Broadcasting\Amphp\AmphpBroadcastingConfig;
+use Marko\Broadcasting\Amphp\Auth\AmphpSignature;
+use Marko\Testing\Fake\FakeClock;
+
+$clock = new FakeClock('2026-01-01 12:00:00 UTC');
+$signature = new AmphpSignature(new AmphpBroadcastingConfig(appKey: 'secret'), $clock);
+$token = $signature->sign(7, ['private-orders.7'], $clock->now()->getTimestamp() + 60);
+
+$clock->travel('+61 seconds');
+$signature->verify($token); // null: expired
+```
+
 ### ServeCommand
 
 `marko broadcasting:serve [--host=HOST] [--port=PORT]` starts `AmphpSseServer` and runs the event loop until `SIGINT` or `SIGTERM`.
