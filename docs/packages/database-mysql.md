@@ -119,7 +119,7 @@ class MyService
 
 ### Transactions
 
-`MySqlConnection` also implements `TransactionInterface` and `ResettableInterface`. The driver module registers one shared instance per request (per worker under a long-running runtime), and `TransactionInterface` resolves to that same instance. See [Transactions](/docs/packages/database/#transactions).
+`MySqlConnection` also implements `TransactionInterface`, `PendingAfterCommitInterface` and `ResettableInterface`. The driver module registers one shared instance per request (per worker under a long-running runtime), and `TransactionInterface` resolves to that same instance. See [Transactions](/docs/packages/database/#transactions).
 
 | Method | Description |
 |---|---|
@@ -131,6 +131,7 @@ class MyService
 | `transaction(callable $callback): mixed` | Execute a callback inside a transaction (a savepoint when nested) --- auto-commits on success, rolls back on exception |
 | `afterCommit(callable $callback): void` | Run the callback after the outermost commit (immediately outside a transaction) |
 | `afterRollback(callable $callback): void` | Run the callback if its level rolls back |
+| `runPendingAfterCommitCallbacks(): void` | Run the queued `afterCommit()` callbacks without committing (`PendingAfterCommitInterface`); for test helpers such as `RefreshDatabase`, not production code |
 | `reset(): void` | Roll back every level left open by a failed request and drop pending callbacks; never opens a connection |
 
 See [Nested Transactions](/docs/packages/database/#nested-transactions) and [After-Commit Callbacks](/docs/packages/database/#after-commit-callbacks).

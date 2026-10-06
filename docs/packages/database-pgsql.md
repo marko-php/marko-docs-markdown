@@ -175,7 +175,7 @@ $article = $articleRepository->find('018e2b3c-d1a2-7000-a1b2-c3d4e5f60708');
 
 ### PgSqlConnection
 
-Implements `ConnectionInterface`, `TransactionInterface` and `ResettableInterface`. Connects lazily on first query. The driver module registers one shared instance per request (per worker under a long-running runtime), and `TransactionInterface` resolves to that same instance. See [Transactions](/docs/packages/database/#transactions).
+Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInterface` and `ResettableInterface`. Connects lazily on first query. The driver module registers one shared instance per request (per worker under a long-running runtime), and `TransactionInterface` resolves to that same instance. See [Transactions](/docs/packages/database/#transactions).
 
 | Method | Description |
 |---|---|
@@ -194,6 +194,7 @@ Implements `ConnectionInterface`, `TransactionInterface` and `ResettableInterfac
 | `transaction(callable $callback): mixed` | Execute a callback inside an auto-managed transaction (a savepoint when nested) |
 | `afterCommit(callable $callback): void` | Run the callback after the outermost commit (immediately outside a transaction) |
 | `afterRollback(callable $callback): void` | Run the callback if its level rolls back |
+| `runPendingAfterCommitCallbacks(): void` | Run the queued `afterCommit()` callbacks without committing (`PendingAfterCommitInterface`); for test helpers such as `RefreshDatabase`, not production code |
 | `reset(): void` | Roll back every level left open by a failed request and drop pending callbacks; never opens a connection |
 
 ### PgSqlStatement

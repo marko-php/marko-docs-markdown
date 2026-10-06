@@ -980,7 +980,7 @@ $this->transaction->transaction(function () use ($invoice): void {
 `afterRollback()` is the counterpart. Its callback runs when the level it was registered in rolls back, either directly or because an enclosing level rolls back. Outside a transaction there is nothing to roll back, so the callback is discarded. Pending callbacks are dropped without running when the connection is reset or disconnected.
 
 :::note
-`DatabaseTestHelper` (and any test that wraps each case in a transaction that is rolled back afterwards) never commits, so after-commit callbacks registered inside such a test never run. Assert on them by committing a real transaction, or by calling the code outside the test transaction.
+A test that wraps each case in a transaction that is rolled back afterwards (`RefreshDatabase` in `marko/testing`, or `DatabaseTestHelper`) never commits, so after-commit callbacks registered inside it never run on their own. Call `RefreshDatabase::runAfterCommitCallbacks()` to run the queued callbacks without committing (see [Database Tests](/docs/packages/testing/#after-commit-callbacks)), or use `TruncateDatabase` and let a real transaction commit. Drivers support this through `PendingAfterCommitInterface`, which the PostgreSQL, MySQL and read/write connections implement.
 :::
 
 ### Row Locks
@@ -1251,11 +1251,84 @@ readonly class PostSeeder implements SeederInterface
 }
 ```
 
-> **Why `new Post()` instead of factories?** Entities are simple data objects without dependencies or complex construction logic. Direct instantiation is explicit — you see exactly what's being set. This aligns with Marko's "explicit over implicit" principle. If your tests need realistic fake data at scale, consider adding a test data builder for that specific need rather than a general factory abstraction.
+> **Seeders use `new Post()`.** A seeder writes a handful of known rows, so plain construction is the clearest way to say exactly what lands in the database. For test data, see [Entity Factories](#entity-factories).
 
 > **IDE Note:** PhpStorm may report seeder classes as "unused" since they're discovered via attributes rather than direct instantiation. The `@noinspection PhpUnused` annotation suppresses this false positive.
 
 Place seeders in your module's `Seed/` directory. The `order` parameter controls execution sequence — use spaced numbers (10, 20, 30) rather than sequential (1, 2, 3) to allow other modules to insert seeders between existing ones without renumbering.
+
+## Entity Factories
+
+`Marko\Database\Testing\EntityFactory` builds entities for tests. It stays explicit: `definition()` returns a constructed entity using `new` and property assignment, not an array of attributes, so IDE navigation, static analysis and renames keep working. There is no Faker dependency; call Faker inside `definition()` yourself if you want random data.
+
+```php title="tests/Factory/PostFactory.php"
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Factory;
+
+use App\Blog\Entity\Post;
+use App\Blog\Entity\PostStatus;
+use App\Blog\Repository\PostRepository;
+use Marko\Database\Testing\EntityFactory;
+
+/**
+ * @extends EntityFactory<Post>
+ */
+class PostFactory extends EntityFactory
+{
+    protected const string REPOSITORY = PostRepository::class;
+
+    private int $number = 0;
+
+    protected function definition(): Post
+    {
+        $number = ++$this->number;
+
+        $post = new Post();
+        $post->title = "Post $number";
+        $post->slug = "post-$number";
+        $post->status = PostStatus::Draft;
+
+        return $post;
+    }
+}
+```
+
+```php
+$posts = new PostFactory($container);
+
+$draft = $posts->make();                                                 // built, not saved
+$live = $posts->create(fn (Post $post) => $post->status = PostStatus::Live);
+$three = $posts->createMany(3);                                          // list<Post>
+
+$mixed = $posts
+    ->sequence(
+        fn (Post $post) => $post->status = PostStatus::Draft,
+        fn (Post $post) => $post->status = PostStatus::Live,
+    )
+    ->makeMany(4);                                                       // Draft, Live, Draft, Live
+```
+
+| Method | Does |
+|--------|------|
+| `make(callable ...$states)` | Calls `definition()`, applies the next `sequence()` state, then each state closure in order. Nothing is saved |
+| `create(callable ...$states)` | `make()`, then `save()` through the repository named by `REPOSITORY`, resolved from the container. `EntityCreating` and `EntityCreated` fire as in production |
+| `makeMany(int $count, callable ...$states)` / `createMany(...)` | The same, `$count` times, returning a list |
+| `sequence(callable ...$states)` | A copy of the factory that applies the states in turn, one per entity, starting again after the last |
+
+`make()` works without a container. `create()` throws an `EntityFactoryException` when the factory has no container, or when `REPOSITORY` does not name a class implementing `RepositoryInterface`.
+
+### Factories or `new`?
+
+Both are explicit; pick by how much of the entity the test is about.
+
+- **Use `new`** when the test is about the values themselves: a unit test of an entity or service, a seeder, or a test where every property matters. Writing them out keeps the intent visible.
+- **Use a factory** when a test needs valid, saved entities as background and only one or two properties matter. The factory holds the defaults that make an entity valid, so each test states only what it is testing: `$posts->create(fn (Post $p) => $p->status = PostStatus::Live)`.
+- **Prefer a state closure to a new factory method.** Name a state with a plain function or a static method when several tests share it, rather than adding methods that hide what they set.
+
+For isolating database tests (`RefreshDatabase`, `TruncateDatabase`), see [Database Tests](/docs/packages/testing/#database-tests) in `marko/testing`.
 
 ## CLI Commands
 

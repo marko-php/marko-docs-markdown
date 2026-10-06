@@ -242,7 +242,7 @@ Your `CustomReadWriteConnection` must extend `ReadWriteConnection` (or independe
 
 ### ReadWriteConnection
 
-Implements `ConnectionInterface`, `TransactionInterface`, and `ResettableInterface`. Routes reads to replicas and writes to the primary.
+Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInterface`, and `ResettableInterface`. Routes reads to replicas and writes to the primary.
 
 | Method | Routes To | Description |
 |--------|-----------|-------------|
@@ -261,6 +261,7 @@ Implements `ConnectionInterface`, `TransactionInterface`, and `ResettableInterfa
 | `transaction(callable $callback): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction (a savepoint when nested); the sticky flag is set for the callback duration and restored to its previous value afterwards |
 | `afterCommit(callable $callback): void` | Write | Run the callback after the write connection's outermost commit |
 | `afterRollback(callable $callback): void` | Write | Run the callback if its transaction level rolls back |
+| `runPendingAfterCommitCallbacks(): void` | Write | Run the write connection's queued `afterCommit()` callbacks without committing (for test helpers such as `RefreshDatabase`); throws `TransactionException` when the write connection does not implement `PendingAfterCommitInterface` |
 | `driverName(): string` | Write (delegates) | Return the write connection's driver name (e.g. `'mysql'`, `'pgsql'`) |
 | `resetStickyState(): void` | — | Clear the sticky flag; subsequent reads route to replicas again |
 | `reset(): void` | — | `ResettableInterface` contract method; rolls back every open transaction level (delegating to a resettable write connection) and clears the sticky flag |

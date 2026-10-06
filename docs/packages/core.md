@@ -237,7 +237,7 @@ foreach ($container->resolvedInstances(ResettableInterface::class) as $resettabl
 }
 ```
 
-`Marko\Core\RequestStateResetter` wraps that loop: `new RequestStateResetter($container)->reset()` resets every resolved `ResettableInterface` instance in ascending binding-id order, and lets a failing `reset()` propagate. The RoadRunner worker and the [marko/testing](/docs/packages/testing/) HTTP test client both call it before each request.
+`Marko\Core\RequestStateResetter` wraps that loop: `new RequestStateResetter($container)->reset()` resets every resolved `ResettableInterface` instance in ascending binding-id order, and lets a failing `reset()` propagate. Pass instances to `reset(ResettableInterface ...$except)` to leave them alone (matched by identity); the testing database helpers use this to keep a test transaction open. The RoadRunner worker and the [marko/testing](/docs/packages/testing/) HTTP test client both call it before each request.
 
 `resolvedInstances()` is declared on `ContainerInterface` and implemented by `Container`.
 

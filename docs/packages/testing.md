@@ -399,6 +399,147 @@ Response body: {"message":"Internal Server Error"}
 
 A body that is not valid JSON fails a JSON assertion with a clear message. The accessors `status()`, `body()`, `header($name)`, `json(?$path = null)` and `response()` (the wrapped `Response`) are available for anything else.
 
+## Database Tests
+
+Database tests need `marko/database` and a driver. `marko/testing` only suggests them:
+
+```bash
+composer require --dev marko/database-pgsql   # or marko/database-mysql
+```
+
+`TestDatabase::boot($basePath)` boots your application once per process (the same `Application::boot()` that `TestClient::boot()` uses) and applies the committed migrations once with `Migrator::migrate()`. Every later call for the same base path returns the same instance, so a suite pays for boot and migrations once, not once per test. Pair it with one of two isolation strategies:
+
+| Strategy | Per test | Use it for |
+|----------|----------|------------|
+| `RefreshDatabase` | Opens a transaction before the test and rolls it back after | Almost everything. It is the fast default |
+| `TruncateDatabase` | Empties every entity table | Code that must see committed data: a queue worker, a second process, or a test of the commit itself |
+
+### Test environment
+
+The helpers refuse to run in production, and an unset `APP_ENV` counts as production. Set the environment for the test run and point `config/database.php` at a dedicated test database:
+
+```xml title="phpunit.xml"
+<php>
+    <env name="APP_ENV" value="testing"/>
+    <env name="DB_DATABASE" value="myapp_test"/>
+</php>
+```
+
+Operations that delete data (`TruncateDatabase::truncate()` and `fresh: true`) are also refused in development (`development`, `dev`, `local`), so they never wipe the database you work in.
+
+### RefreshDatabase
+
+```php title="tests/Pest.php"
+use Marko\Testing\Database\RefreshDatabase;
+use Marko\Testing\Database\TestDatabase;
+
+uses()
+    ->beforeEach(function () {
+        $this->database = TestDatabase::boot(dirname(__DIR__));
+        $this->refresh = new RefreshDatabase($this->database);
+        $this->refresh->begin();
+        $this->http = $this->database->client();
+    })
+    ->afterEach(function () {
+        $this->refresh->rollback();
+    })
+    ->in('Feature');
+```
+
+```php title="tests/Feature/ShowTest.php"
+use App\Shows\Repository\ShowRepository;
+
+it('publishes a show', function () {
+    $this->http->postJson('/api/v1/shows', ['slug' => 'opening-night'])->assertCreated();
+
+    $shows = $this->database->application()->container->get(ShowRepository::class);
+
+    expect($shows->findOneBy(['slug' => 'opening-night']))->not->toBeNull();
+});
+```
+
+- Every repository, query builder and service shares one connection, so the test transaction covers all of their writes.
+- Code under test that calls `transaction()` gets a savepoint and behaves as in production: an inner rollback undoes only its own work.
+- `rollback()` also rolls back any savepoints the code under test left open. If the rollback itself fails, the connection is reset before the error is rethrown, so the next test can still begin.
+- Create HTTP clients with `$this->database->client()`. It returns a `TestClient` on the shared application that leaves the connection alone between requests. A client from `TestClient::boot()` boots a second application with its own connection and never sees the test transaction.
+- On PostgreSQL, a failed statement outside a nested `transaction()` aborts the whole test transaction, and later statements in that test fail. Wrap code that is expected to hit a constraint in `transaction()`, the way production code should.
+
+PHPUnit test cases call the same methods from `setUp()` and `tearDown()`:
+
+```php
+use Marko\Testing\Database\RefreshDatabase;
+use Marko\Testing\Database\TestDatabase;
+use PHPUnit\Framework\TestCase;
+
+class ShowRepositoryTest extends TestCase
+{
+    private RefreshDatabase $refresh;
+
+    protected function setUp(): void
+    {
+        $this->refresh = new RefreshDatabase(TestDatabase::boot(dirname(__DIR__, 2)));
+        $this->refresh->begin();
+    }
+
+    protected function tearDown(): void
+    {
+        $this->refresh->rollback();
+    }
+}
+```
+
+#### After-commit callbacks
+
+The test transaction never commits, so `afterCommit()` callbacks queued by the code under test do not run on their own. Run them when the test needs to assert on them:
+
+```php
+$service->publish('opening-night');   // queues a notification with afterCommit()
+
+$this->refresh->runAfterCommitCallbacks();
+
+expect($queue)->toHavePushed(SendShowPublished::class);
+```
+
+The callbacks run as though the outermost transaction had committed, but nothing is committed. `afterRollback()` callbacks registered by the code under test run when `rollback()` ends the test.
+
+### TruncateDatabase
+
+```php
+use Marko\Testing\Database\TestDatabase;
+use Marko\Testing\Database\TruncateDatabase;
+
+beforeEach(function () {
+    $this->database = TestDatabase::boot(dirname(__DIR__, 2));
+    new TruncateDatabase($this->database)->truncate();
+});
+```
+
+`truncate()` empties the tables of every `#[Table]` entity the application discovers, and restarts their identity sequences. On PostgreSQL it runs one `TRUNCATE ... RESTART IDENTITY CASCADE`. On MySQL it truncates table by table with foreign key checks switched off. The `migrations` table, and tables created only by hand-written migrations, are left alone. It throws inside an open transaction, so don't combine it with `RefreshDatabase` in the same test.
+
+### Fresh schema
+
+`TestDatabase::boot($basePath, fresh: true)` rolls back every migration and runs them again on the first boot of the process, like `db:rebuild`. Use it when the schema has drifted, for example from an environment flag in `tests/Pest.php`:
+
+```php
+TestDatabase::boot(dirname(__DIR__), fresh: getenv('DB_FRESH') === '1');
+```
+
+Pass the same `fresh` value on every call; a different value for a base path that is already booted throws.
+
+### Seeding rows
+
+`seedTable()` and `getTableRowCount()` insert and count raw rows through the shared connection, so they are covered by the test transaction too:
+
+```php
+$this->database->seedTable('venues', [
+    ['name' => 'Paradiso', 'city' => 'Amsterdam'],
+]);
+
+expect($this->database->getTableRowCount('venues'))->toBe(1);
+```
+
+To build entities, use [entity factories](/docs/packages/database/#entity-factories) or plain `new`.
+
 ## Pest Expectations
 
 The expectations register automatically. `marko/testing` declares a Pest plugin (`Marko\Testing\Pest\ExpectationsPlugin`) under `extra.pest.plugins` in its `composer.json`, and Pest boots it once `expect()` exists, including in `--parallel` workers. There is nothing to add to `Pest.php`.
@@ -643,6 +784,7 @@ public function withoutCookies(): static;
 public function cookies(): array;
 public function withFile(string $field, string $path, ?string $clientFilename = null, ?string $clientMediaType = null): static;
 public function actingAs(AuthenticatableInterface $user, ?string $guard = null): static;
+public function withoutResetting(ResettableInterface ...$services): static;
 public function get(string $uri, array $query = [], array $headers = []): TestResponse;
 public function head(string $uri, array $query = [], array $headers = []): TestResponse;
 public function post(string $uri, array $data = [], array $headers = []): TestResponse;
@@ -687,6 +829,40 @@ public function assertExactJson(array $data): static;
 public function assertJsonPath(string $path, mixed $expected): static;
 public function assertJsonCount(int $count, ?string $path = null): static;
 public function assertJsonMissingPath(string $path): static;
+```
+
+### TestDatabase
+
+```php
+public static function boot(string $basePath, bool $fresh = false): self;
+public function application(): Application;
+public function connection(): ConnectionInterface;
+public function transaction(): TransactionInterface;
+public function environment(): AppEnvironment;
+public function appliedMigrations(): array;
+public function client(): TestClient;
+public function seedTable(string $tableName, array $rows): void;
+public function getTableRowCount(string $tableName): int;
+public function assertNotProduction(): void;
+public function assertDisposable(string $operation): void;
+```
+
+### RefreshDatabase
+
+```php
+public function __construct(TestDatabase $database);
+public function begin(): void;
+public function rollback(): void;
+public function runAfterCommitCallbacks(): void;
+public function database(): TestDatabase;
+```
+
+### TruncateDatabase
+
+```php
+public function __construct(TestDatabase $database);
+public function truncate(): void;
+public function tables(): array;
 ```
 
 ### KnownDriversValidator
