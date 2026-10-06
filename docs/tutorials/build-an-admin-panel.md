@@ -325,7 +325,7 @@ class PostsSection implements AdminSectionInterface
 }
 ```
 
-There is nothing to register. At boot, `marko/admin` finds every `#[AdminSection]` class in your modules' `src/` directories, builds it through the container and adds it to the shared `AdminSectionRegistryInterface`. `getId()` must return the same id as the attribute (`posts`), or boot fails with an `AdminException`. In production, run `marko discovery:cache` after adding or changing a section so the cached section list stays current.
+There is nothing to register. At boot, `marko/admin` finds every `#[AdminSection]` class in your modules' `src/` directories and registers it in the shared `AdminSectionRegistryInterface`. The section is built through the container the first time the admin needs it, not at boot, so its constructor can inject repositories without slowing down or breaking other requests and CLI commands. `getId()` must return the same id as the attribute (`posts`), or the first admin page that builds the section fails with an `AdminException`. In production, run `marko discovery:cache` after adding or changing a section so the cached section list stays current.
 
 The `AdminMenuBuilder` from `marko/admin-panel` automatically filters menu items based on the current user's permissions --- users only see items they have access to.
 
