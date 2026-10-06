@@ -121,9 +121,12 @@ After any write operation or transaction, subsequent reads within the same reque
 The sticky flag is set by:
 
 - `execute()` — any INSERT, UPDATE, DELETE, or DDL statement
-- `query()` with an INSERT, UPDATE, or DELETE — a write that returns rows, such as the `INSERT ... RETURNING` a repository runs to read a [database-generated key](/docs/packages/database/#database-generated-keys) back, so a following `find()` sees the new row
+- `query()` with a statement that may write — one whose first keyword is `INSERT`, `UPDATE`, `DELETE`, `WITH`, `MERGE`, `REPLACE` or `CALL` — such as the `INSERT ... RETURNING` a repository runs to read a [database-generated key](/docs/packages/database/#database-generated-keys) back, so a following `find()` sees the new row
+- `prepare()` with one of those statements
 - `beginTransaction()` — entering a transaction
-- `transaction(callable $callback, int $attempts = 1, int|Closure|null $backoff = null)` — the entire callback, every retried attempt included, runs on the primary; when the callback completes, the sticky flag goes back to what it was before the call. A nested `transaction()` therefore leaves the outer transaction's reads on the primary.
+- `transaction(callable $callback, int $attempts = 1, int|Closure|null $backoff = null)` — the entire callback, every retried attempt included, runs on the primary. When the callback wrote anything through the connection, the flag stays set so later reads see the write; when it only read, the flag goes back to what it was before the call. A nested `transaction()` leaves the outer transaction's reads on the primary either way.
+
+Leading whitespace and any number of leading comments (`-- ...`, `# ...`, `/* ... */`) are skipped before the first keyword is read, so a comment cannot hide a write. A `WITH` query is always treated as a write, because a CTE can end in `INSERT`, `UPDATE`, `DELETE` or `MERGE`: a read-only CTE is served by the primary, which is the safe side of the trade.
 
 ```php
 use Marko\Database\Connection\ConnectionInterface;
@@ -156,13 +159,26 @@ Row-locking reads (`lockForUpdate()`, `sharedLock()`) must run inside a transact
 
 The sticky flag persists until `resetStickyState()` is called. In a PHP-FPM application this happens automatically because each request runs in a fresh process. In long-running processes you must call it manually (see [Long-Running Processes](#long-running-processes)).
 
-:::caution[v1 limitation: write CTEs]
-CTEs that begin with `WITH` followed by an `INSERT`, `UPDATE`, or `DELETE` are **not** detected as write statements by the automatic routing logic. `WITH ... INSERT ... RETURNING` (or similar) will route to a replica unless you use `execute()` directly, or call `beginTransaction()` / `commit()` to enter a transaction first.
-:::
+## Reads That Must Hit the Primary
+
+Each request starts non-sticky, so its first reads go to a replica. A read whose answer must never be stale (a session lookup after logout, a "token already used" check, a permission revoked a moment ago) runs inside `onPrimary()`, which sends every read in the callback to the primary:
+
+```php
+use Marko\Database\Connection\ConnectionInterface;
+use Marko\Database\Connection\PrimaryReadInterface;
+
+$rows = $connection instanceof PrimaryReadInterface
+    ? $connection->onPrimary(fn (): array => $connection->query($sql, $bindings))
+    : $connection->query($sql, $bindings);
+```
+
+`onPrimary()` comes from `Marko\Database\Connection\PrimaryReadInterface` in `marko/database`. A connection without replicas does not implement it, so code that may run on either checks for the interface and runs the read directly otherwise. Like `transaction()`, it returns what the callback returns, and afterwards reads go back to replicas unless the callback wrote something.
+
+[`marko/session-database`](/docs/packages/session-database/) reads and validates session rows this way, so a logged-out or regenerated session ID cannot be revived from a lagging replica.
 
 ## `prepare()` Policy
 
-`prepare()` always routes to the write connection. Prepared statements are typically used for bulk writes or repeated mutation patterns, so routing them to the primary is the safe default. There are no production callers of `prepare()` in the current Marko core, so this policy has no performance impact on stock setups.
+`prepare()` always routes to the write connection. Prepared statements are typically used for bulk writes or repeated mutation patterns, so routing them to the primary is the safe default. Preparing a statement that may write also sets the sticky flag, since it runs on the primary once executed. There are no production callers of `prepare()` in the current Marko core, so this policy has no performance impact on stock setups.
 
 ## Single-Request Fallback
 
@@ -246,13 +262,13 @@ Your `CustomReadWriteConnection` must extend `ReadWriteConnection` (or independe
 
 ### ReadWriteConnection
 
-Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInterface`, and `ResettableInterface`. Routes reads to replicas and writes to the primary.
+Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInterface`, `PrimaryReadInterface`, and `ResettableInterface`. Routes reads to replicas and writes to the primary.
 
 | Method | Routes To | Description |
 |--------|-----------|-------------|
-| `query(string $sql, array $bindings = []): array` | Read (replica or write if sticky) | Execute a SELECT and return all rows |
+| `query(string $sql, array $bindings = []): array` | Read (replica or write if sticky); write for a statement that may write (sets sticky) | Execute a SELECT and return all rows |
 | `execute(string $sql, array $bindings = []): int` | Write (sets sticky) | Execute a write statement; returns affected row count |
-| `prepare(string $sql): StatementInterface` | Write (always) | Prepare a statement for repeated execution |
+| `prepare(string $sql): StatementInterface` | Write (always; sets sticky for a statement that may write) | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Write | Get the last auto-increment ID |
 | `connect(): void` | Write | Establish the write connection |
 | `disconnect(): void` | Write | Close the write connection |
@@ -262,7 +278,8 @@ Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInt
 | `rollback(): void` | Write | Roll back the current transaction |
 | `inTransaction(): bool` | Write | Check if a transaction is active |
 | `transactionLevel(): int` | Write | Number of open transaction levels (savepoints included) |
-| `transaction(callable $callback, int $attempts = 1, int\|Closure\|null $backoff = null): mixed` | Write (sets sticky temporarily) | Run a callback inside an auto-managed transaction (a savepoint when nested); `$attempts` and `$backoff` are passed to the write connection, which waits between attempts and retries the outermost transaction on a deadlock or serialization failure. The sticky flag is set for the callback duration and restored to its previous value afterwards |
+| `transaction(callable $callback, int $attempts = 1, int\|Closure\|null $backoff = null): mixed` | Write (sets sticky; kept if the callback wrote) | Run a callback inside an auto-managed transaction (a savepoint when nested); `$attempts` and `$backoff` are passed to the write connection, which waits between attempts and retries the outermost transaction on a deadlock or serialization failure. The sticky flag is set for the callback duration; afterwards it stays set if the callback wrote anything, otherwise it is restored to its previous value |
+| `onPrimary(callable $callback): mixed` | Write (sets sticky; kept if the callback wrote) | `PrimaryReadInterface` method: run the callback with every read on the primary and return its result, for reads that must not see replica lag |
 | `afterCommit(callable $callback): void` | Write | Run the callback after the write connection's outermost commit |
 | `afterRollback(callable $callback): void` | Write | Run the callback if its transaction level rolls back |
 | `runPendingAfterCommitCallbacks(): void` | Write | Run the write connection's queued `afterCommit()` callbacks without committing (for test helpers such as `RefreshDatabase`); throws `TransactionException` when the write connection does not implement `PendingAfterCommitInterface` |
