@@ -87,6 +87,50 @@ Marko's error handlers report the notice without stopping the request, so remain
 
 `env()` coerces only a few strings and returns everything else unchanged, so a typo never fails: `APP_DEBUG=off` reaches the config as the string `'off'`, which is truthy. `Env::bool()` reads `off` as `false` and throws on a value such as `ture`. The config files Marko ships no longer call `env()`.
 
+### Before and After
+
+The same config file, written with `env()` and with `Env`:
+
+```php title="config/mercure.php (before)"
+<?php
+
+declare(strict_types=1);
+
+return [
+    'hub_url' => env('MERCURE_URL', 'http://localhost/.well-known/mercure'),
+    'subscriber_jwt_ttl' => (int) env('MERCURE_SUBSCRIBER_JWT_TTL', 3600),
+    'cookie_secure' => env('MERCURE_COOKIE_SECURE', true),
+];
+```
+
+```php title="config/mercure.php (after)"
+<?php
+
+declare(strict_types=1);
+
+use Marko\Config\Env;
+
+return [
+    'hub_url' => Env::string('MERCURE_URL', 'http://localhost/.well-known/mercure'),
+    'subscriber_jwt_ttl' => Env::int('MERCURE_SUBSCRIBER_JWT_TTL', 3600, min: 0),
+    'cookie_secure' => Env::bool('MERCURE_COOKIE_SECURE', true),
+];
+```
+
+What each version does with the same `.env` values:
+
+| `.env` value | `env()` version | `Env` version |
+|---|---|---|
+| `MERCURE_SUBSCRIBER_JWT_TTL=7200` | `7200` | `7200` |
+| `MERCURE_SUBSCRIBER_JWT_TTL=1h` | `(int) '1h'` is `1`, so tokens expire after one second | Throws `ConfigException`: `Environment variable "MERCURE_SUBSCRIBER_JWT_TTL" must be an integer`, `Got "1h"` |
+| `MERCURE_SUBSCRIBER_JWT_TTL=-5` | `-5` | Throws, because of `min: 0` |
+| `MERCURE_COOKIE_SECURE=off` | The string `'off'`, which is truthy, so the cookie stays secure when you meant to turn it off | `false` |
+| `MERCURE_COOKIE_SECURE=ture` | The string `'ture'`, accepted without complaint | Throws: `must be a boolean`, `Got "ture"`, listing the accepted values |
+| `MERCURE_COOKIE_SECURE=` (empty) | `''`, which is falsy | `true`, the default |
+| Variable not set | The default | The default |
+
+`Env` errors are thrown while the config file loads, so a bad value stops the app at boot, and the message names the config file that read it.
+
 Replace each call with the `Env` method for the type the config value needs:
 
 | `env()` call | `env()` behavior | Replace with |
