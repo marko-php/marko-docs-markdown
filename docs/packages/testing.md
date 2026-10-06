@@ -427,11 +427,13 @@ The jar follows RFC 6265, so a test can't pass by sending a cookie that a browse
 
 - **Path**: a cookie set with `Path=/admin` is sent to `/admin` and `/admin/users`, but not to `/api` or `/administrator`. A cookie set without `Path` gets the directory of the request that set it: a cookie set by `/account/login` gets `/account`.
 - **Domain**: requests go to `localhost` unless the URI is a full URL (`http://shop.test/cart`). A cookie set without `Domain` is sent back only to the exact host that set it. One set with `Domain=shop.test` is also sent to its subdomains. A response that sets a `Domain` that doesn't cover the request host is ignored, as a browser would ignore it.
+- **Public suffixes**: a response that sets `Domain` to a public suffix, such as `Domain=co.uk` from `a.example.co.uk` or `Domain=com`, is ignored, as browsers ignore it, so a misconfigured cookie fails in the test instead of only in production. `assertCookie()` still passes, because the response did send the cookie; check `cookieJar()` to see what the client kept. When the public suffix is the request host itself (`Domain=localhost` from `localhost`), the cookie is kept as host-only. Every single-label domain counts as a public suffix, plus a built-in list of common ones (`co.uk`, `com.au`, `co.jp`, `github.io`, ...); the client doesn't ship the full [Public Suffix List](https://publicsuffix.org), so a rarer suffix is treated as an ordinary domain.
 - **Secure**: a `Secure` cookie is sent only over HTTPS. A relative path such as `/dashboard` is an HTTPS request to `localhost`, so `Secure` cookies (including `marko/session`'s session cookie, which is `Secure` by default) round-trip in ordinary tests. Pass an explicit `http://` URL, or set `withServerVariables(['HTTPS' => 'off'])`, to test plain HTTP: a `Secure` cookie is then not sent.
-- **Expiry**: a response that sets a cookie whose `Expires` time is already past removes it from the jar. "Past" is judged against the application's bound `ClockInterface`, the same clock that sets `REQUEST_TIME` on each request, so it agrees with code that expires cookies relative to that clock. Bind a [`FakeClock`](#fakeclock) (`$client->application()->container->instance(ClockInterface::class, $clock)`) to freeze both. With no clock bound, the client uses `marko/clock`'s `SystemClock`.
+- **Expiry**: the jar records when each cookie expires and stops sending it once that time passes. `Max-Age`, counted from when the response is received, wins over `Expires`; a `Max-Age` of zero or less, or an `Expires` already past, removes the cookie at once. Time is read from the application's bound `ClockInterface`, the same clock that sets `REQUEST_TIME` on each request, so it agrees with code that expires cookies relative to that clock. Bind a [`FakeClock`](#fakeclock) (`$client->application()->container->instance(ClockInterface::class, $clock)`) and `travel()` it to test session or remember-me expiry. With no clock bound, the client uses `marko/clock`'s `SystemClock`.
+- **SameSite**: every request is same-site unless it says otherwise, so `SameSite` changes nothing by default. A request is cross-site when it sends `Sec-Fetch-Site: cross-site`, or, without `Sec-Fetch-Site`, an `Origin` header whose site (registrable domain) differs from the target host's, or `Origin: null`. A cross-site request never carries `SameSite=Strict` cookies, and carries `SameSite=Lax` cookies only on `GET`. Cookies with `SameSite=None`, or with no `SameSite` attribute, are always sent (the client follows RFC 6265 here, not Chrome's Lax-by-default).
 - **Same name**: cookies are stored per name, domain and path, so `token` on `/admin` and `token` on `/api` are separate cookies. A request that matches both gets both in its `Cookie` header, the more specific path first, and `$request->cookie('token')` returns that first one, as PHP does. When a response expires a cookie, only the cookie with that name, domain and path is removed.
 
-`withCookie($name, $value, $path = '/', ?$domain = null, $secure = false)` adds a cookie that is sent to every host unless you pass `$domain`. A response that sets or expires a cookie with the same name and path replaces it. `cookies()` returns the cookies whose path is `/` (whatever their host or `Secure` flag) as name => value pairs. `cookieJar()` returns every cookie as a `Marko\Testing\Http\JarCookie`, with its `name`, `value`, `domain`, `path`, `secure` and `hostOnly` properties:
+`withCookie($name, $value, $path = '/', ?$domain = null, $secure = false)` adds a cookie that is sent to every host unless you pass `$domain`. A response that sets or expires a cookie with the same name and path replaces it. `cookies()` returns the cookies whose path is `/` (whatever their host or `Secure` flag) as name => value pairs. `cookieJar()` returns every cookie as a `Marko\Testing\Http\JarCookie`, with its `name`, `value`, `domain`, `path`, `secure`, `hostOnly`, `expiresAt` and `sameSite` properties. Both `cookies()` and `cookieJar()` first drop the cookies that have expired on the bound clock:
 
 ```php title="tests/Feature/AdminTest.php"
 $client->post('/admin/login', ['email' => 'admin@example.com', 'password' => 'secret']);
@@ -440,6 +442,10 @@ $client->get('/admin/dashboard')->assertOk();
 $client->get('/api/me')->assertStatus(401); // the /admin cookie is not sent here
 
 expect($client->cookieJar()[0]->path)->toBe('/admin');
+
+// A cross-site form post does not carry the SameSite=Lax session cookie
+$client->post('/admin/users/1/delete', headers: ['Origin' => 'https://evil.example'])
+    ->assertRedirect('/admin/login');
 ```
 
 :::caution
@@ -931,7 +937,18 @@ public ?string $domain; // null: added with withCookie() without a domain, sent 
 public string $path;
 public bool $secure;
 public bool $hostOnly;  // set without a Domain attribute: sent to $domain exactly, not its subdomains
+public ?int $expiresAt; // Unix timestamp from Max-Age (preferred) or Expires; null for a session cookie
+public ?string $sameSite; // Strict, Lax or None as the response sent it; null is treated like None
 public function matches(string $host, string $path, bool $secure): bool;
+public function isExpired(int $now): bool;
+public function allowsCrossSite(string $method): bool; // false for Strict, GET only for Lax
+```
+
+### PublicSuffixList
+
+```php
+public static function isPublicSuffix(string $domain): bool; // `com`, `co.uk`; never an IP address
+public static function site(string $host): string;           // registrable domain: `shop.example.co.uk` => `example.co.uk`
 ```
 
 ### TestResponse

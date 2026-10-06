@@ -351,6 +351,26 @@ public function login(): Response
 
 `expires: null` or `expires: 0` omits the `Expires` attribute entirely, producing a browser-session cookie instead of a persistent one. Cookie values are `rawurlencode()`d automatically, so a value containing `;` cannot inject a second attribute. An invalid cookie name throws `CookieException`, as does `sameSite: 'None'` without `secure: true` --- browsers silently drop such cookies, so Marko fails loudly instead.
 
+To give a cookie a lifetime instead of a timestamp, pass `maxAge` in seconds. Browsers count it from when they receive the cookie, so it is unaffected by clock skew between server and client, and it wins over `Expires` when both are sent:
+
+```php
+// Remember the user for 30 days
+$response = $response->withCookie(new Cookie(
+    name: 'remember',
+    value: $token,
+    path: '/',
+    secure: true,
+    httpOnly: true,
+    sameSite: 'Lax',
+    maxAge: 60 * 60 * 24 * 30,
+));
+
+// Delete the cookie: Max-Age=0 expires it immediately
+$response = $response->withCookie(new Cookie(name: 'remember', path: '/', maxAge: 0));
+```
+
+`maxAge` emits only `Max-Age=`; no `Expires` is derived from it. Pass `expires` as well if you need to support clients that predate `Max-Age`. A zero or negative `maxAge` is sent as `Max-Age=0`, which deletes the cookie.
+
 Read cookies sent by the client with `Request::cookie()`, which mirrors `query()` and `post()`:
 
 ```php
@@ -813,6 +833,7 @@ public function __construct(
     bool $secure = false,
     bool $httpOnly = false,
     ?string $sameSite = null,
+    ?int $maxAge = null,
 )
 
 public function name(): string;
@@ -823,12 +844,13 @@ public function domain(): ?string;
 public function secure(): bool;
 public function httpOnly(): bool;
 public function sameSite(): ?string;
+public function maxAge(): ?int;
 public function toSetCookieString(): string;
 ```
 
 `value()` returns the raw value, before the URL-encoding applied in the `Set-Cookie` line.
 
-`expires: null` or `expires: 0` omits the `Expires` attribute, producing a browser-session cookie. The value passed to `toSetCookieString()` is `rawurlencode()`d. The constructor throws `CookieException` for an invalid cookie name (control characters, whitespace, or separator characters such as `( ) < > @ , ; : \ " / [ ] ? = { }`), and also throws when `sameSite` is `'None'` without `secure: true`.
+`expires: null` or `expires: 0` omits the `Expires` attribute, producing a browser-session cookie. `maxAge` (seconds) adds `Max-Age=` after `Expires`; `maxAge()` returns it as given, and a zero or negative value is sent as `Max-Age=0`, which deletes the cookie. No `Expires` is derived from `maxAge`. The value passed to `toSetCookieString()` is `rawurlencode()`d. The constructor throws `CookieException` for an invalid cookie name (control characters, whitespace, or separator characters such as `( ) < > @ , ; : \ " / [ ] ? = { }`), and also throws when `sameSite` is `'None'` without `secure: true`.
 
 ### MiddlewareInterface
 
