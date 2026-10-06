@@ -594,9 +594,10 @@ public function user(): ?AuthenticatableInterface;
 public function id(): int|string|null;
 public function attempt(array $credentials): bool;
 public function logout(): void;
+public function reset(): void;
 ```
 
-`useGuard()` puts a guard instance in place for a guard name, replacing any guard already built for it; `guard($name)` returns it from then on. The [marko/testing](/docs/packages/testing/) HTTP test client's `actingAs()` uses it to authenticate a user without a login request.
+`AuthManager` implements `ResettableInterface`: `reset()` clears the per-request state (the resolved user) of every guard it has built or been given, so a long-running worker never serves one request with the previous request's user. `useGuard()` puts a guard instance in place for a guard name, replacing any guard already built for it; `guard($name)` returns it from then on. The [marko/testing](/docs/packages/testing/) HTTP test client's `actingAs()` uses it to authenticate a user without a login request.
 
 ### GuardInterface
 
