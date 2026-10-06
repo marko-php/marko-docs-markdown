@@ -1641,6 +1641,8 @@ For isolating database tests (`RefreshDatabase`, `TruncateDatabase`), see [Datab
 | `marko db:rebuild` | Reset + re-run all migrations; see [Environment Behaviour](#environment-behaviour) |
 | `marko db:seed` | Run seeders (`--class=name` for one); see [Environment Behaviour](#environment-behaviour) |
 
+`db:rollback` and `db:reset` read migration names from the `migrations` table, but only run files that a scan of `database/migrations/` finds. Before any migration is reverted, each name is checked: one containing `/`, `\`, `..` or a NUL byte throws `MigrationException::invalidMigrationName()`, and one with no matching file throws `MigrationException::migrationNotFound()`. Either error stops the command before anything is rolled back.
+
 ### Environment Behaviour
 
 The commands read the environment from core's [`AppEnvironment`](/docs/packages/core/#application-environment) (`MARKO_ENV`, then `APP_ENV`). When neither is set the environment is `production`, so a deployment that forgets to set it fails safe.
