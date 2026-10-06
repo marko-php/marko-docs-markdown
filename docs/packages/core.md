@@ -327,7 +327,7 @@ use Marko\Core\Command\ConfirmationPrompterInterface;
 use Marko\Core\Command\Input;
 use Marko\Core\Command\Output;
 
-#[Command(name: 'billing:purge', description: 'Delete archived invoices', flags: ['force'])]
+#[Command(name: 'billing:purge', description: 'Delete archived invoices', flags: ['force'], destructive: true)]
 class PurgeCommand implements CommandInterface
 {
     public function __construct(
@@ -363,7 +363,7 @@ class PurgeCommand implements CommandInterface
 
 **`--no-interaction`** is accepted by every command; you don't declare it. When it is passed, `isInteractive()` is `false`, `$input->isInteractive()` is `false`, and `confirm()` asks nothing and returns `$default`. `isInteractive()` is also `false` when standard input is not a terminal (CI, a pipe), although `confirm()` still reads a piped answer such as `echo y | marko billing:purge`.
 
-A command that must not go ahead without a person (a destructive action) checks `isInteractive()` first and refuses loudly with a flag such as `--force`, as above. Relying on the default is for optional offers that are safe to skip.
+A command that must not go ahead without a person (a destructive action) checks `isInteractive()` first and refuses loudly with a flag such as `--force`, as above. Mark it `destructive: true` on `#[Command]` too, so callers that run commands for someone else, such as the MCP `run_console_command` tool, refuse it unless explicitly allowed (see [Destructive Commands](/docs/packages/cli/#destructive-commands)). Relying on the default is for optional offers that are safe to skip.
 
 `StdinConfirmationPrompter` is the default implementation, bound by `Application`. To replace it, bind `ConfirmationPrompterInterface` in your module's `module.php`. In tests, use [`FakeConfirmationPrompter`](/docs/packages/testing/#fakeconfirmationprompter) from `marko/testing`.
 
@@ -593,6 +593,7 @@ if (!ErrorCapture::run($reason, fn (): bool => rename($tmp, $path))) {
 #[Observer(event: EventClass::class)]           // React to events (synchronous)
 #[Observer(event: EventClass::class, async: true)] // Queue it (needs marko/queue; throws EventException without it)
 #[Command(name: 'cmd:name', description: '', aliases: [], flags: [])] // Register CLI command; flags never take a value
+#[Command(name: 'cmd:wipe', destructive: true)]  // Changes or deletes stored state (MCP refuses it by default)
 ```
 
 ### Container

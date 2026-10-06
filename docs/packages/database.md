@@ -1692,7 +1692,7 @@ Production has no override. `SeederRunner` applies the same policy when you call
 
 #### Using the policy in your own commands
 
-The `db:*` commands get this policy from `Marko\Database\Command\DestructiveCommandGuard`. Inject it into your own destructive command and call `check()` before doing anything. It returns `null` when the command may go ahead. Otherwise it returns the exit code to stop with: `1` when the environment refuses the command, or `0` when the person declines the confirmation. It writes the error or cancellation message itself. Declare `force` as a flag on the command so `--force` never consumes the next argument.
+The `db:*` commands get this policy from `Marko\Database\Command\DestructiveCommandGuard`. Inject it into your own destructive command and call `check()` before doing anything. It returns `null` when the command may go ahead. Otherwise it returns the exit code to stop with: `1` when the environment refuses the command, or `0` when the person declines the confirmation. It writes the error or cancellation message itself. Declare `force` as a flag on the command so `--force` never consumes the next argument, and mark the command `destructive: true` so the [MCP `run_console_command` tool](/docs/packages/mcp/#run_console_command-safety) and other callers refuse it unless explicitly allowed (`#[Command(name: 'app:wipe', flags: ['force'], destructive: true)]`). Every shipped command that uses the guard carries the marker, and a repository test keeps it that way.
 
 ```php
 public function check(
