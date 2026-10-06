@@ -195,7 +195,7 @@ $guard->assertGuest();
 use Marko\Testing\Fake\FakeClock;
 
 $clock = new FakeClock('2026-01-01 12:00:00 UTC');
-$guard = new TokenGuard($repository, $currentRequest, $clock, $userProvider);
+$guard = new TokenGuard($repository, $currentRequest, $clock, DatabaseTimezoneConfig::fromName('UTC'), $userProvider);
 
 $clock->now();                         // always 2026-01-01 12:00:00
 $clock->travel('+59 minutes');         // relative move

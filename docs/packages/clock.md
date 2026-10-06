@@ -61,6 +61,8 @@ return [
 
 The constructor accepts a `DateTimeZone` or a timezone name. An unknown name throws `DateInvalidTimeZoneException`.
 
+You don't need to pin the clock to get consistent stored times. Entity datetimes and the timestamps Marko packages write to the database (queue jobs, failed jobs, token expiry, notifications, webhook attempts) are converted to the [database timezone](/docs/packages/database/#datetimes-and-timezones) before they are stored, whatever zone the clock returns.
+
 ### Testing
 
 Pass a `FakeClock` wherever the code under test expects a `ClockInterface`. It is frozen until you move it, so boundaries can be checked exactly:

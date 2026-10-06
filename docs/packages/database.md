@@ -305,6 +305,37 @@ An invalid identifier fails loudly (a `ConfigurationException` naming the value)
 
 > **Behaviour change:** before casts were introduced, datetimes were formatted in whatever timezone the object carried and read back in the PHP default timezone, so a value saved from a non-UTC object came back as a different instant. Rows written that way by a non-UTC application hold local wall-clock times; convert them to UTC (or set `timezone` to the zone they were written in) when upgrading.
 
+The same rule covers the tables Marko packages write with hand-built SQL or string properties instead of `DateTimeCast`. Each one converts the injected clock's time to `database.timezone` before it formats it:
+
+| Table | Columns | Written by |
+|---|---|---|
+| `jobs` | `created_at`, `available_at`, `reserved_at` (and the pop, reclaim and `size()` cutoffs) | `DatabaseQueue` ([`marko/queue-database`](/docs/packages/queue-database/#time-and-testing)) |
+| `failed_jobs` | `failed_at` (also read back in this zone) | `DatabaseFailedJobRepository` ([`marko/queue-database`](/docs/packages/queue-database/)) |
+| `personal_access_tokens` | `expires_at` (also read back in this zone by `TokenGuard`), `created_at` | `TokenManager` ([`marko/authentication-token`](/docs/packages/authentication-token/)) |
+| `notifications` | `created_at`, `read_at` | `DatabaseChannel` ([`marko/notification`](/docs/packages/notification/)), `DatabaseNotificationRepository` ([`marko/notification-database`](/docs/packages/notification-database/)) |
+| `webhook_attempts` | `attempted_at` | `WebhookDeliveryService` ([`marko/webhook`](/docs/packages/webhook/)) |
+
+Code of your own that stores times as strings can use the same conversion. Inject `DatabaseTimezoneConfig` and call `format()` to write and `parse()` to read:
+
+```php
+use Marko\Database\Config\DatabaseTimezoneConfig;
+
+public function __construct(
+    private ClockInterface $clock,
+    private DatabaseTimezoneConfig $databaseTimezoneConfig,
+) {}
+
+// '2026-07-04 13:30:00' for 09:30 in New York, with the default UTC zone
+$stored = $this->databaseTimezoneConfig->format($this->clock->now());
+
+// a DateTimeImmutable in the database timezone, the same instant that was stored
+$instant = $this->databaseTimezoneConfig->parse($stored);
+```
+
+In tests, `DatabaseTimezoneConfig::fromName('UTC')` builds one without reading `config/database.php`.
+
+> **Behaviour change:** the tables above used to be written in the clock's timezone (PHP's default timezone for `SystemClock`). An app whose PHP default timezone isn't its database timezone has existing rows holding local wall-clock times. See [upgrading the queue tables](/docs/packages/queue-database/#upgrading-rows-written-in-the-old-timezone) for the drain-or-convert steps; the same conversion SQL applies to the other tables.
+
 Datetimes are stored to the second (`Y-m-d H:i:s`). Declare the column type explicitly --- `#[Column(type: 'timestamp')]` or `#[Column(type: 'datetime')]` --- because a `DateTimeImmutable` property does not infer one.
 
 ### Casts

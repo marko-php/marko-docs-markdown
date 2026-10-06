@@ -88,6 +88,8 @@ The `expiresAt` parameter is optional. Without it, the token expires `token_expi
 
 > **Behaviour change:** before the default lifetime was wired, `token_expiration_days` was never read and a token created without `expiresAt` never expired. Tokens created now get `expires_at` = creation time + 365 days unless you set the config to `null`. Tokens already stored keep their `null` expiry.
 
+> **Behaviour change:** `TokenManager` used to format `expiresAt` in whatever timezone the caller's object carried, and `TokenGuard` read it back in PHP's default timezone, so a UTC expiry on a server running `America/New_York` lived four to five hours longer than asked. Both now use the database timezone. On a server whose PHP default timezone isn't the database timezone, tokens already stored hold local wall-clock expiries; convert `expires_at` and `created_at` with the SQL in [upgrading the queue tables](/docs/packages/queue-database/#upgrading-rows-written-in-the-old-timezone), or accept that their expiry shifts by the offset.
+
 > **Security note:** The plain-text token is available only on `NewAccessToken::$plainTextToken` at creation time. The database stores only a SHA-256 hash. If you lose the plain text, you must revoke and re-issue.
 
 ### Wiring the Token Guard
@@ -120,7 +122,7 @@ Clients send the token in the `Authorization` header on every request:
 Authorization: Bearer <plain-text-token>
 ```
 
-`TokenGuard` hashes the token, looks it up in `personal_access_tokens`, rejects it once `expires_at` has passed, and resolves the user through the configured user provider. Protect routes with `AuthMiddleware` on the token guard:
+`TokenGuard` hashes the token, looks it up in `personal_access_tokens`, rejects it once `expires_at` has passed, and resolves the user through the configured user provider. `expires_at` and `created_at` are written by `TokenManager` and read by `TokenGuard` in the [database timezone](/docs/packages/database/#datetimes-and-timezones) (`database.timezone`, UTC by default), so an expiry passed in any timezone is honoured to the second whatever the server's PHP default timezone. Protect routes with `AuthMiddleware` on the token guard:
 
 ```php title="ApiController.php"
 use Marko\Authentication\AuthManager;
@@ -249,7 +251,7 @@ The package uses the `personal_access_tokens` table. Columns:
 | `token_hash` | string(64) | SHA-256 hash of the plain-text token |
 | `abilities` | text | JSON-encoded array of ability strings |
 | `last_used_at` | datetime | Last usage timestamp |
-| `expires_at` | datetime | Expiry timestamp, set by `TokenManager` from `expiresAt` or `token_expiration_days` (null = never) |
+| `expires_at` | datetime | Expiry timestamp in the database timezone, set by `TokenManager` from `expiresAt` or `token_expiration_days` (null = never) |
 | `created_at` | datetime | Creation timestamp, set by `TokenManager` from the clock |
 
 ## API Reference

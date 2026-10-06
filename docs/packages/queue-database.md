@@ -84,17 +84,26 @@ The `jobs.attempts` column is the authoritative attempt count. Every reservation
 
 ### Time and Testing
 
-`DatabaseQueue` reads the current time from the injected `Psr\Clock\ClockInterface` ([`marko/clock`](/docs/packages/clock/)) for every time-dependent step: `created_at` and `available_at` on push, the `retry_after` reclaim cutoff and `reserved_at` on pop, the availability check in `size()`, the delay on `release()`, and `failedAt` for jobs that exhaust their attempts through crashed reservations. Times are written as `Y-m-d H:i:s` in the clock's timezone (PHP's default timezone for `SystemClock`; bind `new SystemClock('UTC')` to pin it).
+`DatabaseQueue` reads the current time from the injected `Psr\Clock\ClockInterface` ([`marko/clock`](/docs/packages/clock/)) for every time-dependent step: `created_at` and `available_at` on push, the `retry_after` reclaim cutoff and `reserved_at` on pop, the availability check in `size()`, the delay on `release()`, and `failedAt` for jobs that exhaust their attempts through crashed reservations.
+
+The clock decides *when*; the database timezone decides *how it is written*. Every time the queue stores (`created_at`, `available_at`, `reserved_at`, `failed_at`) and every cutoff it compares them with is converted to `database.timezone` (UTC unless you set it, see [Datetimes and Timezones](/docs/packages/database/#datetimes-and-timezones)) before it is formatted as `Y-m-d H:i:s`. `DatabaseFailedJobRepository` reads `failed_at` back in the same zone, so `FailedJob::$failedAt` is the instant that was stored. This is the same rule entity datetimes follow, and it means:
+
+- a web process and a worker that load different `php.ini` files (and so different PHP default timezones) agree on when a delayed job is due
+- with the default UTC zone, the repeated hour of a DST fall-back never reorders jobs or delays a reclaim by an hour
+- delays and `retry_after` are elapsed seconds, never wall-clock arithmetic
+
+The clock's own timezone doesn't matter, so there is no need to bind `new SystemClock('UTC')` for the queue.
 
 Because nothing reads the system time directly, delays and reservation expiry can be tested by moving a [`FakeClock`](/docs/packages/testing/#fakeclock) instead of sleeping:
 
 ```php
+use Marko\Database\Config\DatabaseTimezoneConfig;
 use Marko\Queue\Database\DatabaseQueue;
 use Marko\Testing\Fake\FakeClock;
 
 it('holds a delayed job until it is due', function (): void {
     $clock = new FakeClock('2026-10-05 12:00:00');
-    $queue = new DatabaseQueue($connection, $envelope, $failedJobs, $queryBuilderFactory, $clock);
+    $queue = new DatabaseQueue($connection, $envelope, $failedJobs, $queryBuilderFactory, $clock, DatabaseTimezoneConfig::fromName('UTC'));
     $queue->later(60, new SendReport());
 
     $clock->travel('+59 seconds');
@@ -106,6 +115,41 @@ it('holds a delayed job until it is due', function (): void {
 ```
 
 A reservation becomes reclaimable once `retry_after` seconds have passed since `reserved_at`, inclusive of the boundary second.
+
+### Upgrading: Rows Written in the Old Timezone
+
+> **Behaviour change (breaking):** before this release the queue wrote times in the clock's timezone, which for `SystemClock` is PHP's default timezone. If that wasn't your database timezone (UTC by default), rows already in `jobs` and `failed_jobs` hold local wall-clock times that are now read as database-zone times.
+
+Only apps whose PHP default timezone differs from `database.timezone` are affected. For them, existing rows shift by the offset between the two zones:
+
+- Delayed jobs (`available_at`): west of UTC they become due early by the offset, east of UTC late by the offset.
+- In-flight reservations (`reserved_at`): west of UTC they look older than they are and can be reclaimed while the worker is still running (double execution); east of UTC a crashed job is reclaimed late.
+- `failed_at`: `queue:failed` shows old rows shifted by the offset, and ordering by `failed_at` or `created_at` mixes old and new rows until they are converted. `queue:retry` is unaffected.
+
+Pick one before deploying:
+
+1. **Drain the queue.** Stop the workers, let `jobs` empty (no reserved rows and no future `available_at`), deploy, then start the workers.
+2. **Convert the rows.** With the workers stopped, convert the stored times from the zone they were written in (here `America/New_York`) to the database timezone:
+
+```sql title="MySQL (needs the time zone tables loaded)"
+UPDATE jobs SET
+    available_at = CONVERT_TZ(available_at, 'America/New_York', '+00:00'),
+    created_at = CONVERT_TZ(created_at, 'America/New_York', '+00:00'),
+    reserved_at = CONVERT_TZ(reserved_at, 'America/New_York', '+00:00');
+UPDATE failed_jobs SET failed_at = CONVERT_TZ(failed_at, 'America/New_York', '+00:00');
+```
+
+```sql title="PostgreSQL"
+UPDATE jobs SET
+    available_at = available_at AT TIME ZONE 'America/New_York' AT TIME ZONE 'UTC',
+    created_at = created_at AT TIME ZONE 'America/New_York' AT TIME ZONE 'UTC',
+    reserved_at = reserved_at AT TIME ZONE 'America/New_York' AT TIME ZONE 'UTC';
+UPDATE failed_jobs SET failed_at = failed_at AT TIME ZONE 'America/New_York' AT TIME ZONE 'UTC';
+```
+
+If you set `database.timezone` to a zone other than UTC, use it as the target instead of `'+00:00'` / `'UTC'`.
+
+> **MySQL note:** the jobs columns are `TIMESTAMP`, which MySQL converts from the connection's session `time_zone` to UTC on write and back on read. Marko doesn't set a session time zone, so a server whose system zone observes DST can still shift values that land in its skipped or repeated hour. Run the server (or the session) on `+00:00` to rule that out.
 
 ### PostgreSQL and Payload Encoding
 
@@ -122,12 +166,13 @@ Implements `QueueInterface`. The constructor accepts:
 - a `FailedJobRepositoryInterface`, used to fail jobs that exhaust their attempts through crashed reservations
 - a `QueryBuilderFactoryInterface`, used to build the locking reservation query. Its builders must use the same connection as the queue, so the lock is taken inside the queue's transaction. The driver bindings already do this.
 - a `Psr\Clock\ClockInterface`, the source of every timestamp the queue reads or writes
+- a `DatabaseTimezoneConfig` (`database.timezone`), the zone every stored time and cutoff is converted to before it is formatted
 - an optional table name (`jobs`)
 - an optional default queue name
 - an optional `retryAfter` timeout in seconds
 - an optional default `maxAttempts`
 
-The module factory passes the container's bound clock and sets the last three from `queue.queue`, `queue.retry_after` and `queue.max_attempts`.
+The module factory passes the container's bound clock and `DatabaseTimezoneConfig`, and sets the last three from `queue.queue`, `queue.retry_after` and `queue.max_attempts`.
 
 `pop()` selects the next available job with `lockForUpdate()->skipLocked()` inside a transaction, then reserves it with an `UPDATE` guarded on `reserved_at`. A job locked by another worker is skipped rather than waited for, so multiple workers can run concurrently without claiming the same job. The connection must implement `TransactionInterface` (the MySQL and PostgreSQL drivers do). Otherwise `pop()` throws `LockException`, because the lock would be released as soon as the `SELECT` finished. Jobs whose `reserved_at` timestamp is older than `retry_after` seconds are treated as crashed and become eligible for re-reservation.
 
@@ -143,7 +188,7 @@ The module factory passes the container's bound clock and sets the last three fr
 
 ### DatabaseFailedJobRepository
 
-Implements `FailedJobRepositoryInterface`. Accepts a `ConnectionInterface` connection.
+Implements `FailedJobRepositoryInterface`. Accepts a `ConnectionInterface` connection and a `DatabaseTimezoneConfig`; `failed_at` is written and read in the database timezone.
 
 | Method | Description |
 |---|---|

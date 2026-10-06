@@ -271,7 +271,7 @@ public function recordFailure(WebhookPayload $payload, string $error, int $attem
 | `status_code`    | int    | HTTP status code (null when the receiver was unreachable) |
 | `response_body`  | string | Response body (capped at 500 bytes for a rejection; null when unreachable) |
 | `error_message`  | string | Error message (failures and rejections only) |
-| `attempted_at`   | string | Timestamp in `Y-m-d H:i:s` format |
+| `attempted_at`   | string | Timestamp in `Y-m-d H:i:s` format, in the [database timezone](/docs/packages/database/#datetimes-and-timezones) (UTC by default) |
 
 ### WebhookConfig
 
