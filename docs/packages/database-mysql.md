@@ -100,6 +100,17 @@ Load the tables (`mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql`
 
 Upgrading from a server that wasn't on UTC changes how existing `TIMESTAMP` values read back. See [Upgrading from a non-UTC server](/docs/packages/database/#upgrading-from-a-non-utc-server).
 
+### Prepared Statements
+
+The connection turns off two pdo_mysql defaults:
+
+- `PDO::ATTR_EMULATE_PREPARES => false`: statements are prepared on the server, so bound values never become part of the SQL text.
+- `PDO\Mysql::ATTR_MULTI_STATEMENTS => false`: each `query()`, `execute()` or `raw()` call runs exactly one statement. A string like `SELECT 1; DROP TABLE users` fails instead of running both.
+
+Each named placeholder can appear only once in a statement (`:id ... :id` fails with `HY093`); use two names, or positional `?` placeholders. Integer bindings are sent as integers, so a `LIMIT ?` bound to an `int` works.
+
+The raw query builder fragments (`selectRaw`, `whereRaw`, `having`, `orderByRaw`) also reject MySQL's `#` comment marker, along with the [shared denylist](/docs/packages/database/#raw-expressions).
+
 ### Character Set
 
 The default charset is `utf8mb4` which supports the full Unicode range including emojis. This is the recommended setting for new applications.

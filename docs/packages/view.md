@@ -131,6 +131,25 @@ class MyService
 }
 ```
 
+### Compiled-Template Cache Directory
+
+Template engines compile views to PHP files and `include` them, so the cache directory is code-execution sensitive. `view.cache_directory` defaults to `storage/views`:
+
+```php title="config/view.php"
+return [
+    'cache_directory' => 'storage/views', // relative to the project root
+    'auto_refresh' => true,
+];
+```
+
+Drivers pass the configured value through `CacheDirectoryGuard::prepare()` before handing it to the engine. The guard:
+
+- resolves a relative path against the project root (`ProjectPaths::$base`), never the working directory --- FPM, CGI and mod_php `chdir` into `public/`
+- creates a missing directory with mode `0700`
+- throws `InsecureCacheDirectoryException` when the directory is world-writable or not owned by the user PHP runs as, so another local user cannot plant compiled PHP (the classic pre-created `/tmp/views` attack)
+
+The ownership check requires the `posix` extension; without it only the world-writable check runs. Absolute paths are still allowed, but they must pass the same checks, so a shared `/tmp/views` is refused.
+
 ## Customization
 
 Replace the template resolver via [Preferences](/docs/packages/core/) to customize how templates are located:
@@ -181,6 +200,16 @@ public function cacheDirectory(): string;
 public function autoRefresh(): bool;
 ```
 
+### CacheDirectoryGuard
+
+```php
+use Marko\View\CacheDirectoryGuard;
+
+public function prepare(string $directory): string;
+```
+
+Returns the resolved absolute path. Throws `InsecureCacheDirectoryException` when the directory cannot be created, is a file, is world-writable, or is owned by another user.
+
 ### Exceptions
 
 | Exception | Description |
@@ -188,6 +217,7 @@ public function autoRefresh(): bool;
 | `ViewException` | Base exception for all view errors --- extends `MarkoException` |
 | `TemplateNotFoundException` | Thrown when a template cannot be found --- includes all searched paths |
 | `InvalidTemplateException` | Thrown when a template name is unsafe (path traversal, absolute path, NUL byte, backslash, disallowed characters) or resolves outside its module's `resources/views/` directory |
+| `InsecureCacheDirectoryException` | Thrown when the compiled-template cache directory cannot be created, is not a directory, is world-writable, or is owned by another user |
 | `NoDriverException` | Thrown when no view driver is installed --- suggests `composer require marko/view-latte` or `composer require marko/view-twig` |
 
 ## Related Packages
