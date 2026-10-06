@@ -50,9 +50,16 @@ DB_PASSWORD=your_password
 
 ### Generated Primary Keys
 
-MySQL has no `INSERT ... RETURNING`, so `MySqlConnection::supportsReturning()` returns `false` and a repository can't read a key the database generated back. Saving or batch-inserting an entity whose key is marked `#[Column(generated: true)]` but not set throws a `RepositoryException` that names the entity. Set the key in PHP before saving (a UUID from `ramsey/uuid` or `symfony/uid`, for example); a `DEFAULT (UUID())` on the column still fills rows inserted outside the repository. With the key set, the entity saves normally. See [Database-generated keys](/docs/packages/database/#database-generated-keys).
+MariaDB 10.5+ has `INSERT ... RETURNING` (one row or many), so on MariaDB `MySqlConnection::supportsReturning()` returns `true` and the repository reads generated keys back. Declare the key with a default and `generated: true`, and `save()` and `insertBatch()` fill `$entity->id` from the database:
 
-MariaDB 10.5+ supports `INSERT ... RETURNING`, but this driver treats MariaDB like MySQL here: generated keys must be set in PHP on MariaDB too.
+```php title="app/blog/src/Entity/Token.php"
+#[Column(primaryKey: true, type: 'uuid', default: 'UUID()', generated: true)]
+public string $id;
+```
+
+`insertBatch()` also reads auto-increment ids back with `RETURNING` on MariaDB, so each entity gets the exact id the server assigned, whatever `auto_increment_increment` is.
+
+MySQL has no `INSERT ... RETURNING`, so there `supportsReturning()` returns `false` and a repository can't read a key the database generated back. Saving or batch-inserting an entity whose key is marked `#[Column(generated: true)]` but not set throws a `RepositoryException` that names the entity. Set the key in PHP before saving (a UUID from `ramsey/uuid` or `symfony/uid`, for example); a `DEFAULT (UUID())` on the column still fills rows inserted outside the repository. With the key set, the entity saves normally. `insertBatch()` works out auto-increment ids from `LAST_INSERT_ID()` plus each row's offset. See [Database-generated keys](/docs/packages/database/#database-generated-keys).
 
 ### MySQL vs MariaDB
 
@@ -62,9 +69,10 @@ This driver supports both MySQL and MariaDB. CI runs the driver integration test
 - **Defaults and `ON UPDATE`:** see [Introspected Types and Defaults](#introspected-types-and-defaults).
 - **Integer display widths:** MariaDB keeps them in the native type (`int(10) unsigned`, `bigint(20)`), MySQL 8.0.19+ drops them. The native type is not part of the diff.
 - **`NOWAIT`:** MySQL reports a lock not acquired with `NOWAIT` as error `3572`, MariaDB as `1205`. Both are `LockTimeoutException`.
+- **Generated keys:** MariaDB 10.5+ reads database-generated keys back with `INSERT ... RETURNING`; MySQL can't, so the key is set in PHP (see [Generated Primary Keys](#generated-primary-keys)).
 - **Shared locks with a modifier:** `sharedLock()->noWait()` and `sharedLock()->skipLocked()` compile to `FOR SHARE NOWAIT` / `FOR SHARE SKIP LOCKED` on MySQL and to `LOCK IN SHARE MODE NOWAIT` / `LOCK IN SHARE MODE SKIP LOCKED` on MariaDB (see [Locking and upsert on MySQL and MariaDB](#locking-and-upsert-on-mysql-and-mariadb)).
 
-The driver tells the two servers apart with `MySqlServer`, which reads `SELECT VERSION()` once, the first time SQL that differs between them is compiled, and keeps the answer for the life of the shared connection. It goes through `ConnectionInterface`, so it works behind `marko/database-readwrite` too (a replica runs the same server as its primary). Nothing is configured: the server always reports what it is.
+The driver tells the two servers apart with `MySqlServer`, which reads `SELECT VERSION()` once, the first time SQL that differs between them is compiled or a repository asks whether it can use `RETURNING`, and keeps the answer for the life of the shared connection. It goes through `ConnectionInterface`, so it works behind `marko/database-readwrite` too (a replica runs the same server as its primary). Nothing is configured: the server always reports what it is.
 
 With `innodb_snapshot_isolation=ON` (the default from MariaDB 11.8), a `REPEATABLE READ` transaction that writes a row a concurrent transaction changed after its snapshot fails with error `1020` ("Record has changed since last read"). The driver raises it as `SerializationFailureException`, so `transaction(attempts: ...)` retries it like a deadlock. MySQL never raises `1020` for this case. See [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
@@ -220,7 +228,8 @@ class MyService
 | `execute(string $sql, array $bindings = []): int` | Execute a statement and return the affected row count |
 | `prepare(string $sql): StatementInterface` | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Get the last auto-increment ID |
-| `supportsReturning(): bool` | Always `false`: MySQL has no `INSERT ... RETURNING`, so a [database-generated key](/docs/packages/database/#database-generated-keys) must be set in PHP |
+| `supportsReturning(): bool` | `true` on MariaDB 10.5+, `false` on MySQL (no `INSERT ... RETURNING`, so a [database-generated key](/docs/packages/database/#database-generated-keys) must be set in PHP). Connects on first call to read the server version |
+| `server(): MySqlServer` | The connection's own [server check](#server-detection); the container shares this instance as `MySqlServer` |
 | `quoteIdentifier(string $identifier): string` | Quote a table or column name with backticks through `MySqlIdentifier` (`group` becomes `` `group` ``); needs no live connection |
 | `connect(): void` | Explicitly open the database connection |
 | `disconnect(): void` | Close the connection and discard the transaction depth and pending callbacks |
@@ -228,7 +237,7 @@ class MyService
 
 ### Server Detection
 
-`MySqlServer` tells MySQL and MariaDB apart for SQL whose syntax differs between them. The container shares one instance, built on the shared `ConnectionInterface` (the `ReadWriteConnection` when `marko/database-readwrite` is installed). It reads `SELECT VERSION()` the first time it is asked and keeps the answer. `MySqlQueryBuilder`, `MySqlQueryBuilderFactory` and `MySqlIntrospector` take it as an optional last constructor argument (`server`) and build their own from their connection when it is omitted.
+`MySqlServer` tells MySQL and MariaDB apart for SQL whose syntax differs between them and for `supportsReturning()`. Each `MySqlConnection` owns one (`server()`), and the container shares the shared connection's instance. When the shared `ConnectionInterface` is a decorator (the `ReadWriteConnection` when `marko/database-readwrite` is installed), the container builds one on the decorator instead, and the write connection keeps its own for `supportsReturning()`. It reads `SELECT VERSION()` the first time it is asked and keeps the answer. `MySqlQueryBuilder`, `MySqlQueryBuilderFactory` and `MySqlIntrospector` take it as an optional last constructor argument (`server`) and build their own from their connection when it is omitted.
 
 ```php
 use Marko\Database\MySql\Connection\MySqlServer;

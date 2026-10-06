@@ -212,7 +212,7 @@ $articleRepository->find($article->id); // the saved row
 
 The returned value goes through the property's cast, so a `string` key stays a string. `insertBatch()` gives each entity its own key, in insert order. A key you set yourself is inserted as is.
 
-Reading the key back needs `INSERT ... RETURNING`, which the connection reports through `ConnectionInterface::supportsReturning()`. PostgreSQL supports it. MySQL doesn't, so saving an entity with an unset generated key on MySQL throws a `RepositoryException` that names the entity and tells you to set the key in PHP. MariaDB 10.5+ has `RETURNING`, but `marko/database-mysql` treats MariaDB like MySQL for now.
+Reading the key back needs `INSERT ... RETURNING`, which the connection reports through `ConnectionInterface::supportsReturning()`. PostgreSQL and MariaDB 10.5+ support it, so generated keys read back on both (`marko/database-mysql` checks which server it is connected to, see [MySQL vs MariaDB](/docs/packages/database-mysql/#mysql-vs-mariadb)). MySQL doesn't, so saving an entity with an unset generated key on MySQL throws a `RepositoryException` that names the entity and tells you to set the key in PHP.
 
 `generated: true` is checked when the entity's metadata is parsed: it is only allowed on the primary key, not together with `autoIncrement`, and only with a `default` (otherwise nothing generates the value). Each mistake throws an `EntityException`.
 
@@ -1493,7 +1493,7 @@ $postRepository->insertBatch($posts);
 
 **ID assignment after batch insert:**
 
-- **Connections that support `RETURNING`** (`supportsReturning()` is `true`, e.g. PostgreSQL) --- the `INSERT` ends with `RETURNING <primary key>`, and each entity gets its own auto-increment or generated key in insert order.
+- **Connections that support `RETURNING`** (`supportsReturning()` is `true`: PostgreSQL and MariaDB 10.5+) --- the `INSERT` ends with `RETURNING <primary key>`, and each entity gets its own auto-increment or generated key in insert order.
 - **MySQL** --- auto-increment IDs are recovered from `lastInsertId()` plus sequential offset.
 
 ## Seeders
@@ -1933,7 +1933,7 @@ Every driver package binds six interfaces. They fall into two categories:
 
 | Interface | Category | Role |
 |-----------|----------|------|
-| `ConnectionInterface` | **Wire** | PDO connection, DSN format, PostgreSQL/MySQL protocol; exposes `driverName(): string` (e.g. `'mysql'`, `'pgsql'`) so dialect-aware code can branch without a live connection, `supportsReturning(): bool` so the repository knows whether it can read generated keys back with `INSERT ... RETURNING`, and `quoteIdentifier(string $identifier): string`, which the repository, `DataMigration` and `DatabaseTestHelper` quote every table and column name through (see [Reserved Words and Mixed Case](#reserved-words-and-mixed-case)) |
+| `ConnectionInterface` | **Wire** | PDO connection, DSN format, PostgreSQL/MySQL protocol; exposes `driverName(): string` (e.g. `'mysql'`, `'pgsql'`) so dialect-aware code can branch without a live connection, `supportsReturning(): bool` so the repository knows whether it can read generated keys back with `INSERT ... RETURNING` (a driver may ask the server once to answer it, as the MySQL driver does to tell MariaDB 10.5+ from MySQL), and `quoteIdentifier(string $identifier): string`, which the repository, `DataMigration` and `DatabaseTestHelper` quote every table and column name through (see [Reserved Words and Mixed Case](#reserved-words-and-mixed-case)) |
 | `ConnectionFactoryInterface` | **Wire** | Creates `ConnectionInterface` instances from a `DatabaseConfig` |
 | `SqlGeneratorInterface` | Dialect | DDL generation for schema diffs |
 | `IntrospectorInterface` | Dialect | Reading existing schema from `information_schema` etc. Implement `ExpressionDefaultMatcherInterface` on it too so the diff can settle expression defaults the database rewrites (see [Column Defaults](#column-defaults)) |
@@ -1948,7 +1948,9 @@ A class that implements `ConnectionInterface` itself (a new driver, a decorator 
 
 - wrap the name in the dialect's identifier delimiter and double any delimiter inside it, so no name can break out
 - quote each part of a `table.column` name separately
-- work without a live connection, like `driverName()` and `supportsReturning()`
+- work without a live connection, like `driverName()`
+
+`supportsReturning()` may connect: the repository calls it just before it runs the `INSERT`, so a driver whose answer depends on the server can ask the server once and keep the answer.
 
 A decorator delegates to the connection it wraps, as `ReadWriteConnection` delegates to its write connection.
 
