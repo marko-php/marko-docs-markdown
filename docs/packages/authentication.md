@@ -72,6 +72,12 @@ Each guard's `provider` names an entry in `providers`. See [User Providers](#use
 
 See [Remember Me](#remember-me) for what each `remember` option controls, and [Login Throttling](#login-throttling) for `throttle`.
 
+### Password Hashing
+
+`PasswordHasherInterface` is bound to `BcryptPasswordHasher`, using `password.bcrypt.cost`. When [marko/hashing](/docs/packages/hashing/) is installed, the binding switches to `HashManagerPasswordHasher` instead, and `config/hashing.php` (`HASH_DRIVER`, `BCRYPT_COST`, the Argon2id settings) governs login passwords; `authentication.password` is then ignored.
+
+After a successful `attempt()`, `SessionGuard` calls `UserProviderInterface::rehashPasswordIfNeeded()`, which rehashes and saves the password when `needsRehash()` says the stored hash is out of date. Raising the bcrypt cost, or switching `HASH_DRIVER` from `bcrypt` to `argon2id`, therefore upgrades each account on its next login. Under any driver, existing bcrypt hashes keep verifying, with the same 72-byte and NUL-byte rejection as `BcryptPasswordHasher`.
+
 ## Usage
 
 ### Checking Authentication
@@ -813,6 +819,7 @@ public function forGuard(string $guard, array $guardConfig): UserProviderInterfa
 public function retrieveById(int|string $identifier): ?AuthenticatableInterface;
 public function retrieveByCredentials(array $credentials): ?AuthenticatableInterface;
 public function validateCredentials(AuthenticatableInterface $user, array $credentials): bool;
+public function rehashPasswordIfNeeded(AuthenticatableInterface $user, array $credentials): void;
 public function retrieveByRememberToken(int|string $identifier, string $token): ?AuthenticatableInterface;
 public function updateRememberToken(AuthenticatableInterface $user, ?string $token, ?DateTimeImmutable $expiresAt): void;
 ```
@@ -820,6 +827,24 @@ public function updateRememberToken(AuthenticatableInterface $user, ?string $tok
 `retrieveByRememberToken()` receives the SHA-256 hash of the cookie's token, the same value previously passed to `updateRememberToken()`.
 
 `retrieveByCredentials()` and `validateCredentials()` receive request input as-is, so a provider must treat non-string `email` or `password` values (such as `email[]=x`) as a failed login rather than passing them to typed methods. When `retrieveByCredentials()` finds no usable account (unknown or inactive), it should call `PasswordHasherInterface::verifyDummy()` before returning `null`, so a failed login costs one password check either way and response timing does not reveal which accounts exist. `AdminUserProvider` in [admin-auth](/docs/packages/admin-auth/) does both.
+
+`SessionGuard` calls `rehashPasswordIfNeeded()` only after `validateCredentials()` accepted the same credentials. Check `PasswordHasherInterface::needsRehash()` against the stored hash and, when it returns `true`, hash the plain password and save it:
+
+```php
+public function rehashPasswordIfNeeded(
+    AuthenticatableInterface $user,
+    array $credentials,
+): void {
+    $password = $credentials['password'] ?? null;
+
+    if (!is_string($password) || !$this->hasher->needsRehash($user->getAuthPassword())) {
+        return;
+    }
+
+    $user->password = $this->hasher->hash($password);
+    $this->users->save($user);
+}
+```
 
 ### PasswordHasherInterface
 
