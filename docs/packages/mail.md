@@ -173,6 +173,14 @@ public static function fromContent(string $content, string $name, string $mimeTy
 public static function inline(string $path, string $contentId, ?string $name = null, ?string $mimeType = null): self;
 ```
 
+Every `Attachment` is validated on creation, so a filename or type taken from user input cannot inject MIME headers. It throws `MessageException` when:
+
+- the name, mime type or content ID contains a CR, LF or NUL character
+- the mime type is not a bare `type/subtype` pair of RFC 2045 tokens (parameters such as `; charset=UTF-8` are rejected)
+- the content ID uses characters outside the RFC 5322 msg-id set (letters, digits, `.`, `@` and ``!#$%&'*+-/=?^_`{|}~``; no angle brackets or spaces)
+
+The `marko/mail-smtp` driver renders non-ASCII filenames with RFC 2231 encoding (`filename*=UTF-8''...`).
+
 ### MailConfig
 
 ```php
@@ -190,5 +198,5 @@ public function driverConfig(string $driver): array;
 | Exception | Description |
 |-----------|-------------|
 | `MailException` | Base exception for all mail errors --- includes `getContext()` and `getSuggestion()` methods |
-| `MessageException` | Thrown for invalid email addresses, missing attachments, or no recipients |
+| `MessageException` | Thrown for invalid email addresses, missing or invalid attachments, or no recipients |
 | `TransportException` | Thrown on delivery failures --- connection errors, TLS failures, authentication failures, unexpected SMTP responses |
