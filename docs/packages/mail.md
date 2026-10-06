@@ -158,10 +158,13 @@ readonly class Address
     public ?string $name;
 
     public function toString(): string;
+    public function formatDisplayName(): string;
 }
 ```
 
 The `Address` constructor throws `MessageException` if the email address is invalid or if the display name contains CR or LF characters (mail header injection protection).
+
+`toString()` renders `Name <email>`. `formatDisplayName()` returns the name unchanged when it is plain RFC 5322 words, and wraps it in a quoted-string (escaping `\` and `"`) when it contains specials such as `,`, `<`, `>`, `;`, `@`, `.` or `"`, so `new Address('real@example.com', 'x <attacker@evil.com>, y')` renders as `"x <attacker@evil.com>, y" <real@example.com>`, a single address.
 
 ### Attachment
 
