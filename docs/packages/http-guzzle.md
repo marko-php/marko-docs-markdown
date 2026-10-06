@@ -13,6 +13,26 @@ composer require marko/http-guzzle
 
 This automatically installs `marko/http`.
 
+## Configuration
+
+Every request gets a timeout by default, so a slow or unresponsive upstream can't tie up a PHP worker indefinitely. The defaults live in `config/http-guzzle.php`:
+
+```php title="config/http-guzzle.php"
+use Marko\Config\Env;
+
+return [
+    'timeout' => Env::float('HTTP_GUZZLE_TIMEOUT', 30.0, min: 0.0),
+    'connect_timeout' => Env::float('HTTP_GUZZLE_CONNECT_TIMEOUT', 10.0, min: 0.0),
+];
+```
+
+| Key | Env var | Default | Description |
+|---|---|---|---|
+| `timeout` | `HTTP_GUZZLE_TIMEOUT` | `30.0` | Seconds to wait for the whole request. `0` waits forever. |
+| `connect_timeout` | `HTTP_GUZZLE_CONNECT_TIMEOUT` | `10.0` | Seconds to wait while connecting. `0` waits forever. |
+
+A `timeout` or `connect_timeout` passed on an individual request (or in the `guzzle` escape hatch) overrides the configured value for that request. A negative configured value throws `ConfigException` on the first request.
+
 ## Usage
 
 ### Automatic via Binding
@@ -70,6 +90,8 @@ try {
 ```
 
 Pass `'http_errors' => false` to receive 4xx/5xx responses as a normal `HttpResponse` instead of an exception. See [Error Responses](/docs/packages/http/#error-responses).
+
+Exception messages are safe to log: any URL in the message has its query string replaced with `?…` and its userinfo replaced with `***@`, so an API key in `?api_key=...` or credentials in `https://user:pass@host` don't end up in your logs. The original Guzzle exception, which still holds the full URL, is available via `$e->getPrevious()`.
 
 ### Request Options and Validation
 
@@ -131,13 +153,13 @@ class CustomGuzzleClient extends GuzzleHttpClient
     {
         return new Client([
             'base_uri' => 'https://api.example.com',
-            'timeout' => 30,
+            'headers' => ['User-Agent' => 'my-app/1.0'],
         ]);
     }
 }
 ```
 
-The `createClient()` method is called lazily on first request --- override it to set base URIs, default timeouts, middleware, or any other Guzzle configuration.
+The `createClient()` method is called lazily on first request --- override it to set base URIs, middleware, or any other Guzzle configuration. Timeouts set on the Guzzle client here are overridden by the per-request defaults from `config/http-guzzle.php`; change the timeouts there instead.
 
 ## API Reference
 
@@ -147,6 +169,7 @@ Implements `HttpClientInterface`. See [`marko/http`](/docs/packages/http/) for t
 
 | Method | Description |
 |---|---|
+| `__construct(ConfigRepositoryInterface $config)` | Reads the default timeouts from `http-guzzle.*` config; autowired by the container |
 | `request(string $method, string $url, array $options = []): HttpResponse` | Send a request with any HTTP method |
 | `get(string $url, array $options = []): HttpResponse` | Send a GET request |
 | `post(string $url, array $options = []): HttpResponse` | Send a POST request |
@@ -155,4 +178,4 @@ Implements `HttpClientInterface`. See [`marko/http`](/docs/packages/http/) for t
 | `delete(string $url, array $options = []): HttpResponse` | Send a DELETE request |
 | `createClient(): GuzzleClientInterface` | Protected --- override via Preference to customize the Guzzle client |
 
-All methods throw `InvalidRequestOptionException` for invalid options, `ConnectionException` on network failures, and `HttpException` on HTTP error responses (4xx, 5xx) unless `http_errors` is `false`. The `HttpException` carries the `HttpResponse` when available.
+All methods throw `InvalidRequestOptionException` for invalid options, `ConnectionException` on network failures, and `HttpException` on HTTP error responses (4xx, 5xx) unless `http_errors` is `false`. The `HttpException` carries the `HttpResponse` when available. Exception messages have URL query strings and userinfo redacted.
