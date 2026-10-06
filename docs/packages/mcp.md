@@ -53,10 +53,51 @@ Conditional tools (registered only when their dependency is present):
 
 | Tool | Requires | Notes |
 |------|----------|-------|
-| `query_database` | a `marko/database` driver | Read-only by default; rejects stacked statements (e.g. `SELECT 1; DELETE ...`); registered only when a DB connection is available |
+| `query_database` | a `marko/database` driver | Read-only unless the server config enables writes (see below); registered only when a DB connection is available |
 | `search_docs` | a docs driver (`marko/docs-fts`) | Registered only when a `DocsSearchInterface` is bound |
 
 > There is intentionally **no `last_error` tool** and no global error-capture plugin. "Most recent error" is `read_log_entries(level: 'error', limit: 1)` — one tool, no production-time side effects.
+
+## `query_database` Safety
+
+An agent can be steered by content it reads (database rows, log lines, repository files), so `query_database` does not trust the agent to stay read-only. Every read passes two guards:
+
+1. **SQL check.** The statement must be a single `SELECT`, `WITH`, `SHOW`, `EXPLAIN` or `DESCRIBE` statement. Comments (`--`, `#`, `/* */`) and string literals are stripped first, and the statement is checked under the lexical rules of MySQL, PostgreSQL and SQLite, so a quote or comment that one database reads differently cannot hide a second statement. The tool rejects:
+    - any `;` outside a string literal, except one trailing `;`
+    - `INSERT`, `UPDATE`, `DELETE`, `MERGE` and `INTO` anywhere in the statement, which covers data-modifying CTEs (`WITH d AS (DELETE ...) SELECT ...`), `EXPLAIN ANALYZE DELETE ...` and `SELECT ... INTO OUTFILE`
+    - functions with side effects, such as `dblink_exec()`, `pg_read_file()`, `setval()` and `load_file()`
+    - MySQL executable comments (`/*! ... */`), and unterminated strings or comments
+2. **Read-only transaction.** The statement runs inside a read-only transaction that is always rolled back: `START TRANSACTION READ ONLY` on MySQL and MariaDB, `BEGIN READ ONLY` on PostgreSQL, and `PRAGMA query_only = ON` plus a transaction on SQLite. The database refuses any write the SQL check missed. On any other driver the tool refuses to run the query.
+
+Because the check is conservative across dialects, a few valid reads are rejected too, such as a PostgreSQL dollar-quoted string that contains a `;`. Rewrite the query with a plain string literal.
+
+### Enabling writes
+
+Writes are off by default. The `allowWrite` and `confirm` tool arguments come from the agent, so on their own they cannot enable writes. To let the agent run writes, set the server-side flag:
+
+```bash
+MCP_ALLOW_WRITES=true
+```
+
+or set it in your app's `config/mcp.php`:
+
+```php title="config/mcp.php"
+return [
+    'database' => [
+        'allow_writes' => true,
+    ],
+];
+```
+
+With writes enabled, the tool advertises the `allowWrite` and `confirm` arguments. A call with both set to `true` runs the statement outside the read-only transaction, with no SQL check, and prefixes the result with `WARNING: WRITE OPERATION executed.` Calls without `allowWrite` still go through both read guards.
+
+For the strongest guarantee, also point the MCP server at a database user that only has read privileges. The read-only transaction blocks writes but not reads, so a privileged user can still read anything the connection can see.
+
+## Configuration
+
+| Key | Env | Default | Purpose |
+|-----|-----|---------|---------|
+| `mcp.database.allow_writes` | `MCP_ALLOW_WRITES` | `false` | Let `query_database` run writes when the agent passes `allowWrite` and `confirm` |
 
 ## Related Packages
 
