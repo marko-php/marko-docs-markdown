@@ -262,3 +262,29 @@ interface AdminConfigInterface
 |-----------|--------|------------|
 | `#[AdminSection]` | Class | `id`, `label`, `icon` (optional), `sortOrder` (optional) |
 | `#[AdminPermission]` | Class (repeatable) | `id`, `label` (optional) |
+
+### AdminSectionDiscovery
+
+`AdminSectionDiscovery` reads section metadata from classes:
+
+```php
+public function discoverInModule(ModuleManifest $manifest): array;
+public function parseAdminSectionClass(string $className): AdminSectionDefinition;
+```
+
+`discoverInModule()` returns the absolute paths of the files in the module's `src/` directory whose class is marked with `#[AdminSection]`. A cheap text match picks candidate files, then each candidate's class is loaded and checked with reflection. A file that only mentions `#[AdminSection` in a comment, or uses a longer attribute name such as `#[AdminSectionWidget]`, is skipped. A class that really carries the attribute is always reported, even when it is invalid, so `parseAdminSectionClass()` can reject it loudly.
+
+`parseAdminSectionClass()` turns a section class into an `AdminSectionDefinition` with its `#[AdminPermission]` entries. It checks the attribute first, then the interface.
+
+### Exceptions
+
+Section registry and discovery errors are thrown as `AdminException`, each with a message, context and suggestion:
+
+| Factory | Thrown when |
+|---------|-------------|
+| `AdminException::duplicateSection()` | `AdminSectionRegistry::register()` receives a section id that is already registered |
+| `AdminException::sectionNotFound()` | `AdminSectionRegistry::get()` is called with an unknown id |
+| `AdminException::missingSectionAttribute()` | `parseAdminSectionClass()` is given a class that is not marked with `#[AdminSection]` |
+| `AdminException::sectionMustImplementInterface()` | `parseAdminSectionClass()` is given a class marked with `#[AdminSection]` that does not implement `AdminSectionInterface` |
+
+`InvalidAdminConfigException` is thrown by `AdminConfig` when the route prefix does not start with `/`.
