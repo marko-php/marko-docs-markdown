@@ -116,7 +116,7 @@ class CustomerChannelAuthorizer implements ChannelAuthorizerInterface
 }
 ```
 
-Patterns match dot-separated channel names. Each `{name}` placeholder matches exactly one segment and is passed to the authorizer as `$params['name']`, so `customers.{customerId}` matches `customers.42` but not `customers.4.2`. `$user` is `null` for guests. Authorizers are resolved from the container, so they can inject dependencies through their constructors.
+Patterns match dot-separated channel names. Each `{name}` placeholder matches exactly one segment and is passed to the authorizer as `$params['name']`, so `customers.{customerId}` matches `customers.42` but not `customers.4.2`. A placeholder captures only letters, digits and `_ - = @` (`ChannelDefinition::PLACEHOLDER_PATTERN`), and the whole name must match, so `customers.1{x}`, `customers.1,2` or a name with a trailing newline matches no pattern and is refused as having no authorizer. `$user` is `null` for guests. Authorizers are resolved from the container, so they can inject dependencies through their constructors.
 
 Drivers call `ChannelRegistry::authorize($channelName, $user)` when they issue subscriber credentials (the Mercure subscriber token, the Pusher `/broadcasting/auth` endpoint). A private channel with no matching authorizer is **denied loudly** with a `ChannelAuthorizationException` --- private channels are never open by default.
 
@@ -211,7 +211,7 @@ use Marko\Broadcasting\PrivateChannel;
 
 readonly class Channel
 {
-    public function __construct(public string $name); // throws BroadcastException when empty
+    public function __construct(public string $name); // throws BroadcastException when empty or unsafe
     public static function from(string|Channel $channel): Channel;
     public function isPrivate(): bool; // false
     public function isPresence(): bool; // false
@@ -220,6 +220,8 @@ readonly class Channel
 readonly class PrivateChannel extends Channel {} // isPrivate(): true
 readonly class PresenceChannel extends Channel {} // isPrivate(): true, isPresence(): true
 ```
+
+Channel names must not contain `{ } * ,`, whitespace or control characters (`Channel::FORBIDDEN_CHARACTERS_PATTERN`). Drivers use these as URI-template or topic-selector syntax, so a name like `customers.1{x}` could otherwise grant access to many channels. The constructor throws `BroadcastException::unsafeChannelName()` for them.
 
 Drivers check `isPresence()` before `isPrivate()`, because a presence channel also requires authorization.
 
@@ -294,7 +296,7 @@ A shared singleton; authorizers are discovered on first use.
 
 | Exception | Thrown when |
 |---|---|
-| `BroadcastException` | Empty channel or event name, empty presence member id, unencodable payload, a driver request fails, a channel name is invalid for the driver, or a driver without presence support is given a `PresenceChannel` (`presenceChannelsUnsupported()`) |
+| `BroadcastException` | Empty or unsafe channel name (`unsafeChannelName()`), empty event name, empty presence member id, unencodable payload, a driver request fails, a channel name is invalid for the driver, or a driver without presence support is given a `PresenceChannel` (`presenceChannelsUnsupported()`) |
 | `ChannelAuthorizationException` | A private or presence channel has no authorizer, the matching authorizer serves the other channel kind, an authorizer is registered twice for one pattern, or a `#[BroadcastChannel]` class implements neither authorizer interface |
 | `NoDriverException` | `BroadcasterInterface` is resolved with no driver installed |
 

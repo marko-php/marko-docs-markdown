@@ -235,6 +235,7 @@ When a plugin targets an interface, it fires regardless of which concrete implem
 
 - **Readonly classes cannot be targeted directly.** If a concrete class is `readonly`, target its interface instead. Marko will throw a helpful error explaining this.
 - **One interface at a time.** If a class implements multiple interfaces and plugins are registered on more than one, Marko throws an error rather than silently picking a winner. Target the concrete class directly in this case.
+- **Intercepted methods cannot use object defaults.** The interceptor re-declares each intercepted method with the same default values, so a caller who omits an argument gets exactly the default you wrote. Scalars, arrays, enum cases and constants are all supported. A `new Foo()` default cannot be reproduced, so Marko throws a `PluginException` when it generates the interceptor. Use a nullable parameter instead: `?Foo $foo = null`, then `$foo ??= new Foo()` in the method body.
 
 ## How Plugins Work
 
