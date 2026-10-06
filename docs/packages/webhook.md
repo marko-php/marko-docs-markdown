@@ -23,6 +23,7 @@ return [
     'max_retries'         => 3,   // maximum delivery attempts (including the first)
     'retry_delay'         => 60,  // base delay in seconds; multiplied exponentially per attempt
     'timestamp_tolerance' => 300, // seconds a webhook timestamp may differ from server time
+    'allow_http'          => false, // allow plain http:// webhook URLs (https only by default)
 ];
 ```
 
@@ -33,6 +34,8 @@ With the defaults, a job that fails on every attempt retries at 120 s, 240 s, an
 The `timestamp_tolerance` controls replay-attack protection for inbound webhooks. Requests whose `X-Webhook-Timestamp` header is more than this many seconds in the past or future are rejected.
 
 `WebhookConfig` also validates the other numeric keys: a negative `max_retries`, a negative `retry_delay`, or a `timestamp_tolerance` of `0` or less throws a `ConfigException` naming the key.
+
+`allow_http` is read by the [webhook URL policy](#outgoing-url-policy). Leave it `false` in production so payloads and signatures are never sent in clear text; set it to `true` only for local development against a plain-HTTP receiver.
 
 ## Usage
 
@@ -70,6 +73,55 @@ public function notifySubscriber(): void
 
 The dispatcher automatically records the current Unix timestamp, includes it as an `X-Webhook-Timestamp` header, and signs the message as `"{timestamp}.{body}"` — producing an `X-Webhook-Signature: sha256={hash}` header. The receiver verifies both the timestamp freshness and the signature before accepting the payload.
 
+### Outgoing URL Policy
+
+Webhook URLs usually come from your users, so a URL like `http://169.254.169.254/latest/meta-data/` would otherwise turn every delivery into a request against your own network, with the response saved to the delivery log. Before every request, `WebhookDispatcher` passes the URL to `WebhookUrlPolicyInterface::validate()`, and it never follows redirects, so a receiver cannot answer with a `302` to an internal address. A redirect response is returned like any other non-2xx status.
+
+The default `WebhookUrlPolicy` throws `UnsafeWebhookUrlException` unless:
+
+- the scheme is `https` (or `http` when `allow_http` is `true`),
+- the host is a hostname or a canonical IP address (numeric shorthand such as `2130706433`, `0x7f.1` or `127.1`, and URLs containing backslashes or whitespace, are rejected because HTTP clients may read them differently),
+- the host resolves, and **every** address it resolves to is public.
+
+These ranges are rejected, including when an IPv4 address is embedded in IPv6 (IPv4-mapped `::ffff:0:0/96`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`):
+
+| IPv4 | IPv6 |
+|---|---|
+| `0.0.0.0/8`, `127.0.0.0/8` (loopback) | `::1`, `::/96` (unspecified, IPv4-compatible) |
+| `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918) | `fc00::/7` (unique local) |
+| `169.254.0.0/16` (link-local, cloud metadata) | `fe80::/10` (link-local), `fec0::/10` (site-local) |
+| `100.64.0.0/10` (carrier-grade NAT) | `ff00::/8` (multicast) |
+| `192.0.0.0/24`, `198.18.0.0/15`, `224.0.0.0/4`, `240.0.0.0/4` | |
+
+Validate the URL when a user registers it as well, so an unsafe destination is rejected with a helpful message instead of failing at delivery time:
+
+```php
+use Marko\Webhook\Contracts\WebhookUrlPolicyInterface;
+use Marko\Webhook\Exceptions\UnsafeWebhookUrlException;
+
+public function __construct(
+    private readonly WebhookUrlPolicyInterface $webhookUrlPolicy,
+) {}
+
+public function register(string $url): void
+{
+    try {
+        $this->webhookUrlPolicy->validate($url);
+    } catch (UnsafeWebhookUrlException $e) {
+        // show $e->getMessage() to the user
+        return;
+    }
+
+    // store the webhook URL...
+}
+```
+
+Hostnames are resolved through `HostResolverInterface` (bound to `DnsHostResolver`, which uses the system resolver). Bind your own resolver to use a different DNS source, or a fixed map in tests. To allow destinations the default policy rejects, for example a receiver on your private network, bind your own `WebhookUrlPolicyInterface` implementation.
+
+:::caution[DNS rebinding]
+`marko/http` has no option to pin a request to an already-resolved IP, so the HTTP client resolves the host again when it connects. The policy runs immediately before each request to keep that window small, but a hostname whose DNS answer changes between the check and the connection can still reach an internal address. If your receivers are untrusted and your network exposes sensitive internal services, also block egress to internal ranges at the network level (firewall or egress proxy).
+:::
+
 ### Sending Asynchronously with Retry
 
 Push a `DispatchWebhookJob` onto the queue to send in the background with automatic retry on failure:
@@ -104,6 +156,7 @@ The job decides what to do from the outcome of each attempt:
 | `408`, `429` or `5xx` response | Failure: status code, response body (capped at 500 bytes) and `Webhook receiver responded with HTTP {status}.` | Yes |
 | Any other non-2xx response (`3xx`, other `4xx`) | Failure, same fields | No. The receiver will answer the same way again |
 | Receiver unreachable or too slow (connection error, transport error, or no answer within `timeout` seconds) | Failure: the error message | Yes |
+| URL rejected by the [URL policy](#outgoing-url-policy) (nothing is sent) | Failure: the `UnsafeWebhookUrlException` message | No. The URL would be rejected again |
 
 Retries go back onto the queue with `retry_delay * 2^attempt` seconds of delay until `max_retries` attempts have been made. When `max_retries` or `retry_delay` is missing from config, the attempt is still recorded but not retried. Only the send is retried: if recording a delivered webhook fails (for example, the database is down), the exception propagates instead of sending the webhook again.
 
@@ -205,6 +258,7 @@ public function isRetryable(): bool;  // true for 408, 429 and 5xx
 ```php
 use Marko\Http\Contracts\HttpClientInterface;
 use Marko\Webhook\Config\WebhookConfig;
+use Marko\Webhook\Contracts\WebhookUrlPolicyInterface;
 use Marko\Webhook\Sending\WebhookDispatcher;
 use Marko\Webhook\Value\WebhookPayload;
 use Marko\Webhook\Value\WebhookResponse;
@@ -214,12 +268,52 @@ public function __construct(
     HttpClientInterface $httpClient,
     ClockInterface $clock,
     WebhookConfig $config,
+    WebhookUrlPolicyInterface $urlPolicy,
 );
 
-// Returns a WebhookResponse for every HTTP response (4xx/5xx included).
-// Sends webhook.timeout as the request timeout.
+// Returns a WebhookResponse for every HTTP response (4xx/5xx and 3xx included; redirects are not followed).
+// Validates the URL with the URL policy first and sends webhook.timeout as the request timeout.
+// @throws UnsafeWebhookUrlException when the URL policy rejects the URL (nothing is sent)
 // @throws HttpException|ConnectionException when the receiver cannot be reached or does not answer in time
 public function dispatch(WebhookPayload $payload): WebhookResponse;
+```
+
+### WebhookUrlPolicy
+
+```php
+use Marko\Config\ConfigRepositoryInterface;
+use Marko\Webhook\Contracts\HostResolverInterface;
+use Marko\Webhook\Sending\WebhookUrlPolicy;
+
+public function __construct(
+    ConfigRepositoryInterface $config,   // reads webhook.allow_http
+    HostResolverInterface $resolver,
+);
+
+// @throws UnsafeWebhookUrlException
+public function validate(string $url): void;
+```
+
+### DnsHostResolver
+
+```php
+use Marko\Webhook\Sending\DnsHostResolver;
+
+// IP literals resolve to themselves; hostnames via gethostbynamel() (IPv4) and AAAA records (IPv6).
+// Returns an empty list when the host does not resolve.
+public function resolve(string $host): array;
+```
+
+### UnsafeWebhookUrlException
+
+```php
+use Marko\Webhook\Exceptions\UnsafeWebhookUrlException;
+
+UnsafeWebhookUrlException::malformed(string $url);
+UnsafeWebhookUrlException::disallowedScheme(string $url, string $scheme, bool $allowHttp);
+UnsafeWebhookUrlException::ambiguousNumericHost(string $url, string $host);
+UnsafeWebhookUrlException::unresolvableHost(string $url, string $host);
+UnsafeWebhookUrlException::disallowedAddress(string $url, string $host, string $address, string $range);
 ```
 
 ### WebhookReceiver
@@ -325,6 +419,24 @@ use Marko\Webhook\Value\WebhookResponse;
 
 interface WebhookDispatcherInterface {
     public function dispatch(WebhookPayload $payload): WebhookResponse;
+}
+```
+
+```php
+use Marko\Webhook\Contracts\WebhookUrlPolicyInterface;
+
+interface WebhookUrlPolicyInterface {
+    // @throws UnsafeWebhookUrlException
+    public function validate(string $url): void;
+}
+```
+
+```php
+use Marko\Webhook\Contracts\HostResolverInterface;
+
+interface HostResolverInterface {
+    // Every IPv4 and IPv6 address the host resolves to; empty when it does not resolve
+    public function resolve(string $host): array;
 }
 ```
 
