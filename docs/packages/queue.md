@@ -276,6 +276,26 @@ When an async observer fires, `QueueAsyncObserverDispatcher` serializes the even
 | `marko queue:clear` | Clear all jobs from a queue |
 | `marko queue:status` | Show queue size |
 
+### Time and Testing
+
+The worker reads the current time from the injected `Psr\Clock\ClockInterface` ([`marko/clock`](/docs/packages/clock/)) and stamps `FailedJob::$failedAt` with it, rather than calling `new DateTimeImmutable()`. In a test, pass a [`FakeClock`](/docs/packages/testing/#fakeclock) to freeze that time:
+
+```php
+use Marko\Queue\Worker;
+use Marko\Testing\Fake\FakeClock;
+
+it('records when a job failed', function (): void {
+    $clock = new FakeClock('2026-03-01 09:15:00 UTC');
+    $worker = new Worker($queue, $failedJobs, $config, $envelope, $container, $clock);
+
+    $worker->work(once: true);
+
+    expect($failedJobs->find($jobId)?->failedAt)->toEqual($clock->now());
+});
+```
+
+Drivers that schedule delayed or reserved jobs, such as [`marko/queue-database`](/docs/packages/queue-database/#time-and-testing), take the same clock, so one `FakeClock` controls the whole queue.
+
 ### Configuration
 
 Queue behavior is controlled by `config/queue.php`:

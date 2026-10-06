@@ -99,6 +99,10 @@ These packages take an injected `ClockInterface` and so require `marko/clock`:
 - [`marko/broadcasting-pusher`](/docs/packages/broadcasting-pusher/) --- request signature timestamps
 - [`marko/media`](/docs/packages/media/) --- the `YYYY/MM` upload path
 - [`marko/sse`](/docs/packages/sse/) --- stream heartbeats and timeouts (`SseStream` defaults to `SystemClock` when you construct it without one)
+- [`marko/database`](/docs/packages/database/) --- `#[Timestamps]` values and generated migration file names
+- [`marko/queue`](/docs/packages/queue/) --- the worker's failed-job time
+- [`marko/queue-database`](/docs/packages/queue-database/) --- job availability, delays, reservation expiry and failed-job time
+- [`marko/scheduler`](/docs/packages/scheduler/) --- which tasks are due, the `schedule:work` loop, and overlap-mutex expiry
 
 ## API Reference
 

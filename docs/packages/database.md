@@ -350,7 +350,31 @@ class Comment extends Entity
 - **Insert** (`save()` on a new entity and `insertBatch()`) sets both properties. A value you set yourself is kept.
 - **Update** sets `updatedAt` only when something else changed. Saving an unchanged entity writes nothing, and an `updatedAt` you changed yourself is kept.
 - **Property names** default to `createdAt` and `updatedAt`. Rename them, or pass `null` to manage one yourself: `#[Timestamps(createdAt: 'publishedAt', updatedAt: null)]`. Each named property must be a `DateTimeImmutable` `#[Column]`, or metadata parsing throws `EntityException`. Passing `null` for both, or using `#[Timestamps]` on a `#[Table(extends:)]` extender, also throws.
-- The time comes from the protected `Repository::now()` (UTC); override it in a repository to supply a different clock.
+- The time comes from the repository's injected `Psr\Clock\ClockInterface` ([`marko/clock`](/docs/packages/clock/)), converted to UTC. The container passes the bound clock; a repository you construct by hand without one uses `SystemClock`. For a one-off rule, override the protected `Repository::now()` instead.
+
+To pin timestamps in a test, pass a [`FakeClock`](/docs/packages/testing/#fakeclock) as the repository's `clock` argument:
+
+```php
+use Marko\Database\Entity\EntityHydrator;
+use Marko\Database\Entity\EntityMetadataFactory;
+use Marko\Testing\Fake\FakeClock;
+
+it('stamps posts with the current time', function (): void {
+    $clock = new FakeClock('2026-10-05 12:00:00 UTC');
+    $metadataFactory = new EntityMetadataFactory();
+    $posts = new PostRepository(
+        $connection,
+        $metadataFactory,
+        new EntityHydrator($metadataFactory),
+        clock: $clock,
+    );
+
+    $post = new Post();
+    $posts->save($post);
+
+    expect($post->createdAt)->toEqual($clock->now());
+});
+```
 
 ### Encrypted Columns
 
@@ -1444,6 +1468,8 @@ Run db:migrate in development to generate a migration, then commit and deploy it
 | `--verbose`, `-v` | Show the SQL statements |
 
 `--generate` and `--no-generate` cannot be combined.
+
+Generated migration files are named `{YmdHis}_{operation}_{table}.php`, with the timestamp read from the injected `ClockInterface`. When one run generates several files, each one is a second later than the previous, so they apply in dependency order.
 
 ### Destructive Changes
 

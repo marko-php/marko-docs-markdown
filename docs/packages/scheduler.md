@@ -131,15 +131,16 @@ Programmatically check which tasks are due:
 
 ```php
 use Marko\Scheduler\Schedule;
-use DateTimeImmutable;
+use Psr\Clock\ClockInterface;
 
 public function __construct(
     private readonly Schedule $schedule,
+    private readonly ClockInterface $clock,
 ) {}
 
 public function pending(): array
 {
-    return $this->schedule->dueTasksAt(new DateTimeImmutable());
+    return $this->schedule->dueTasksAt($this->clock->now());
 }
 ```
 
@@ -148,20 +149,44 @@ public function pending(): array
 `ScheduleRunner` is the service both commands use. Call it directly to run the tasks due at a specific time:
 
 ```php
-use DateTimeImmutable;
 use Marko\Core\Command\Output;
 use Marko\Scheduler\ScheduleRunner;
+use Psr\Clock\ClockInterface;
 
 public function __construct(
     private readonly ScheduleRunner $scheduleRunner,
+    private readonly ClockInterface $clock,
 ) {}
 
 public function runNow(Output $output): bool
 {
-    $result = $this->scheduleRunner->run(new DateTimeImmutable(), $output);
+    $result = $this->scheduleRunner->run($this->clock->now(), $output);
 
     return !$result->hasFailures();
 }
+```
+
+### Time and Testing
+
+`schedule:run`, `schedule:work` and `FileTaskMutex` read the current time from the injected `Psr\Clock\ClockInterface` ([`marko/clock`](/docs/packages/clock/)): `schedule:run` runs the tasks due at the clock's time, `schedule:work` sleeps until the clock reaches the next minute, and the mutex writes and checks its expiry against the clock. To test a schedule at a given time, construct the command with a [`FakeClock`](/docs/packages/testing/#fakeclock):
+
+```php
+use Marko\Core\Command\Input;
+use Marko\Core\Command\Output;
+use Marko\Scheduler\Command\RunScheduleCommand;
+use Marko\Scheduler\Mutex\FileTaskMutex;
+use Marko\Scheduler\ScheduleRunner;
+use Marko\Testing\Fake\FakeClock;
+
+it('sends the report on the first of the month', function (): void {
+    $clock = new FakeClock('2026-11-01 08:00:00');
+    $runner = new ScheduleRunner($schedule, new FileTaskMutex(sys_get_temp_dir() . '/mutex', $clock));
+    $command = new RunScheduleCommand($runner, $clock);
+
+    $command->execute(new Input(['marko', 'schedule:run']), new Output(fopen('php://memory', 'r+')));
+
+    expect($reportSender->sent)->toBeTrue();
+});
 ```
 
 ## Customization

@@ -82,6 +82,31 @@ The `jobs.attempts` column is the authoritative attempt count. Every reservation
 
 `marko queue:retry` resets the attempt count, so a retried job gets its full `maxAttempts` again.
 
+### Time and Testing
+
+`DatabaseQueue` reads the current time from the injected `Psr\Clock\ClockInterface` ([`marko/clock`](/docs/packages/clock/)) for every time-dependent step: `created_at` and `available_at` on push, the `retry_after` reclaim cutoff and `reserved_at` on pop, the availability check in `size()`, the delay on `release()`, and `failedAt` for jobs that exhaust their attempts through crashed reservations. Times are written as `Y-m-d H:i:s` in the clock's timezone (PHP's default timezone for `SystemClock`; bind `new SystemClock('UTC')` to pin it).
+
+Because nothing reads the system time directly, delays and reservation expiry can be tested by moving a [`FakeClock`](/docs/packages/testing/#fakeclock) instead of sleeping:
+
+```php
+use Marko\Queue\Database\DatabaseQueue;
+use Marko\Testing\Fake\FakeClock;
+
+it('holds a delayed job until it is due', function (): void {
+    $clock = new FakeClock('2026-10-05 12:00:00');
+    $queue = new DatabaseQueue($connection, $envelope, $failedJobs, $queryBuilderFactory, $clock);
+    $queue->later(60, new SendReport());
+
+    $clock->travel('+59 seconds');
+    expect($queue->pop())->toBeNull();
+
+    $clock->travel('+1 second');
+    expect($queue->pop())->toBeInstanceOf(SendReport::class);
+});
+```
+
+A reservation becomes reclaimable once `retry_after` seconds have passed since `reserved_at`, inclusive of the boundary second.
+
 ### PostgreSQL and Payload Encoding
 
 Payloads use the base64 [envelope format](/docs/packages/queue/#payload-envelope-format). Jobs with private or protected properties therefore store safely in PostgreSQL `TEXT` columns, which reject the NUL bytes that `serialize()` emits. Rows written in the legacy raw format are still read correctly.
@@ -96,12 +121,13 @@ Implements `QueueInterface`. The constructor accepts:
 - a `JobEnvelope`
 - a `FailedJobRepositoryInterface`, used to fail jobs that exhaust their attempts through crashed reservations
 - a `QueryBuilderFactoryInterface`, used to build the locking reservation query. Its builders must use the same connection as the queue, so the lock is taken inside the queue's transaction. The driver bindings already do this.
+- a `Psr\Clock\ClockInterface`, the source of every timestamp the queue reads or writes
 - an optional table name (`jobs`)
 - an optional default queue name
 - an optional `retryAfter` timeout in seconds
 - an optional default `maxAttempts`
 
-The module factory sets the last three from `queue.queue`, `queue.retry_after` and `queue.max_attempts`.
+The module factory passes the container's bound clock and sets the last three from `queue.queue`, `queue.retry_after` and `queue.max_attempts`.
 
 `pop()` selects the next available job with `lockForUpdate()->skipLocked()` inside a transaction, then reserves it with an `UPDATE` guarded on `reserved_at`. A job locked by another worker is skipped rather than waited for, so multiple workers can run concurrently without claiming the same job. The connection must implement `TransactionInterface` (the MySQL and PostgreSQL drivers do). Otherwise `pop()` throws `LockException`, because the lock would be released as soon as the `SELECT` finished. Jobs whose `reserved_at` timestamp is older than `retry_after` seconds are treated as crashed and become eligible for re-reservation.
 
