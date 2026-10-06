@@ -140,9 +140,25 @@ Handles control which pages a component appears on:
 
 ### LayoutMiddleware
 
-Register `LayoutMiddleware` in your application middleware stack. When a controller has a `#[Layout]` attribute, it delegates rendering to `LayoutProcessor` automatically.
+`marko/layout` registers `LayoutMiddleware` as global middleware, so there is nothing to wire up. When a controller has a `#[Layout]` attribute, it delegates rendering to `LayoutProcessor` automatically.
 
-`LayoutMiddleware` is registered as global middleware, so it wraps every route-level middleware. It runs the route middleware and controller action first, and only replaces a **successful** result (a 2xx response without a `Location` header) with the rendered layout. Any other response passes through untouched — an auth redirect to `/login`, a 401/403 from `#[Can]`, a 419 CSRF mismatch, a 429 rate limit, or a 404 thrown by the controller reaches the client instead of the layout, so layout components never render for a denied request.
+`LayoutMiddleware` is marked [`#[RunsInnermost]`](/docs/packages/routing/#innermost-global-middleware): unlike other global middleware, it runs **after** every route middleware, directly around the controller action. That has two consequences:
+
+- **Denied requests never render a layout.** Route middleware such as authentication, `#[Can]` or a rate limiter answers before `LayoutMiddleware` runs. And `LayoutMiddleware` only replaces a **successful** controller result (a 2xx response without a `Location` header) with the rendered layout; any other result --- a 404 thrown by the controller, a redirect it returns --- passes through untouched.
+- **Headers and cookies survive.** Route middleware wraps the rendered layout response, so a `Set-Cookie`, a `Cache-Control` or any custom header it adds on the way out reaches the client. Headers and cookies the controller put on its own response are copied onto the layout response too. Where both set the same header or cookie, the layout's wins, and `Content-Type` and `Content-Length` always describe the rendered layout.
+
+```php title="app/web/src/Http/Middleware/NoStoreMiddleware.php"
+class NoStoreMiddleware implements MiddlewareInterface
+{
+    public function handle(Request $request, callable $next): Response
+    {
+        // $next() returns the rendered layout for a #[Layout] route.
+        return $next($request)->withHeader('Cache-Control', 'no-store');
+    }
+}
+```
+
+Global middleware (sessions, CSRF, security headers, page cache) still wraps everything, including the layout.
 
 ## Customization
 
