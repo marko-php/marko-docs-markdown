@@ -78,9 +78,29 @@ A request that carries credentials is never served from the cache and its respon
 
 A request that starts a session gets a `Set-Cookie` on its response, which is never stored (see below); a request that resumes one carries the session cookie and bypasses the cache. Together these keep one user's page --- their name, their orders, their CSRF token --- out of every other visitor's response. Add your own auth cookie names to `bypass_cookies` when you authenticate with a different cookie.
 
+### Query Parameters Are Ignored Unless Listed
+
+Only the query parameters a route lists in `#[Cacheable(query: [...])]` form part of its cache key. Every other parameter is ignored: `/blog?utm_source=mail` and `/blog?x=123` are served the same cached page as `/blog`. This stops arbitrary query strings from minting a new cache entry per request.
+
+List each parameter that changes the page:
+
+```php
+#[Get('/blog')]
+#[Cacheable(ttl: 600, tags: ['posts'], query: ['page', 'sort'])]
+public function index(): Response
+{
+    // /blog?page=2&sort=new and /blog?page=3 are cached separately;
+    // /blog?page=2&sort=new&ref=x shares the entry for /blog?page=2&sort=new.
+}
+```
+
+A route that reads a query parameter it does not list will serve one visitor's variant to everyone, so list every parameter the page depends on (or leave the action uncached). Each entry must be a non-empty parameter name; anything else throws a `PageCacheException` when routes are discovered.
+
+Allowlisted values are still client-controlled, so `page-cache.max_variants_per_path` (default `1000`) caps how many entries one URL path can hold, counting every query variant, host, scheme and method together. Once a path is at the cap, further variants are served uncached until existing entries are purged, cleared or expire. Set it to `0` for no limit.
+
 ### Cache Keys Include Scheme and Host
 
-Entries are keyed by method, scheme, host, path and the normalized query string, so `http://` and `https://` pages and pages for different hosts are cached separately. The scheme comes from the server's `HTTPS` / `REQUEST_SCHEME` variables; forwarded headers such as `X-Forwarded-Proto` are ignored. The host comes from the `Host` header (falling back to `SERVER_NAME`), lowercased, with the scheme's default port dropped.
+Entries are keyed by method, scheme, host, path and the normalized allowlisted query parameters, so `http://` and `https://` pages and pages for different hosts are cached separately. The scheme comes from the server's `HTTPS` / `REQUEST_SCHEME` variables; forwarded headers such as `X-Forwarded-Proto` are ignored. The host comes from the `Host` header (falling back to `SERVER_NAME`), lowercased, with the scheme's default port dropped.
 
 The `Host` header is sent by the client. List your real host names in `page-cache.trusted_hosts` (fnmatch patterns such as `example.com` or `*.example.com`, matched without the port) and requests for any other host bypass the cache entirely. With an empty list every host is cached under its own key.
 
@@ -172,6 +192,7 @@ return [
     'driver' => Env::string('PAGE_CACHE_DRIVER', 'file'),
     'path' => Env::string('PAGE_CACHE_PATH', 'storage/page-cache'),
     'default_ttl' => Env::int('PAGE_CACHE_TTL', 3600, min: 0),
+    'max_variants_per_path' => 1000,
     'cacheable_status_codes' => [200, 301],
     'cacheable_methods' => ['GET', 'HEAD'],
     'bypass_cookies' => ['marko_session', 'remember_*'],
@@ -185,6 +206,7 @@ return [
 | `driver` | `PAGE_CACHE_DRIVER` | `file` | Driver name |
 | `path` | `PAGE_CACHE_PATH` | `storage/page-cache` | Root storage directory |
 | `default_ttl` | `PAGE_CACHE_TTL` | `3600` | TTL in seconds used when `#[Cacheable]` has `ttl: 0`. `0` means pages never expire and are only removed by a purge or `page-cache:clear`. Negative values throw a `PageCacheException`. A `PAGE_CACHE_TTL` that is not a non-negative integer (`abc`, `1h`, `1.5`, `-1`) fails config load with a `ConfigException` rather than silently becoming `0`. |
+| `max_variants_per_path` | --- | `1000` | Maximum cached entries per URL path (all query variants, hosts, schemes and methods). Further variants of a path at the limit are served uncached. `0` disables the limit; negative values throw a `PageCacheException`. See [Query Parameters Are Ignored Unless Listed](#query-parameters-are-ignored-unless-listed). |
 | `cacheable_status_codes` | --- | `[200, 301]` | Response status codes eligible for caching |
 | `cacheable_methods` | --- | `['GET', 'HEAD']` | Request methods eligible for caching |
 | `bypass_cookies` | --- | `['marko_session', 'remember_*']` | Cookie names (fnmatch patterns) that make a request bypass the cache. `session.cookie.name` is added automatically when `marko/session` is installed. See [Logged-In Visitors Bypass the Cache](#logged-in-visitors-bypass-the-cache). |
@@ -229,12 +251,14 @@ use Marko\PageCache\CachePolicy;
 use Marko\Routing\Http\Request;
 use Marko\Routing\Http\Response;
 
-public function lookup(Request $request): ?Response;
+public function lookup(Request $request, array $queryParams): ?Response;
 public function store(Request $request, Response $response, CachePolicy $policy): Response;
 public function purgeUrl(string $url): bool;
 public function purgeTag(string $tag): bool;
 public function clear(): bool;
 ```
+
+`lookup()` receives the route's `#[Cacheable(query: [...])]` allowlist and `store()` receives it as `CachePolicy::$queryParams`; drivers build keys with `CacheKey::fromRequest($request, $queryParams)` so unlisted parameters never reach the key. Drivers that store entries themselves should enforce `page-cache.max_variants_per_path` in `store()` and return the response unchanged when a path is at the limit. Pass `purgeUrl()` the URL with only its allowlisted parameters.
 
 ### `#[Cacheable]` Attribute
 
@@ -248,11 +272,12 @@ readonly class Cacheable
         public int $ttl,
         public array $tags = [],
         public ?string $provider = null,
+        public array $query = [],
     ) {}
 }
 ```
 
-`ttl` is in seconds; `0` falls back to `page-cache.default_ttl` and a negative value throws `PageCacheException` (see [Cache Lifetime (TTL)](#cache-lifetime-ttl)). The optional `provider` parameter accepts a class name implementing `CacheTagProviderInterface`. When set, the provider is resolved via the DI container at request time and its returned tags are appended to the static `tags` array (deduplicated).
+`ttl` is in seconds; `0` falls back to `page-cache.default_ttl` and a negative value throws `PageCacheException` (see [Cache Lifetime (TTL)](#cache-lifetime-ttl)). The optional `provider` parameter accepts a class name implementing `CacheTagProviderInterface`. When set, the provider is resolved via the DI container at request time and its returned tags are appended to the static `tags` array (deduplicated). `query` lists the query parameter names that form part of the cache key; all other parameters are ignored (see [Query Parameters Are Ignored Unless Listed](#query-parameters-are-ignored-unless-listed)).
 
 ### CacheTagProviderInterface
 
@@ -283,7 +308,7 @@ use Marko\PageCache\CacheKey;
 use Marko\Routing\Http\Request;
 
 public function __construct(string $method, string $scheme, string $host, string $path, string $query);
-public static function fromRequest(Request $request): self;
+public static function fromRequest(Request $request, array $queryParams): self;
 public static function schemeFromRequest(Request $request): string;
 public static function hostnameFromRequest(Request $request): string;
 public static function normalizeHost(string $host, string $scheme): string;
@@ -291,7 +316,7 @@ public static function normalizeQuery(string $rawQuery): string;
 public function hash(): string;
 ```
 
-The hash covers method, scheme, host, path and query (see [Cache Keys Include Scheme and Host](#cache-keys-include-scheme-and-host)). Drivers that purge by URL build keys with `normalizeHost()` so a purge matches the stored host exactly.
+`fromRequest()` keeps only the query parameters named in `$queryParams`. The hash covers method, scheme, host, path and query (see [Cache Keys Include Scheme and Host](#cache-keys-include-scheme-and-host)). Drivers that purge by URL build keys with `normalizeHost()` so a purge matches the stored host exactly.
 
 `normalizeQuery()` is used by both store and purge operations. It parses the raw query string with `parse_str`, sorts keys, and re-encodes with RFC 3986 percent-encoding (`http_build_query(..., PHP_QUERY_RFC3986)`). This ensures that a URL stored with a space (`q=hello%20world`) and a URL purged with a `+` (`q=hello+world`) hash to the same cache key, so purge-by-URL never silently misses.
 
@@ -300,7 +325,7 @@ The hash covers method, scheme, host, path and query (see [Cache Keys Include Sc
 ```php
 use Marko\PageCache\CachePolicy;
 
-public function __construct(public int $ttl, public array $tags) {}
+public function __construct(public int $ttl, public array $tags, public array $queryParams = []) {}
 ```
 
 ### PageCacheConfig
@@ -315,10 +340,11 @@ public function cacheableStatusCodes(): array;
 public function cacheableMethods(): array;
 public function bypassCookies(): array;
 public function trustedHosts(): array;
+public function maxVariantsPerPath(): int;
 public function authMiddlewarePatterns(): array;
 ```
 
-`defaultTtl()` throws `PageCacheException` when `page-cache.default_ttl` is negative.
+`defaultTtl()` throws `PageCacheException` when `page-cache.default_ttl` is negative; `maxVariantsPerPath()` throws when `page-cache.max_variants_per_path` is negative.
 
 ### Exceptions
 
@@ -327,6 +353,8 @@ public function authMiddlewarePatterns(): array;
 | `PageCacheException` | Base exception for all page-cache errors |
 | `NoDriverException` | Thrown when no driver is bound to `PageCacheInterface` |
 | `PageCacheException::negativeTtl()` | Thrown when a `#[Cacheable]` attribute declares a negative `ttl` (at route discovery) |
+| `PageCacheException::invalidQueryParam()` | Thrown when a `#[Cacheable]` `query` entry is not a non-empty string (at route discovery) |
+| `PageCacheException::negativeMaxVariantsPerPath()` | Thrown when `page-cache.max_variants_per_path` is negative |
 | `PageCacheException::negativeDefaultTtl()` | Thrown when `page-cache.default_ttl` (`PAGE_CACHE_TTL`) is negative |
 | `PageCacheException::invalidTagProvider()` | Thrown when the class named in `provider` does not implement `CacheTagProviderInterface` |
 | `PageCacheException::cacheableRouteWithAuthMiddleware()` | Thrown at boot when a `#[Cacheable]` route uses middleware matching `page-cache.auth_middleware_patterns` |

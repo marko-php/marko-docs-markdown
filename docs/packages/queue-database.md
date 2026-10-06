@@ -161,7 +161,7 @@ If you set `database.timezone` to a zone other than UTC, use it as the target in
 
 ### PostgreSQL and Payload Encoding
 
-Payloads use the base64 [envelope format](/docs/packages/queue/#payload-envelope-format). Jobs with private or protected properties therefore store safely in PostgreSQL `TEXT` columns, which reject the NUL bytes that `serialize()` emits. Rows written in the legacy raw format are still read correctly.
+Payloads use the base64 [envelope format](/docs/packages/queue/#payload-envelope-format). Jobs with private or protected properties therefore store safely in PostgreSQL `TEXT` columns, which reject the NUL bytes that `serialize()` emits. Rows written by a release before HKDF signing subkeys no longer verify, so [drain the queue before upgrading](/docs/packages/queue/#upgrading-drain-the-queue-before-deploying).
 
 ## API Reference
 

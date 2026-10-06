@@ -25,6 +25,8 @@ use Marko\Config\Env;
 return [
     'key' => Env::string('ENCRYPTION_KEY', ''),
     'cipher' => Env::string('ENCRYPTION_CIPHER', 'aes-256-gcm'),
+    'previous_keys' => Env::list('ENCRYPTION_PREVIOUS_KEYS', []),
+    'aad_fallback' => Env::bool('ENCRYPTION_AAD_FALLBACK', true),
 ];
 ```
 
@@ -34,7 +36,7 @@ Generate a key:
 php -r "echo base64_encode(random_bytes(32)) . PHP_EOL;"
 ```
 
-The key must be a base64-encoded 32-byte value.
+The key must be base64-encoded and exactly as long as the cipher's key: 32 bytes for `aes-256-gcm`, 16 bytes for `aes-128-gcm`. A key of any other length throws `EncryptionException::invalidKeyLength()` at construction instead of being silently truncated. Each `previous_keys` entry is validated the same way. See [Rotating the Key](/docs/packages/encryption/#rotating-the-key) and [Binding Ciphertext with Associated Data](/docs/packages/encryption/#binding-ciphertext-with-associated-data).
 
 ## Usage
 
@@ -78,7 +80,7 @@ try {
 }
 ```
 
-An `EncryptionException` is thrown at construction time if the key is missing or invalid, if the configured cipher is not recognized by OpenSSL (`EncryptionException::invalidCipher()`), or if the cipher is recognized but is not an AEAD mode (`EncryptionException::nonAeadCipher()`). Only AEAD ciphers (those ending in `-gcm` or `-ccm`) are accepted; the default `aes-256-gcm` satisfies this requirement. An `EncryptionException` is also thrown during `encrypt()` if the OpenSSL operation fails. A `DecryptionException` is thrown for malformed payloads, corrupted data, or key mismatches. Before decrypting, the payload's IV must match the cipher's IV length (`DecryptionException::invalidIvLength()`) and its authentication tag must be the full 16 bytes (`DecryptionException::invalidTagLength()`). OpenSSL only verifies as many tag bytes as it is given, so a truncated tag would otherwise let an attacker forge ciphertext by brute-forcing a few tag bytes.
+An `EncryptionException` is thrown at construction time if the key or a previous key is missing, invalid, or the wrong length for the cipher, if the configured cipher is not recognized by OpenSSL (`EncryptionException::invalidCipher()`), or if the cipher is recognized but is not an AEAD mode (`EncryptionException::nonAeadCipher()`). Only AEAD ciphers (those ending in `-gcm` or `-ccm`) are accepted; the default `aes-256-gcm` satisfies this requirement. An `EncryptionException` is also thrown during `encrypt()` if the OpenSSL operation fails. A `DecryptionException` is thrown for malformed payloads, corrupted data, mismatched associated data, or when neither the current key nor any previous key decrypts the value. Before decrypting, the payload's IV must match the cipher's IV length (`DecryptionException::invalidIvLength()`) and its authentication tag must be the full 16 bytes (`DecryptionException::invalidTagLength()`). OpenSSL only verifies as many tag bytes as it is given, so a truncated tag would otherwise let an attacker forge ciphertext by brute-forcing a few tag bytes.
 
 ## Customization
 
@@ -93,8 +95,9 @@ class LoggingEncryptor extends OpenSslEncryptor
 {
     public function encrypt(
         string $value,
+        string $aad = '',
     ): string {
-        $result = parent::encrypt($value);
+        $result = parent::encrypt($value, $aad);
         // Log encryption event...
         return $result;
     }
@@ -109,8 +112,8 @@ Implements all methods from `EncryptorInterface`. See [`marko/encryption`](/docs
 
 | Method | Description |
 |---|---|
-| `encrypt(string $value): string` | Encrypt a value, returning a base64-encoded payload containing the IV, ciphertext, and GCM tag |
-| `decrypt(string $encrypted): string` | Decrypt a payload, verifying the authentication tag before returning the plaintext |
+| `encrypt(string $value, string $aad = ''): string` | Encrypt a value with the current key, authenticating `$aad`, and return a base64-encoded payload containing the IV, ciphertext, and GCM tag |
+| `decrypt(string $encrypted, string $aad = ''): string` | Decrypt a payload with the current key, then each previous key, verifying the authentication tag and `$aad` before returning the plaintext; retries with empty `$aad` while `aad_fallback` is on |
 
 ### Payload Format
 
@@ -119,3 +122,5 @@ The encrypted output is a base64-encoded JSON object containing three fields:
 - `iv` --- Base64-encoded initialization vector (random per encryption)
 - `value` --- Base64-encoded ciphertext
 - `tag` --- Base64-encoded GCM authentication tag (always 16 bytes; shorter tags are rejected)
+
+The associated data is not stored in the payload; the caller supplies it again on decryption.

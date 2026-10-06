@@ -49,7 +49,7 @@ Publish the default configuration to `config/media.php`:
 declare(strict_types=1);
 
 return [
-    'disk'              => 'local',
+    'disk'              => 'public',   // a disk name from config/filesystem.php
     'max_file_size'     => 10485760,   // 10 MB in bytes
     'allowed_mime_types' => [
         'image/jpeg',
@@ -70,9 +70,10 @@ return [
         'image/gif'  => ['gif'],
         'image/webp' => ['webp'],
     ],
-    'url_prefix'        => '/storage',
 ];
 ```
+
+`disk` names a disk from [`config/filesystem.php`](/docs/packages/filesystem/). Uploads are written to that disk, its name is recorded on `Media::$disk`, and public URLs are built from that disk's `url`. The default `public` disk stores files in `storage/public` and serves them at `/storage` (run `marko storage:link` to expose it). Point `disk` at a private disk such as `local` only if you serve media through your own controller via `MediaManagerInterface::retrieve()` --- `UrlGenerator` refuses to build a URL for a private disk.
 
 The `MediaConfig` class provides typed access to these values:
 
@@ -92,7 +93,6 @@ class MyService
         $mimeTypes = $this->mediaConfig->allowedMimeTypes();
         $extensions = $this->mediaConfig->allowedExtensions();
         $mimeExtensionMap = $this->mediaConfig->mimeExtensionMap(); // e.g. ['image/jpeg' => ['jpg', 'jpeg']]
-        $prefix = $this->mediaConfig->urlPrefix();
     }
 }
 ```
@@ -134,7 +134,9 @@ class PostController
 }
 ```
 
-`upload()` derives the MIME type from the file's actual binary content using `finfo` (not the client-supplied value), then validates it against `allowed_mime_types`. It also cross-checks the file extension against `mime_extension_map` to ensure the extension matches the detected MIME type. Finally it checks `allowed_extensions`, writes the file to the configured disk under a `YYYY/MM/<unique>.<ext>` path, and returns a persisted `Media` entity. All three checks throw `UploadException` on failure.
+Before touching the file, `upload()` verifies that `tmpPath` really came from PHP's upload handling: under a web SAPI it must pass `is_uploaded_file()`, otherwise `UploadException` is thrown. Always build `UploadedFile` from `$_FILES[...]['tmp_name']` (or the routing request's uploaded file) --- never from request input --- so a crafted request cannot make `upload()` import an arbitrary readable file from the server. Under the command-line SAPIs (`cli`, `phpdbg`, `embed`) there is no HTTP upload to verify, so any path is accepted; this is how CLI import commands bring in local files, and the command author is responsible for the paths it passes. The check is made by `UploadedFileCheckerInterface` (default `UploadedFileChecker`), which you can replace with a [Preference](/docs/packages/core/) if your runtime delivers uploads differently.
+
+`upload()` then derives the MIME type from the file's actual binary content using `finfo` (not the client-supplied value), then validates it against `allowed_mime_types`. It also cross-checks the file extension against `mime_extension_map` to ensure the extension matches the detected MIME type. Finally it checks `allowed_extensions`, writes the file to the configured `disk` (resolved through `FilesystemManager::disk()`) under a `YYYY/MM/<unique>.<ext>` path, and returns a persisted `Media` entity. All of these checks throw `UploadException` on failure. `retrieve()`, `exists()`, and `delete()` use the disk recorded on the entity, so media stored before a `disk` change is still found.
 
 The `YYYY/MM` prefix comes from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/), so a test that constructs `MediaManager` with a [`FakeClock`](/docs/packages/testing/#fakeclock) knows exactly where the file lands.
 
@@ -160,7 +162,7 @@ class PostController
 }
 ```
 
-The URL is `url_prefix` + `/` + `media->path`. Change `url_prefix` in config to match your web server's static file root.
+The URL is the `url` of the disk recorded on `Media::$disk` (from `config/filesystem.php`) + `/` + `media->path`, so it always points where the file was stored. `UrlGenerator` throws `UrlGenerationException` if that disk is not `'public' => true` or has no `url`. To serve media from a CDN, set the disk's `url` (e.g. `'url' => 'https://cdn.example.com'`).
 
 ### Attaching Media to an Entity
 
@@ -275,24 +277,26 @@ class ThumbnailService
 
 ### Custom Storage Backend
 
-Switch to a different [filesystem](/docs/packages/filesystem/) disk (S3, SFTP, etc.) by changing `disk` in `config/media.php` and wiring the corresponding `FilesystemInterface` implementation:
+Switch to a different [filesystem](/docs/packages/filesystem/) disk (S3, SFTP, etc.) by defining the disk in `config/filesystem.php` (with its driver package installed) and pointing `disk` in `config/media.php` at it. Give the disk `'public' => true` and a `url` so `UrlGenerator` can build links to it:
+
+```php title="config/filesystem.php"
+return [
+    'disks' => [
+        's3' => [
+            'driver' => 's3',
+            'public' => true,
+            'url'    => 'https://my-bucket.s3.amazonaws.com',
+            // driver-specific keys...
+        ],
+    ],
+];
+```
 
 ```php title="config/media.php"
 return [
     'disk' => 's3',
     // ...
 ];
-```
-
-```php
-use Marko\Core\Attributes\Preference;
-use Marko\Filesystem\Contracts\FilesystemInterface;
-
-#[Preference(replaces: FilesystemInterface::class)]
-class S3Filesystem implements FilesystemInterface
-{
-    // Route reads/writes through AWS S3
-}
 ```
 
 ### Custom URL Generation
@@ -400,7 +404,8 @@ public function exists(Media $media): bool;
 use Marko\Media\Contracts\UrlGeneratorInterface;
 use Marko\Media\Entity\Media;
 
-// Returns url_prefix/path for the given Media entity.
+// Returns <disk url>/path for the given Media entity, using the disk recorded on Media::$disk.
+// Throws UrlGenerationException when that disk is not public or has no url.
 public function url(Media $media): string;
 ```
 
@@ -465,6 +470,22 @@ public function crop(string $imagePath, int $x, int $y, int $width, int $height)
 public function convert(string $imagePath, string $format): string;
 ```
 
+### ImageFormatSniffer
+
+Detects a raster image's format from its magic bytes without decoding it. Image processor drivers call it before handing a file to a decoder, so the format allowlist is enforced on what the file actually is rather than on what the decoder decides after parsing it. Custom `ImageProcessorInterface` implementations should do the same.
+
+```php
+use Marko\Media\Image\ImageFormatSniffer;
+
+// Returns JPEG, PNG, GIF, WEBP, AVIF, HEIC, TIFF or BMP (ImageMagick coder names).
+// Throws ImageFormatException for anything else --- SVG, MVG, MSL, PostScript, PDF, etc.
+public function sniff(string $path): string;
+
+// Rejects empty paths, NUL bytes, ImageMagick coder prefixes ("msl:", "url:", "PNG:")
+// and PHP stream wrappers ("phar://", "http://", "data:").
+public function assertSafePath(string $path): void;
+```
+
 ### MediaConfig
 
 ```php
@@ -475,7 +496,15 @@ public function maxFileSize(): int;
 public function allowedMimeTypes(): array;
 public function allowedExtensions(): array;
 public function mimeExtensionMap(): array; // Returns array<string, array<string>> (MIME type → allowed extensions)
-public function urlPrefix(): string;
+```
+
+### UploadedFileCheckerInterface
+
+```php
+use Marko\Media\Contracts\UploadedFileCheckerInterface;
+
+// True when tmpPath passes is_uploaded_file() under a web SAPI, or always under cli/phpdbg/embed.
+public function isTrusted(string $tmpPath): bool;
 ```
 
 ### Media Entity
@@ -503,8 +532,10 @@ class Media extends Entity
 | Exception | Description |
 |-----------|-------------|
 | `MediaException` | Base exception for all media errors |
-| `UploadException` | Thrown by `MediaManager::upload()` for validation failures --- file too large, MIME type not in `allowed_mime_types`, extension/MIME mismatch against `mime_extension_map`, invalid extension, or `finfo` unavailable |
+| `UploadException` | Thrown by `MediaManager::upload()` for validation failures --- `tmpPath` not received through PHP upload handling (web SAPI), file too large, MIME type not in `allowed_mime_types`, extension/MIME mismatch against `mime_extension_map`, invalid extension, or `finfo` unavailable |
+| `UrlGenerationException` | Thrown by `UrlGenerator::url()` when the media's disk is not public or has no `url` configured |
 | `FileNotFoundException` | Thrown when a stored file cannot be located on disk |
+| `ImageFormatException` | Thrown by `ImageFormatSniffer` for unsafe paths (coder prefixes, stream wrappers), unreadable files, and content that is not a recognised raster image |
 
 ## Available Image Processing Drivers
 

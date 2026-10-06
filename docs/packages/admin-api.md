@@ -64,7 +64,7 @@ Response:
 }
 ```
 
-Sections are filtered based on the authenticated user's permissions --- only sections with at least one accessible menu item are returned. Permission checks honor wildcard permissions (e.g. a user holding `catalog.*` can access any menu item whose permission starts with `catalog.`).
+Sections are filtered based on the authenticated user's permissions --- only sections with at least one accessible menu item are returned. Permission checks honor wildcard permissions (e.g. a user holding `catalog.*` can access any menu item whose permission starts with `catalog.`). A user that is not an admin user sees no sections, even if the controller is reached without `AdminAuthMiddleware`.
 
 ### Section Detail
 

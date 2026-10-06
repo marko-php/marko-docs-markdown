@@ -46,6 +46,7 @@ return [
     'password' => Env::nullableString('REDIS_PASSWORD'),
     'database' => Env::int('REDIS_CACHE_DATABASE', 0, min: 0),
     'prefix' => Env::string('CACHE_PREFIX', 'marko:cache:'),
+    'scheme' => Env::string('REDIS_SCHEME', 'tcp'),
 ];
 ```
 
@@ -56,8 +57,11 @@ return [
 | `password` | `REDIS_PASSWORD` | `null` | Password for `AUTH`; `null` or empty means no authentication |
 | `database` | `REDIS_CACHE_DATABASE` | `0` | Redis database index (0 or higher) |
 | `prefix` | `CACHE_PREFIX` | `marko:cache:` | Prefix added to every cache key |
+| `scheme` | `REDIS_SCHEME` | `tcp` | `tcp` for plain text, or `tls` to encrypt the connection and verify the server certificate against `host`. Any other value throws `RedisConnectionException` |
 
 The connection opens on first use. If Redis refuses it, a `RedisConnectionException` names the host and port and points back to this config file.
+
+Use `tls` for any Redis reached over a network you do not control (managed Redis services usually require it). With `tcp`, the `AUTH` password and every cached value cross the network in plain text. With `tls`, the server certificate must be valid for `host` and signed by a CA in the system trust store.
 
 ## Usage
 
@@ -121,7 +125,8 @@ Implements all methods from `CacheInterface`. See [`marko/cache`](/docs/packages
 
 | Method | Description |
 |---|---|
-| `__construct(string $host, int $port, ?string $password, int $database, string $prefix)` | Create a connection with host (`127.0.0.1`), port (`6379`), optional password, database index (`0`), and key prefix (`marko:cache:`) |
+| `__construct(string $host, int $port, ?string $password, int $database, string $prefix, string $scheme)` | Create a connection with host (`127.0.0.1`), port (`6379`), optional password, database index (`0`), key prefix (`marko:cache:`) and scheme (`tcp` or `tls`, default `tcp`). Throws `RedisConnectionException` for an unknown scheme |
+| `connectionParameters(): array` | The Predis connection parameters; with `tls` they include `ssl` context options that verify the peer certificate and host name |
 | `client(): ClientInterface` | Get the Predis client instance --- connected on first call; throws `RedisConnectionException` if the connection is refused |
 | `disconnect(): void` | Disconnect and release the client instance |
 | `isConnected(): bool` | Check whether a client instance is currently active |
@@ -129,8 +134,9 @@ Implements all methods from `CacheInterface`. See [`marko/cache`](/docs/packages
 ### Storage Details
 
 - Values are serialized with PHP's `serialize()`, wrapped in an HMAC-SHA256 envelope, and stored as Redis strings. Reads verify the HMAC before deserializing; tampered or corrupted entries throw `TamperedCacheValueException`.
+- The HMAC covers the prefixed Redis key as well as the value, so someone with write access to Redis can't move a validly signed value from one key to another: the moved value throws `TamperedCacheValueException`. Values signed by a release before key binding and [HKDF subkeys](/docs/packages/cache/#cachevaluesigner) throw too, so run `marko cache:clear` when you deploy that upgrade.
 - A `null` TTL falls back to `default_ttl` from config. A TTL greater than `0` uses Redis `SETEX` for native expiration. A TTL of `0` or less means the entry never expires.
 - `increment()` runs `INCR` and `EXPIRE` together in one Lua script (`EVAL`), so a crash can never leave a counter without an expiry. The TTL is set when the key is created (count reaches `1`), and is restored if the key somehow has none. Subsequent increments do not reset it, so the window stays fixed.
 - Counters are plain integers, not signed envelopes, because Redis writes them itself. `get()`, `getItem()` and `getMultiple()` return them as `int`, which is what [`marko/ratelimiter`](/docs/packages/ratelimiter/) relies on. Only values that are entirely an optional `-` followed by digits are read this way. They are never passed to `unserialize()`, and every other value must still carry a valid HMAC.
-- `clear()` removes only keys matching the configured prefix --- other Redis data is not affected.
+- `clear()` removes only keys matching the configured prefix --- other Redis data is not affected. It walks the keyspace with `SCAN` in batches rather than `KEYS`, so clearing a large database does not block Redis. Glob characters in the prefix are escaped, so the prefix always matches literally.
 - `getItem()` reports `expiresAt()` as the current time from the PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)) plus the key's remaining Redis TTL. Redis enforces the expiry itself, so moving a [`FakeClock`](/docs/packages/testing/#fakeclock) changes the reported time but never expires a key. Use [`marko/cache-array`](/docs/packages/cache-array/) to test expiry with a fake clock.

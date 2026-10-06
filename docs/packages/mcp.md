@@ -25,6 +25,8 @@ Register it with your agent, e.g. for Claude Code:
 claude mcp add marko-mcp -- marko mcp:serve
 ```
 
+`mcp:serve` refuses to start when the app environment is production, and an unset `APP_ENV`/`MARKO_ENV` counts as production. Set `APP_ENV=local` (or `development`) on development machines. To serve a production environment on purpose, set `MCP_ALLOW_PRODUCTION=true`.
+
 ## Tools
 
 Always available (13 total):
@@ -46,8 +48,8 @@ Runtime tools (3):
 | Tool | Notes |
 |------|-------|
 | `app_info` | Application name and installed package versions |
-| `read_log_entries` | Reads recent log entries; filter by `level` (use `level: error, limit: 1` for the most recent error) |
-| `run_console_command` | Runs a `marko` CLI command and captures output |
+| `read_log_entries` | Returns the last `count` lines (default 50, clamped to 1–500) of the most recent log in `storage/logs`. The file is read backwards from the end, so a large log is never loaded into memory |
+| `run_console_command` | Runs an allowlisted `marko` CLI command and captures output (see below) |
 
 Conditional tools (registered only when their dependency is present):
 
@@ -56,7 +58,26 @@ Conditional tools (registered only when their dependency is present):
 | `query_database` | a `marko/database` driver | Read-only unless the server config enables writes (see below); registered only when a DB connection is available |
 | `search_docs` | a docs driver (`marko/docs-fts`) | Registered only when a `DocsSearchInterface` is bound |
 
-> There is intentionally **no `last_error` tool** and no global error-capture plugin. "Most recent error" is `read_log_entries(level: 'error', limit: 1)` — one tool, no production-time side effects.
+> There is intentionally **no `last_error` tool** and no global error-capture plugin. Read the most recent errors with `read_log_entries`, with no production-time side effects.
+
+## `run_console_command` Safety
+
+An agent can be steered by content it reads, and it controls the command name and every argument, including `--force`. So the server operator, not the agent, decides what `run_console_command` may run:
+
+1. **Allowlist.** Only commands named in `mcp.console.allowed_commands` run (an alias of an allowed command also runs). Every other command is refused before it is dispatched. The default list is read-only: `list`, `module:list`, `route:list`, `db:status`, `db:diff`, `cache:status`, `page-cache:status`, `queue:status` and `queue:failed`.
+2. **Destructive commands.** A command whose `#[Command]` attribute declares a `force` flag (`db:reset`, `db:rollback`, `db:rebuild`, `db:seed`, `auth:clear-tokens`, ...) is refused even when it is allowlisted, unless `mcp.console.allow_destructive` is `true` (`MCP_ALLOW_DESTRUCTIVE=true`). Passing `--force` cannot enable it.
+
+To allow more commands, override the list in your app's `config/mcp.php`:
+
+```php title="config/mcp.php"
+return [
+    'console' => [
+        'allowed_commands' => ['list', 'module:list', 'route:list', 'db:status', 'cache:clear'],
+    ],
+];
+```
+
+Commands that change state without declaring a `force` flag, such as `cache:clear` or `queue:clear`, are guarded only by the allowlist, so add them deliberately.
 
 ## `query_database` Safety
 
@@ -97,6 +118,9 @@ For the strongest guarantee, also point the MCP server at a database user that o
 
 | Key | Env | Default | Purpose |
 |-----|-----|---------|---------|
+| `mcp.allow_production` | `MCP_ALLOW_PRODUCTION` | `false` | Let `mcp:serve` start when the app environment is production |
+| `mcp.console.allowed_commands` | — | read-only commands (see above) | Commands `run_console_command` may run, by name or alias |
+| `mcp.console.allow_destructive` | `MCP_ALLOW_DESTRUCTIVE` | `false` | Let `run_console_command` run allowlisted commands that declare a `force` flag |
 | `mcp.database.allow_writes` | `MCP_ALLOW_WRITES` | `false` | Let `query_database` run writes when the agent passes `allowWrite` and `confirm` |
 
 ## Related Packages

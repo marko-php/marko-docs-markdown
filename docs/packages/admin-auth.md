@@ -3,7 +3,7 @@ title: marko/admin-auth
 description: Admin authentication and role-based authorization --- manages admin users, roles, permissions, and access control for the admin panel.
 ---
 
-Admin authentication and role-based authorization --- manages admin users, roles, permissions, and access control for the admin panel. The package provides an `AdminUserProvider` that integrates with the [authentication](/docs/packages/authentication/) system, a `PermissionRegistry` for declaring and matching permissions (including wildcards), role and permission entities with repository interfaces, and `AdminAuthMiddleware` that enforces `#[RequiresPermission]` checks on controller methods. Super admin roles bypass all permission checks.
+Admin authentication and role-based authorization --- manages admin users, roles, permissions, and access control for the admin panel. The package provides an `AdminUserProvider` that integrates with the [authentication](/docs/packages/authentication/) system, a `PermissionRegistry` for declaring and matching permissions (including wildcards), role and permission entities with repository interfaces, and `AdminAuthMiddleware` that enforces `#[RequiresPermission]` checks on controller classes and methods. Super admin roles bypass all permission checks.
 
 ## Installation
 
@@ -24,10 +24,14 @@ The package ships no migration files. Its tables come from its entities, which `
 | `roles` | `Role` | Roles and the `is_super_admin` flag (unique `slug`) |
 | `permissions` | `Permission` | Permission keys, labels and groups (unique `key`, index on `group`) |
 | `role_permissions` | `RolePermission` | Role to permission assignments (unique `role_id`, `permission_id`; index on `permission_id`) |
-| `admin_users` | `AdminUser` | Admin users (unique `email`) |
+| `admin_users` | `AdminUser` | Admin users (unique `email`), with the remember-me token hash and its `remember_token_expires_at` |
 | `admin_user_roles` | `AdminUserRole` | User to role assignments (unique `user_id`, `role_id`; index on `role_id`) |
 
 Both pivots cascade: deleting a role, permission or admin user deletes its assignment rows.
+
+:::note
+`admin_users.remember_token_expires_at` holds when an admin's remember-me token stops being accepted; the expiry is enforced server-side rather than trusted from the cookie. Run `marko db:migrate` after upgrading to add the column. Remember tokens issued before the column existed have no expiry and are rejected, so admins who were remembered sign in again once.
+:::
 
 :::note
 Earlier versions shipped hand-written MySQL migrations in `database/migrations/` that `db:migrate` never ran, so `admin_user_roles` was never created and the first admin login failed. If you created the tables from that SQL by hand, the entities differ from them: `role_permissions` and `admin_user_roles` have an auto-increment `id` primary key, `roles.is_super_admin` and `admin_users.is_active` are string columns (`'1'`/`'0'`) instead of `TINYINT(1)`, and the ids and timestamps use the entity column types. `marko db:migrate` generates and applies all of these changes. It adds each `id` column together with its primary key in one statement and numbers the existing rows, so the step earlier versions of this note asked for (adding the two `id` columns by hand first) is no longer needed. See [Primary Keys on Existing Tables](/docs/packages/database/#primary-keys-on-existing-tables). Review the generated migrations before you commit them.
@@ -135,7 +139,7 @@ The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/doc
 
 ### Requiring Permissions
 
-Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method via reflection and throws a `403` `HttpException` when the authenticated user lacks the required permission, or is not an admin user at all. Super admin roles bypass this check.
+Use `#[RequiresPermission]` to enforce specific permissions on a route. `AdminAuthMiddleware` reads the attribute from the matched controller method, or from the controller class when the method has none, and throws a `403` `HttpException` when the authenticated user lacks the required permission, or is not an admin user at all. Super admin roles bypass this check.
 
 `ExceptionRenderer` renders the `403` as JSON for requests that ask for it and as the application's HTML error page otherwise:
 
@@ -159,6 +163,33 @@ class ProductController
     public function index(): Response
     {
         // Only admin users with 'catalog.products.view' permission
+    }
+}
+```
+
+Put `#[RequiresPermission]` on the controller class to protect every action at once. A method-level attribute replaces the class-level one for that action, it does not add to it:
+
+```php title="SettingsController.php"
+use Marko\AdminAuth\Attributes\RequiresPermission;
+use Marko\AdminAuth\Middleware\AdminAuthMiddleware;
+use Marko\Routing\Attributes\Get;
+use Marko\Routing\Attributes\Middleware;
+
+#[Middleware(AdminAuthMiddleware::class)]
+#[RequiresPermission(permission: 'settings.manage')]
+class SettingsController
+{
+    #[Get('/admin/settings')]
+    public function index(): Response
+    {
+        // Requires 'settings.manage'
+    }
+
+    #[Get('/admin/settings/summary')]
+    #[RequiresPermission(permission: 'settings.view')]
+    public function summary(): Response
+    {
+        // Requires only 'settings.view'
     }
 }
 ```
@@ -468,6 +499,8 @@ public function discoverFromClass(string $className): void;
 ```php
 #[RequiresPermission(permission: 'section.action')]
 ```
+
+Targets classes and methods. A method-level attribute replaces a class-level one.
 
 ### AdminAuthMiddleware
 
