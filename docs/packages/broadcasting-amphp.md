@@ -226,7 +226,7 @@ public function broadcast(string|Channel $channel, string $event, array $data, ?
 public function dispatch(BroadcastableInterface $broadcastable): void;
 ```
 
-Bound to `BroadcasterInterface`. The constants `PRIVATE_PREFIX`, `CHANNEL_NAME_PATTERN` and `PGSQL_PAYLOAD_LIMIT` describe the wire format. Override the protected `generateId()` through a Preference to change id generation.
+Bound to `BroadcasterInterface`. The constants `PRIVATE_PREFIX`, `CHANNEL_NAME_PATTERN`, `CHANNEL_NAME_ALLOWED` and `PGSQL_PAYLOAD_LIMIT` describe the wire format. Override the protected `generateId()` through a Preference to change id generation.
 
 ### AmphpSubscriberToken
 
@@ -235,7 +235,7 @@ public function for(array $channels, ?AuthenticatableInterface $user): string;
 public function streamUrl(array $channels, ?AuthenticatableInterface $user): string;
 ```
 
-`for()` signs a token listing the authorized private channels. `streamUrl()` builds the `EventSource` URL and adds a token when any private channel is requested.
+`for()` signs a token listing the authorized private channels. Both methods check every channel name against `AmphpBroadcaster::CHANNEL_NAME_PATTERN` before authorizing it and throw `BroadcastException::invalidChannelName()` for anything else, including a name with a comma (the stream's channel separator). `streamUrl()` builds the `EventSource` URL and adds a token when any private channel is requested.
 
 ### AmphpSignature
 
@@ -244,7 +244,7 @@ public function sign(int|string|null $userId, array $channels, int $expiresAt): 
 public function verify(string $token): ?AmphpTokenClaims;
 ```
 
-Tokens are `base64url(JSON {u, c, e}) . "." . base64url(HMAC-SHA256(app_key, "u|c1,c2|e"))`. `verify()` returns `null` for forged, expired or malformed tokens.
+Tokens are JWT-style: `payload . "." . base64url(HMAC-SHA256(app_key, payload))`, where `payload = base64url(JSON {u, c, e})`. The MAC covers the exact encoded payload bytes and `verify()` checks it before decoding anything, so no edit to the claims keeps a valid signature. `verify()` returns `null` for forged, expired or malformed tokens.
 
 ### Time
 

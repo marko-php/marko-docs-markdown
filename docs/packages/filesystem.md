@@ -242,5 +242,5 @@ public function getDisk(string $name): array;
 |-----------|-------------|
 | `FilesystemException` | Base exception for all filesystem errors --- includes `getContext()` and `getSuggestion()` methods |
 | `FileNotFoundException` | Thrown when a requested file does not exist |
-| `PathException` | Thrown for path traversal attempts or invalid paths |
+| `PathException` | Thrown for path traversal attempts, invalid paths, paths that escape the disk root via symlinks, or attempts to delete the disk root |
 | `PermissionException` | Thrown when read, write, or delete permissions are insufficient |

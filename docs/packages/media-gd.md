@@ -21,18 +21,7 @@ This automatically installs [marko/media](/docs/packages/media/).
 
 ### Binding the Processor
 
-Register `GdImageProcessor` as the `ImageProcessorInterface` implementation in your `module.php`:
-
-```php title="module.php"
-use Marko\Media\Contracts\ImageProcessorInterface;
-use Marko\MediaGd\Driver\GdImageProcessor;
-
-return [
-    'bindings' => [
-        ImageProcessorInterface::class => GdImageProcessor::class,
-    ],
-];
-```
+Installing the package binds `GdImageProcessor` as the `ImageProcessorInterface` implementation, built with the [dimension limits](#dimension-limits) from `media-gd` config. Inject `ImageProcessorInterface` wherever you need it.
 
 ### Resize with Aspect Ratio
 
@@ -108,6 +97,28 @@ $outputPath = $this->imageProcessor->thumbnail(
 );
 ```
 
+## Dimension Limits
+
+GD decodes every image into an uncompressed bitmap of roughly 5 bytes per pixel, so a tiny file whose header declares a huge canvas (a "decompression bomb") can exhaust `memory_limit` and kill the worker with an uncatchable fatal error. To prevent that, `GdImageProcessor` reads the declared size with `getimagesize()` **before** decoding, and throws `GdProcessingException` if the image is wider or taller than `max_dimension`, or if width × height exceeds `max_pixels`.
+
+The same limits apply to requested output sizes: `resize()`, `crop()`, and `thumbnail()` reject a target width or height below 1 or above the limits, and `crop()` rejects negative offsets --- all with `GdProcessingException`, never a raw `ValueError` or fatal error.
+
+Defaults ship in the package's `config/media-gd.php`; override them in your app's `config/media-gd.php`:
+
+```php title="config/media-gd.php"
+return [
+    'max_pixels' => 50_000_000, // 50 MP total (~250 MB decoded)
+    'max_dimension' => 16384,   // max width or height in pixels
+];
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `max_pixels` | `50000000` | Largest width × height GD will decode or create |
+| `max_dimension` | `16384` | Largest width or height, in pixels, GD will decode or create |
+
+Raise `memory_limit` alongside these if you need to process larger images. Both values must be positive integers; anything else throws `GdProcessingException` when the processor is built.
+
 ## Requirements
 
 - PHP 8.5+
@@ -134,4 +145,4 @@ All methods return the file path to the processed image (written to the system t
 
 | Exception | Thrown When |
 |---|---|
-| `GdProcessingException` | The GD extension is unavailable, the source image cannot be loaded, an unsupported format is requested, or the encode step fails (e.g. write error) |
+| `GdProcessingException` | The GD extension is unavailable, the source image cannot be loaded or exceeds the dimension limits, a target size or crop offset is invalid, an unsupported format is requested, or the encode step fails (e.g. write error) |

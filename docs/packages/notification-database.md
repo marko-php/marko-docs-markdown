@@ -47,12 +47,18 @@ class NotificationController
 Mark individual notifications or all at once:
 
 ```php
-// Mark one notification as read
-$this->notificationRepository->markAsRead($notificationId);
+// Mark one of the user's notifications as read
+if (!$this->notificationRepository->markAsReadFor($user, $notificationId)) {
+    // Not found, or it belongs to someone else: respond 404
+}
 
 // Mark all notifications as read for a user
 $this->notificationRepository->markAllAsRead($user);
 ```
+
+`markAsReadFor()` only touches a notification whose `notifiable_type` and `notifiable_id` match the given notifiable, and returns `false` when there is no such notification. Use it whenever the ID comes from a request (`POST /notifications/{id}/read`): otherwise anyone who learns another user's notification ID could mark it as read. A notification that is already read keeps its original `read_at` and still returns `true`.
+
+`markAsRead(string $notificationId)` marks a notification by ID alone, whoever owns it. Keep it for admin and internal code that has already decided the caller may act on that notification.
 
 `read_at` is read from the injected PSR-20 [`ClockInterface`](/docs/packages/clock/) and written in the [database timezone](/docs/packages/database/#datetimes-and-timezones) (`database.timezone`, UTC by default), the same zone `DatabaseChannel` writes `created_at` in. In tests, construct `DatabaseNotificationRepository` with a [`FakeClock`](/docs/packages/testing/#fakeclock) and `DatabaseTimezoneConfig::fromName('UTC')` to get a known timestamp.
 
@@ -70,12 +76,16 @@ foreach ($unread as $notification) {
 ### Deleting Notifications
 
 ```php
-// Delete a single notification
-$this->notificationRepository->delete($notificationId);
+// Delete one of the user's notifications
+if (!$this->notificationRepository->deleteFor($user, $notificationId)) {
+    // Not found, or it belongs to someone else: respond 404
+}
 
 // Delete all notifications for a user
 $this->notificationRepository->deleteAll($user);
 ```
+
+As with marking as read, `deleteFor()` is the default for request-driven code: it deletes only a notification the notifiable owns and returns `false` otherwise. `delete(string $notificationId)` deletes by ID alone and is for admin and internal use.
 
 ## Customization
 
@@ -110,9 +120,11 @@ class CustomNotificationRepository extends DatabaseNotificationRepository
 |---|---|
 | `forNotifiable(NotifiableInterface $notifiable): array` | Get all notifications for a notifiable, most recent first. Returns `array<DatabaseNotification>`. |
 | `unread(NotifiableInterface $notifiable): array` | Get all unread notifications for a notifiable, most recent first. Returns `array<DatabaseNotification>`. |
-| `markAsRead(string $notificationId): void` | Mark a single notification as read. |
+| `markAsReadFor(NotifiableInterface $notifiable, string $notificationId): bool` | Mark a single notification as read only if it belongs to the notifiable. Returns `false` when it does not exist or belongs to someone else. The default for request-driven code. |
+| `markAsRead(string $notificationId): void` | Mark a single notification as read by ID alone, whoever owns it. Admin and internal use only. |
 | `markAllAsRead(NotifiableInterface $notifiable): void` | Mark all notifications as read for a notifiable. |
-| `delete(string $notificationId): void` | Delete a single notification by ID. |
+| `deleteFor(NotifiableInterface $notifiable, string $notificationId): bool` | Delete a single notification only if it belongs to the notifiable. Returns `false` when nothing was deleted. The default for request-driven code. |
+| `delete(string $notificationId): void` | Delete a single notification by ID alone, whoever owns it. Admin and internal use only. |
 | `deleteAll(NotifiableInterface $notifiable): void` | Delete all notifications for a notifiable. |
 | `unreadCount(NotifiableInterface $notifiable): int` | Count unread notifications for a notifiable. |
 
