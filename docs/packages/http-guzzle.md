@@ -107,10 +107,23 @@ Portable options map to Guzzle as follows:
 | `allow_redirects` `true`/`false` | Guzzle `allow_redirects` |
 | `allow_redirects` `int` | Guzzle `allow_redirects` with `['max' => $int]` |
 | `http_errors` | Guzzle `http_errors` (default `true`) |
+| `resolve_to` | Guzzle `curl` options `CURLOPT_RESOLVE` (`host:port:address`) and `CURLOPT_FRESH_CONNECT` |
+
+### Pinning to an IP
+
+`resolve_to` (see [Pinning the Connection to an IP](/docs/packages/http/#pinning-the-connection-to-an-ip)) is implemented with cURL's `CURLOPT_RESOLVE`, which maps the URL's host and port (`443`/`80` by default) to the given address, so the `Host` header, SNI and certificate checks keep the hostname. `CURLOPT_FRESH_CONNECT` makes cURL open a new connection rather than reuse a pooled one opened to an earlier DNS answer.
+
+Only Guzzle's cURL handlers can pin a connection, so the request throws `InvalidRequestOptionException` before anything is sent when:
+
+- the PHP `curl` extension is not loaded (Guzzle would fall back to its stream handler),
+- the `guzzle` escape hatch sets `stream`, `proxy`, a non-`false` `allow_redirects`, or `curl` options `CURLOPT_RESOLVE` / `CURLOPT_CONNECT_TO`,
+- the URL is not an absolute `http`/`https` URL, or its host is an IP literal other than the pinned address.
+
+Other `curl` options in the escape hatch are kept alongside the pin. Proxies configured through `HTTP_PROXY`/`HTTPS_PROXY` environment variables are applied by Guzzle and cURL themselves; a proxied request is resolved by the proxy, so don't route pinned requests through one.
 
 ### The `guzzle` Escape Hatch
 
-For a Guzzle feature outside the portable set (`cert`, `ssl_key`, `sink`, `on_stats`, `decode_content`, `debug`, ...), pass a `guzzle` array. It is merged verbatim over the options above, so it wins on conflict:
+For a Guzzle feature outside the portable set (`cert`, `ssl_key`, `sink`, `on_stats`, `decode_content`, `debug`, ...), pass a `guzzle` array. It is merged verbatim over the options above, so it wins on conflict (except for the pinning options above, which are rejected rather than overridden):
 
 ```php
 $response = $this->httpClient->get('https://internal.example.com/report.csv', [

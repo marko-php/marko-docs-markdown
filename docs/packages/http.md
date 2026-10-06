@@ -92,6 +92,7 @@ All methods accept an `$options` array. The keys are a portable set defined as c
 | `allow_redirects` | `RequestOptions::ALLOW_REDIRECTS` | `bool`, or the maximum number of redirects as an `int` |
 | `proxy` | `RequestOptions::PROXY` | Proxy URL |
 | `http_errors` | `RequestOptions::HTTP_ERRORS` | `bool`, default `true` --- throw `HttpException` on 4xx/5xx |
+| `resolve_to` | `RequestOptions::RESOLVE_TO` | IPv4 or IPv6 address (no brackets) to connect to instead of resolving the host --- see [Pinning the Connection to an IP](#pinning-the-connection-to-an-ip) |
 
 ```php
 use Marko\Http\RequestOptions;
@@ -107,9 +108,33 @@ Options are validated before the request is sent. Each of these throws `InvalidR
 
 - An unknown key, such as the typo `form_param` --- the message names the key and the suggestion lists every supported key.
 - More than one body option (`body`, `json`, `form_params`, `multipart`) in the same request.
-- A malformed `auth`, or a `http_errors`, `verify` or `allow_redirects` value of the wrong type.
+- A malformed `auth`, or a `http_errors`, `verify`, `allow_redirects` or `resolve_to` value of the wrong type.
+- `resolve_to` combined with `proxy`, or without `'allow_redirects' => false`.
 
 Drivers may accept an extra, clearly non-portable key of their own (for example `guzzle` in [`marko/http-guzzle`](/docs/packages/http-guzzle/)). Any other key fails loudly instead of being ignored.
+
+### Pinning the Connection to an IP
+
+When you have already resolved and vetted a host --- for example to reject internal addresses before calling a user-supplied URL --- pass the address you checked as `resolve_to`. The client connects to that address instead of resolving the host again, while the `Host` header, TLS SNI and certificate verification still use the hostname from the URL:
+
+```php
+use Marko\Http\RequestOptions;
+
+$response = $this->httpClient->post('https://hooks.example.com/in', [
+    RequestOptions::JSON => $event,
+    RequestOptions::RESOLVE_TO => '93.184.215.14',
+    RequestOptions::ALLOW_REDIRECTS => false,
+]);
+```
+
+Without the pin, a hostname whose DNS answer changes between your check and the connection (DNS rebinding) can steer the request to an address you never approved. [`marko/webhook`](/docs/packages/webhook/#outgoing-url-policy) uses this option for every outgoing webhook.
+
+The pin covers only the URL's host and port, so:
+
+- `resolve_to` requires `'allow_redirects' => false` --- a redirect to another host would be resolved normally. Check and pin a redirect target yourself before following it.
+- `resolve_to` cannot be combined with `proxy`, because a proxy resolves the destination itself.
+
+A driver that cannot pin the connection throws `InvalidRequestOptionException` instead of ignoring the option, so the request is never silently sent unpinned.
 
 ### Error Responses
 
@@ -217,6 +242,6 @@ Drivers call `validate()` before sending, passing any driver-specific keys they 
 
 | Exception | Description |
 |-----------|-------------|
-| `InvalidRequestOptionException` | Thrown before sending when an option key is unknown, body options conflict, or an option value has the wrong shape (extends `MarkoException`) |
+| `InvalidRequestOptionException` | Thrown before sending when an option key is unknown, options conflict, an option value has the wrong shape, or the driver cannot honour an option such as `resolve_to` (extends `MarkoException`) |
 | `HttpException` | Base exception for HTTP errors --- provides `getResponse()` to access the underlying `HttpResponse` if available |
 | `ConnectionException` | Thrown when the HTTP connection itself fails (extends `HttpException`) |
