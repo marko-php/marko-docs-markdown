@@ -3,9 +3,9 @@ title: marko/testing
 description: Reusable fakes with built-in assertions that eliminate test boilerplate.
 ---
 
-Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, the clock, and console confirmations. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. An in-process HTTP test client (`TestClient`) sends requests through your real routes, middleware and controllers for feature tests. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`, `toHaveStatus`, `toHaveJsonPath`) are included for fluent assertions.
+Testing utilities for Marko — reusable fakes with built-in assertions that eliminate test boilerplate. This package provides in-memory fakes for the core Marko contracts: events, broadcasting, mail, queues, sessions, cookies, logging, config, authentication, guards, HTTP clients, encryption, the clock, and console confirmations. Each fake records interactions and exposes assertion methods so your tests stay focused on behavior rather than mock setup. An in-process HTTP test client (`TestClient`) sends requests through your real routes, middleware and controllers for feature tests. Pest expectation extensions (`toHaveDispatched`, `toHaveBroadcast`, `toHaveSent`, `toHavePushed`, `toHaveLogged`, `toHaveAttempted`, `toBeAuthenticated`, `toHaveStatus`, `toHaveJsonPath`) are included for fluent assertions.
 
-Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeClock`, `FakeSleeper`, `FakeConfirmationPrompter`.
+Available fakes: `FakeEventDispatcher`, `FakeBroadcaster`, `FakeMailer`, `FakeQueue`, `FakeSession`, `FakeCookieJar`, `FakeLogger`, `FakeConfigRepository`, `FakeAuthenticatable`, `FakeUserProvider`, `FakeGuard`, `FakeHttpClient`, `FakeEncryptor`, `FakeClock`, `FakeSleeper`, `FakeConfirmationPrompter`.
 
 ## Installation
 
@@ -186,6 +186,28 @@ $guard->logout();
 $guard->assertLoggedOut();
 $guard->assertGuest();
 ```
+
+### FakeEncryptor
+
+`FakeEncryptor` implements `EncryptorInterface` from [`marko/encryption`](/docs/packages/encryption/), so code that encrypts values can be tested without a key. Encryption is a reversible encoding: the output starts with `fake-encrypted:`, never contains the plain text, and differs on every call as a real cipher's would. Any `FakeEncryptor` instance can decrypt another's output.
+
+Like a real AEAD encryptor, the ciphertext is bound to the associated data (`$aad`) it was encrypted with. `decrypt()` with different associated data throws a `DecryptionException` naming both values, so a missing or wrong `$aad` fails the test instead of passing silently. A value it did not produce throws `DecryptionException::invalidPayload()`.
+
+```php
+use Marko\Testing\Fake\FakeEncryptor;
+
+$encryptor = new FakeEncryptor();
+$encrypted = $encryptor->encrypt('123-45-6789', 'users.ssn');
+
+$encryptor->decrypt($encrypted, 'users.ssn');   // '123-45-6789'
+$encryptor->decrypt($encrypted, 'users.email'); // throws DecryptionException
+
+$encryptor->assertEncrypted('123-45-6789', 'users.ssn');
+$encryptor->assertDecrypted(aad: 'users.ssn');
+$encryptor->encrypted; // [['value' => '123-45-6789', 'aad' => 'users.ssn', 'encrypted' => 'fake-encrypted:...']]
+```
+
+Both arguments of `assertEncrypted()` and `assertDecrypted()` are optional; pass only what the test cares about. Only successful `decrypt()` calls are recorded. Like every fake, it is never bound automatically: pass it to the class under test, or register it with `$container->instance(EncryptorInterface::class, $encryptor)`.
 
 ### FakeClock
 
@@ -885,6 +907,20 @@ public function __construct(string $method, string $url, array $options = []);
 public function header(string $name): ?string;
 public function json(): mixed;
 public function body(): string;
+```
+
+### FakeEncryptor
+
+```php
+public private(set) array $encrypted; // list<array{value: string, aad: string, encrypted: string}>
+public private(set) array $decrypted; // list<array{encrypted: string, aad: string, value: string}>
+public function encrypt(string $value, string $aad = ''): string;
+public function decrypt(string $encrypted, string $aad = ''): string; // throws DecryptionException on an AAD mismatch
+public function assertEncrypted(?string $value = null, ?string $aad = null): void;
+public function assertDecrypted(?string $value = null, ?string $aad = null): void;
+public function assertNothingEncrypted(): void;
+public function assertNothingDecrypted(): void;
+public function clear(): void;
 ```
 
 ### FakeClock
