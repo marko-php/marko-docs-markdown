@@ -17,10 +17,23 @@ Override defaults in `config/authentication-token.php`:
 
 ```php title="config/authentication-token.php"
 return [
-    // Days before a token expires. null = never expires.
+    // Default lifetime, in days, of a token created without expiresAt.
+    // A positive integer, or null for tokens that never expire.
     'token_expiration_days' => 365,
 ];
 ```
+
+`token_expiration_days` is the default lifetime of a new token. When `createToken()` is called without `expiresAt`, `TokenManager` stores the injected clock's current time plus this many days as the token's `expires_at`, so tokens expire after a year unless you configure otherwise. The expiry is fixed when the token is created: changing the value later does not affect tokens already issued.
+
+To issue tokens that never expire by default, set it to `null`:
+
+```php title="config/authentication-token.php"
+return [
+    'token_expiration_days' => null,
+];
+```
+
+Any other value (`0`, a negative number, a string such as `'30'` read from an environment variable without a cast) makes `createToken()` throw a `ConfigException`, even when the call passes its own `expiresAt`. Cast environment values in the config file: `(int) $_ENV['TOKEN_EXPIRATION_DAYS']`.
 
 ## Usage
 
@@ -71,7 +84,9 @@ class ApiTokenController
 }
 ```
 
-The `expiresAt` parameter is optional (`null` by default). A `null` expiry means the token never expires. When a non-null expiry is set and the current time is past it, `TokenGuard` rejects the token and returns `null` from `user()`.
+The `expiresAt` parameter is optional. Without it, the token expires `token_expiration_days` days after creation (365 by default), or never when that config is `null`. An explicit `expiresAt` always overrides the configured default, whether it is shorter or longer. Once the current time is past a token's expiry, `TokenGuard` rejects the token and returns `null` from `user()`. `TokenManager` also sets the token's `createdAt` from the clock.
+
+> **Behaviour change:** before the default lifetime was wired, `token_expiration_days` was never read and a token created without `expiresAt` never expired. Tokens created now get `expires_at` = creation time + 365 days unless you set the config to `null`. Tokens already stored keep their `null` expiry.
 
 > **Security note:** The plain-text token is available only on `NewAccessToken::$plainTextToken` at creation time. The database stores only a SHA-256 hash. If you lose the plain text, you must revoke and re-issue.
 
@@ -182,7 +197,7 @@ The package dispatches token lifecycle [events](/docs/packages/events/) through 
 
 | Event | Dispatched by | Properties |
 |---|---|---|
-| `TokenCreatedEvent` | `TokenManager::createToken()` | `user`, `tokenId`, `name`, `abilities`, `expiresAt` (`?DateTimeImmutable`) |
+| `TokenCreatedEvent` | `TokenManager::createToken()` | `user`, `tokenId`, `name`, `abilities`, `expiresAt` (`?DateTimeImmutable`: the stored expiry, including the configured default) |
 | `TokenRevokedEvent` | `TokenManager::revokeToken()` | `tokenId` |
 | `AllTokensRevokedEvent` | `TokenManager::revokeAllTokens()` | `user` |
 | `TokenAuthenticationFailedEvent` | `TokenGuard`, when a request presents an unknown, revoked or expired token | `guard`, `reason` (`TokenFailureReason::Invalid` or `::Expired`), `tokenId` (expired tokens only), `ipAddress` |
@@ -234,8 +249,8 @@ The package uses the `personal_access_tokens` table. Columns:
 | `token_hash` | string(64) | SHA-256 hash of the plain-text token |
 | `abilities` | text | JSON-encoded array of ability strings |
 | `last_used_at` | datetime | Last usage timestamp |
-| `expires_at` | datetime | Expiry timestamp (null = never) |
-| `created_at` | datetime | Creation timestamp |
+| `expires_at` | datetime | Expiry timestamp, set by `TokenManager` from `expiresAt` or `token_expiration_days` (null = never) |
+| `created_at` | datetime | Creation timestamp, set by `TokenManager` from the clock |
 
 ## API Reference
 
@@ -244,11 +259,27 @@ The package uses the `personal_access_tokens` table. Columns:
 ```php
 use DateTimeInterface;
 use Marko\Authentication\AuthenticatableInterface;
+use Marko\AuthenticationToken\Config\TokenConfig;
 use Marko\AuthenticationToken\Contracts\NewAccessToken;
+use Marko\AuthenticationToken\Contracts\TokenRepositoryInterface;
+use Marko\Core\Event\EventDispatcherInterface;
+use Psr\Clock\ClockInterface;
 
+public function __construct(TokenRepositoryInterface $repository, TokenConfig $config, ClockInterface $clock, ?EventDispatcherInterface $eventDispatcher = null);
 public function createToken(AuthenticatableInterface $user, string $name, array $abilities = [], ?DateTimeInterface $expiresAt = null): NewAccessToken;
 public function revokeToken(int $tokenId): void;
 public function revokeAllTokens(AuthenticatableInterface $user): void;
+```
+
+`createToken()` throws `ConfigException` for an invalid `token_expiration_days` and `ConfigNotFoundException` when the key is missing.
+
+### TokenConfig
+
+Reads `config/authentication-token.php`:
+
+```php
+public function __construct(ConfigRepositoryInterface $config);
+public function expirationDays(): ?int; // positive int or null; anything else throws ConfigException
 ```
 
 ### TokenGuard
@@ -317,12 +348,10 @@ public function createToken(string $name, array $abilities = []): NewAccessToken
 ### Exceptions
 
 ```php
-InvalidTokenException::forToken(): self;
-ExpiredTokenException::forToken(?int $tokenId, DateTimeInterface $expiredAt): self;
 StatelessGuardException::forMethod(string $guard, string $method): self;
 ```
 
-`InvalidTokenException` and `ExpiredTokenException` extend `TokenException`, which exposes `getContext(): string` and `getSuggestion(): string` for detailed error messages. Neither takes the token value, so it never reaches logs or error pages. `StatelessGuardException` extends `Marko\Authentication\Exceptions\AuthException`.
+`StatelessGuardException` extends `Marko\Authentication\Exceptions\AuthException`. An unknown, revoked or expired token never throws: the guard returns `null` and dispatches `TokenAuthenticationFailedEvent` (see [Events](#events)).
 
 ## Related Packages
 
