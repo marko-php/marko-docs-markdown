@@ -246,6 +246,7 @@ Only global middleware marked `#[RunsOnUnmatched]` runs for unmatched requests (
 |---|---|
 | `CorsMiddleware` ([`marko/cors`](/docs/packages/cors/)) | Yes --- preflights and CORS headers on 404/405 |
 | `SessionMiddleware` (`marko/session-file`, `marko/session-database`) | No |
+| `SecurityHeadersMiddleware` ([`marko/security`](/docs/packages/security/)) | Yes --- security headers on 404/405 |
 | `CsrfMiddleware` ([`marko/security`](/docs/packages/security/)) | No |
 | Authentication and `AuthorizationMiddleware` | No |
 | `TokenRequestMiddleware` ([`marko/authentication-token`](/docs/packages/authentication-token/)) | No --- nothing authenticates a token without a route |
