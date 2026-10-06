@@ -34,6 +34,8 @@ return [
     'port' => Env::int('BROADCASTING_AMPHP_PORT', 8085, min: 1, max: 65535),
     'path' => Env::string('BROADCASTING_AMPHP_PATH', '/stream'),
     'health_path' => Env::string('BROADCASTING_AMPHP_HEALTH_PATH', '/health'),
+    'health_detail' => Env::bool('BROADCASTING_AMPHP_HEALTH_DETAIL', false),
+    'health_secret' => Env::string('BROADCASTING_AMPHP_HEALTH_SECRET', ''),
     'public_url' => Env::string('BROADCASTING_AMPHP_PUBLIC_URL', 'http://localhost:8085'),
     'channel_prefix' => Env::string('BROADCASTING_AMPHP_CHANNEL_PREFIX', 'broadcast.'),
     'app_key' => Env::string('BROADCASTING_AMPHP_APP_KEY', ''),
@@ -53,7 +55,8 @@ return [
 |---|---|
 | `host`, `port` | Address `broadcasting:serve` listens on (override with `--host` / `--port`) |
 | `path` | Stream endpoint browsers open with `EventSource` |
-| `health_path` | JSON connection counts per channel. Restrict it at your proxy if channel names are sensitive |
+| `health_path` | JSON health check with aggregate counts: open streams and active channels, no channel names |
+| `health_detail`, `health_secret` | Set `health_detail` to `true` to add per-channel counts to `health_path` for requests that send `health_secret` in an `X-Health-Secret` header. Building the config throws when `health_detail` is on and `health_secret` is empty |
 | `public_url` | Base URL browsers reach the server on, used by `AmphpSubscriberToken::streamUrl()` |
 | `channel_prefix` | Prepended to every channel name to form the pub/sub channel |
 | `app_key` | Secret that signs subscriber tokens. **Both the app and the server process need the same value.** If it is empty, private channels are refused with `403` |
@@ -181,11 +184,28 @@ Replay is **per process** and in memory: a restart, or a reconnect that lands on
 
 ### Health and Logs
 
-`GET /health` returns JSON:
+`GET /health` returns aggregate counts only: open streams and active channels.
 
 ```json
-{"status": "ok", "connections": 2000, "channels": {"shows.42": 1200, "shows.43": 800}}
+{"status": "ok", "connections": 2000, "channels": 2}
 ```
+
+The endpoint needs no authentication, so it never lists channel names by default. Names such as `private-users.7` would reveal which users are online. To see open streams per channel, enable `health_detail`, set `health_secret`, and send the secret in an `X-Health-Secret` header:
+
+```bash title=".env"
+BROADCASTING_AMPHP_HEALTH_DETAIL=true
+BROADCASTING_AMPHP_HEALTH_SECRET=change-me-to-a-long-random-secret
+```
+
+```bash
+curl -H "X-Health-Secret: $BROADCASTING_AMPHP_HEALTH_SECRET" http://127.0.0.1:8085/health
+```
+
+```json
+{"status": "ok", "connections": 2000, "channels": 2, "channel_counts": {"shows.42": 1200, "shows.43": 800}}
+```
+
+A missing or wrong secret gets the aggregate response, not an error.
 
 Every `log_interval` seconds the server logs `Broadcasting server: N open streams across M channels`, with memory usage in the context. amphp/http-server's own log records go to the same logger.
 
