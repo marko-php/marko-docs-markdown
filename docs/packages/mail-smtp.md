@@ -20,18 +20,20 @@ This automatically installs `marko/mail`.
 Set the mail driver to `smtp` in your config:
 
 ```php title="config/mail.php"
+use Marko\Config\Env;
+
 return [
     'driver' => 'smtp',
     'from' => [
-        'address' => $_ENV['MAIL_FROM_ADDRESS'] ?? 'noreply@example.com',
-        'name' => $_ENV['MAIL_FROM_NAME'] ?? 'My App',
+        'address' => Env::string('MAIL_FROM_ADDRESS', 'noreply@example.com'),
+        'name' => Env::string('MAIL_FROM_NAME', 'My App'),
     ],
     'smtp' => [
-        'host' => $_ENV['MAIL_HOST'] ?? 'localhost',
-        'port' => (int) ($_ENV['MAIL_PORT'] ?? 587),
-        'encryption' => $_ENV['MAIL_ENCRYPTION'] ?? 'tls',
-        'username' => $_ENV['MAIL_USERNAME'] ?? null,
-        'password' => $_ENV['MAIL_PASSWORD'] ?? null,
+        'host' => Env::string('MAIL_HOST', 'localhost'),
+        'port' => Env::int('MAIL_PORT', 587, min: 1, max: 65535),
+        'encryption' => Env::nullableString('MAIL_ENCRYPTION', 'tls'),
+        'username' => Env::nullableString('MAIL_USERNAME'),
+        'password' => Env::nullableString('MAIL_PASSWORD'),
         'auth_mode' => 'login', // 'login' or 'plain'
         'timeout' => 30,
     ],

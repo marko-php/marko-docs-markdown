@@ -223,9 +223,11 @@ Since boot callbacks run after all static bindings are registered, `$container->
 **Use config instead when** the difference is just values (API URLs, credentials, feature flags). Keep the same class everywhere and let [config](/docs/packages/config/) drive the behavior:
 
 ```php title="config/payments.php"
+use Marko\Config\Env;
+
 return [
-    'gateway_url' => $_ENV['PAYMENT_GATEWAY_URL'] ?? 'https://sandbox.stripe.com',
-    'dry_run' => (bool) ($_ENV['PAYMENT_DRY_RUN'] ?? true),
+    'gateway_url' => Env::string('PAYMENT_GATEWAY_URL', 'https://sandbox.stripe.com'),
+    'dry_run' => Env::bool('PAYMENT_DRY_RUN', true),
 ];
 ```
 
@@ -406,12 +408,12 @@ At boot, `Application::initialize()` reads these environment variables directly 
 | Variable | Default | Description |
 |---|---|---|
 | `MARKO_ENV` / `APP_ENV` | `production` | Application environment, read through [`AppEnvironment`](#application-environment). `development`, `dev`, or `local` disable the cache. `MARKO_ENV` wins when both are set. |
-| `DISCOVERY_CACHE_ENABLED` | `true` | Set to `0`, `false`, `no`, `off`, or empty to disable. |
+| `DISCOVERY_CACHE_ENABLED` | `true` | `1`, `true`, `yes`, `on` enable; `0`, `false`, `no`, `off`, or empty disable. Case-insensitive and trimmed. Any other value (`enabled`, `ture`) throws `DiscoveryCacheException`. |
 | `DISCOVERY_CACHE_PATH` | `storage/cache/discovery.php` | Path to the cache file. Relative paths resolve from the project root; absolute paths are used as-is. |
 
 The cache is used when **all three conditions** are true:
 
-1. `DISCOVERY_CACHE_ENABLED` is truthy
+1. `DISCOVERY_CACHE_ENABLED` is enabled
 2. `AppEnvironment::isDevelopment()` is false (the environment is not `development`, `dev`, or `local`)
 3. The cache file exists at `DISCOVERY_CACHE_PATH`
 
@@ -493,14 +495,18 @@ return [
 When `marko/config` is installed, the same keys are available as a config file:
 
 ```php title="config/discovery.php"
+use Marko\Core\Discovery\DiscoveryEnvironment;
+
+$discoveryEnvironment = new DiscoveryEnvironment();
+
 return [
-    'enabled'    => true,   // mirrors DISCOVERY_CACHE_ENABLED
-    'environment' => 'production', // mirrors APP_ENV
-    'cache_path' => 'storage/cache/discovery.php', // mirrors DISCOVERY_CACHE_PATH
+    'enabled' => $discoveryEnvironment->enabled(),
+    'environment' => $discoveryEnvironment->environment(),
+    'cache_path' => $discoveryEnvironment->cachePath(),
 ];
 ```
 
-The core-owned `config/discovery.php` is shipped with `marko/core` and populates these values from `$_ENV` automatically. The boot gate reads `DiscoveryEnvironment` directly and does not depend on `marko/config`.
+The core-owned `config/discovery.php` is shipped with `marko/core` and mirrors the boot gate by delegating to `DiscoveryEnvironment`, the single parser for these variables. `enabled` follows `DISCOVERY_CACHE_ENABLED` with the strict values above, `environment` follows `MARKO_ENV` then `APP_ENV` (lowercased, default `production`), and `cache_path` follows `DISCOVERY_CACHE_PATH`. An invalid `DISCOVERY_CACHE_ENABLED` value fails here the same way it fails at boot. The boot gate reads `DiscoveryEnvironment` directly and does not depend on `marko/config`.
 
 #### Not the same as the code index
 

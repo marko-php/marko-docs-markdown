@@ -32,6 +32,8 @@ With the defaults, a job that fails on every attempt retries at 120 s, 240 s, an
 
 The `timestamp_tolerance` controls replay-attack protection for inbound webhooks. Requests whose `X-Webhook-Timestamp` header is more than this many seconds in the past or future are rejected.
 
+`WebhookConfig` also validates the other numeric keys: a negative `max_retries`, a negative `retry_delay`, or a `timestamp_tolerance` of `0` or less throws a `ConfigException` naming the key.
+
 ## Usage
 
 ### Sending Webhooks
@@ -294,9 +296,9 @@ public function recordFailure(WebhookPayload $payload, string $error, int $attem
 use Marko\Webhook\Config\WebhookConfig;
 
 public int $timeout;             // from webhook.timeout; ConfigException when not positive
-public int $maxRetries;          // from webhook.max_retries
-public int $retryDelay;          // from webhook.retry_delay
-public int $timestampTolerance;  // from webhook.timestamp_tolerance
+public int $maxRetries;          // from webhook.max_retries; ConfigException when negative
+public int $retryDelay;          // from webhook.retry_delay; ConfigException when negative
+public int $timestampTolerance;  // from webhook.timestamp_tolerance; ConfigException when 0 or less
 ```
 
 ### InvalidSignatureException

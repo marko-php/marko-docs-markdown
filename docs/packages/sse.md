@@ -32,13 +32,13 @@ Rule of thumb: keep concurrent SSE streams at or below *(FPM workers − the wor
 The optional connection guard caps concurrent streams across **all** PHP workers. It is off by default.
 
 ```php title="config/sse.php"
+use Marko\Config\Env;
+
 return [
     // null = unlimited (guard disabled)
-    'max_connections' => isset($_ENV['SSE_MAX_CONNECTIONS']) && $_ENV['SSE_MAX_CONNECTIONS'] !== ''
-        ? (int) $_ENV['SSE_MAX_CONNECTIONS']
-        : null,
+    'max_connections' => Env::nullableInt('SSE_MAX_CONNECTIONS', min: 1),
     // Seconds a rejected client should wait before reconnecting
-    'retry_after' => (int) ($_ENV['SSE_RETRY_AFTER'] ?? 5),
+    'retry_after' => Env::int('SSE_RETRY_AFTER', 5, min: 0),
 ];
 ```
 

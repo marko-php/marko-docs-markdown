@@ -16,8 +16,10 @@ composer require marko/cache-redis
 This automatically installs `marko/cache`, `predis/predis`, and [`marko/encryption`](/docs/packages/encryption/). A non-empty `encryption.key` is required; reads and writes throw `TamperedCacheValueException` if the key is empty or a stored value's HMAC does not verify.
 
 ```php title="config/encryption.php"
+use Marko\Config\Env;
+
 return [
-    'key' => $_ENV['APP_KEY'] ?? '',
+    'key' => Env::string('APP_KEY', ''),
 ];
 ```
 
@@ -36,21 +38,23 @@ return [
 The package ships `config/cache-redis.php`, and its module binding builds a single shared `RedisConnection` from it. No hand-written binding is needed. Set the environment variables, or override the file in your app:
 
 ```php title="config/cache-redis.php"
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['REDIS_HOST'] ?? '127.0.0.1',
-    'port' => (int) ($_ENV['REDIS_PORT'] ?? 6379),
-    'password' => $_ENV['REDIS_PASSWORD'] ?? null,
-    'database' => (int) ($_ENV['REDIS_CACHE_DATABASE'] ?? 0),
-    'prefix' => $_ENV['CACHE_PREFIX'] ?? 'marko:cache:',
+    'host' => Env::string('REDIS_HOST', '127.0.0.1'),
+    'port' => Env::int('REDIS_PORT', 6379, min: 1, max: 65535),
+    'password' => Env::nullableString('REDIS_PASSWORD'),
+    'database' => Env::int('REDIS_CACHE_DATABASE', 0, min: 0),
+    'prefix' => Env::string('CACHE_PREFIX', 'marko:cache:'),
 ];
 ```
 
 | Key | Env var | Default | Description |
 |---|---|---|---|
 | `host` | `REDIS_HOST` | `127.0.0.1` | Redis server host |
-| `port` | `REDIS_PORT` | `6379` | Redis server port |
+| `port` | `REDIS_PORT` | `6379` | Redis server port (1-65535) |
 | `password` | `REDIS_PASSWORD` | `null` | Password for `AUTH`; `null` or empty means no authentication |
-| `database` | `REDIS_CACHE_DATABASE` | `0` | Redis database index |
+| `database` | `REDIS_CACHE_DATABASE` | `0` | Redis database index (0 or higher) |
 | `prefix` | `CACHE_PREFIX` | `marko:cache:` | Prefix added to every cache key |
 
 The connection opens on first use. If Redis refuses it, a `RedisConnectionException` names the host and port and points back to this config file.

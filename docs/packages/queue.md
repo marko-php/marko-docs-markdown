@@ -22,8 +22,10 @@ Note: You typically install a driver package (like `marko/queue-database`) which
 `marko/queue` requires [`marko/encryption`](/docs/packages/encryption/) and a non-empty `encryption.key` in your config. Job payloads are HMAC-signed when enqueued and verified before deserialization; if the key is empty or the signature does not match, a `SerializationException` is thrown loudly.
 
 ```php title="config/encryption.php"
+use Marko\Config\Env;
+
 return [
-    'key' => $_ENV['APP_KEY'] ?? '',
+    'key' => Env::string('APP_KEY', ''),
 ];
 ```
 

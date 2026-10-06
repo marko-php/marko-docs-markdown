@@ -18,12 +18,14 @@ composer require marko/inertia
 Configure via `config/inertia.php`:
 
 ```php title="config/inertia.php"
+use Marko\Config\Env;
+
 return [
     'version' => null,
     'assetEntry' => null,
     'ssr' => [
-        'enabled' => env('INERTIA_SSR_ENABLED', false),
-        'url' => env('INERTIA_SSR_URL', 'http://localhost:13714'),
+        'enabled' => Env::bool('INERTIA_SSR_ENABLED', false),
+        'url' => Env::string('INERTIA_SSR_URL', 'http://localhost:13714'),
     ],
 ];
 ```
@@ -259,4 +261,4 @@ interface SsrTransportInterface
 - [`marko/session`](/docs/packages/session/) - stores flash messages
 - [`marko/routing`](/docs/packages/routing/) - provides requests, responses, and middleware
 - [`marko/config`](/docs/packages/config/) - provides the configuration repository
-- [`marko/env`](/docs/packages/env/) - provides the `env()` helper used in `config/inertia.php`
+- [`marko/env`](/docs/packages/env/) - loads the `.env` values read by [`Env`](/docs/packages/config/#environment-variables) in `config/inertia.php`

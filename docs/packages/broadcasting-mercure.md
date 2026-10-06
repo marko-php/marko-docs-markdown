@@ -44,16 +44,18 @@ MERCURE_TOPIC_PREFIX=https://example.com/
 ```
 
 ```php title="config/broadcasting-mercure.php"
+use Marko\Config\Env;
+
 return [
-    'hub_url' => $_ENV['MERCURE_URL'] ?? 'http://localhost/.well-known/mercure',
-    'public_url' => $_ENV['MERCURE_PUBLIC_URL'] ?? 'http://localhost/.well-known/mercure',
-    'publisher_jwt_key' => $_ENV['MERCURE_PUBLISHER_JWT_KEY'] ?? '',
-    'publisher_jwt' => $_ENV['MERCURE_PUBLISHER_JWT'] ?? '',
-    'subscriber_jwt_key' => $_ENV['MERCURE_SUBSCRIBER_JWT_KEY'] ?? '',
-    'subscriber_jwt_ttl' => (int) ($_ENV['MERCURE_SUBSCRIBER_JWT_TTL'] ?? 3600),
-    'topic_prefix' => $_ENV['MERCURE_TOPIC_PREFIX'] ?? '',
-    'cookie_domain' => $_ENV['MERCURE_COOKIE_DOMAIN'] ?? '',
-    'cookie_secure' => filter_var($_ENV['MERCURE_COOKIE_SECURE'] ?? 'true', FILTER_VALIDATE_BOOL),
+    'hub_url' => Env::string('MERCURE_URL', 'http://localhost/.well-known/mercure'),
+    'public_url' => Env::string('MERCURE_PUBLIC_URL', 'http://localhost/.well-known/mercure'),
+    'publisher_jwt_key' => Env::string('MERCURE_PUBLISHER_JWT_KEY', ''),
+    'publisher_jwt' => Env::string('MERCURE_PUBLISHER_JWT', ''),
+    'subscriber_jwt_key' => Env::string('MERCURE_SUBSCRIBER_JWT_KEY', ''),
+    'subscriber_jwt_ttl' => Env::int('MERCURE_SUBSCRIBER_JWT_TTL', 3600, min: 0),
+    'topic_prefix' => Env::string('MERCURE_TOPIC_PREFIX', ''),
+    'cookie_domain' => Env::string('MERCURE_COOKIE_DOMAIN', ''),
+    'cookie_secure' => Env::bool('MERCURE_COOKIE_SECURE', true),
     'timeout' => 5,
 ];
 ```

@@ -24,8 +24,10 @@ Refer to the [Inertia.js docs](https://inertiajs.com/) for currently supported v
 This package contributes defaults to the parent `config/inertia.php` namespace:
 
 ```php title="packages/inertia-vue/config/inertia.php"
+use Marko\Config\Env;
+
 return [
-    'assetEntry' => env('INERTIA_VUE_CLIENT_ENTRY', 'app/vue-web/resources/js/app.js'),
+    'assetEntry' => Env::string('INERTIA_VUE_CLIENT_ENTRY', 'app/vue-web/resources/js/app.js'),
 ];
 ```
 
@@ -106,4 +108,4 @@ This package registers `Marko\Inertia\Frontend\InertiaFrontendInterface` to a Vu
 
 - [`marko/inertia`](/docs/packages/inertia/) - renders Inertia responses and handles SSR fallback
 - [`marko/vite`](/docs/packages/vite/) - resolves the configured Vue Vite entry
-- [`marko/env`](/docs/packages/env/) - provides the `env()` helper used in `config/inertia.php`
+- [`marko/env`](/docs/packages/env/) - loads the `.env` values read by [`Env`](/docs/packages/config/#environment-variables) in `config/inertia.php`

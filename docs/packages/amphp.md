@@ -16,9 +16,11 @@ composer require marko/amphp
 ## Configuration
 
 ```php title="config/amphp.php"
+use Marko\Config\Env;
+
 return [
-    'shutdown_timeout' => (int) ($_ENV['AMPHP_SHUTDOWN_TIMEOUT'] ?? 30),
-    'channels'         => array_filter(explode(',', (string) ($_ENV['AMPHP_CHANNELS'] ?? ''))),
+    'shutdown_timeout' => Env::int('AMPHP_SHUTDOWN_TIMEOUT', 30, min: 0),
+    'channels' => Env::list('AMPHP_CHANNELS', []),
 ];
 ```
 

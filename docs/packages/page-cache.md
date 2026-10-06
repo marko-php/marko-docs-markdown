@@ -143,10 +143,12 @@ class Product implements IdentityInterface
 Add `config/page-cache.php` to your application:
 
 ```php title="config/page-cache.php"
+use Marko\Config\Env;
+
 return [
-    'driver' => $_ENV['PAGE_CACHE_DRIVER'] ?? 'file',
-    'path' => $_ENV['PAGE_CACHE_PATH'] ?? 'storage/page-cache',
-    'default_ttl' => (int) ($_ENV['PAGE_CACHE_TTL'] ?? 3600),
+    'driver' => Env::string('PAGE_CACHE_DRIVER', 'file'),
+    'path' => Env::string('PAGE_CACHE_PATH', 'storage/page-cache'),
+    'default_ttl' => Env::int('PAGE_CACHE_TTL', 3600, min: 0),
     'cacheable_status_codes' => [200, 301],
     'cacheable_methods' => ['GET', 'HEAD'],
 ];
@@ -156,7 +158,7 @@ return [
 |---|---|---|---|
 | `driver` | `PAGE_CACHE_DRIVER` | `file` | Driver name |
 | `path` | `PAGE_CACHE_PATH` | `storage/page-cache` | Root storage directory |
-| `default_ttl` | `PAGE_CACHE_TTL` | `3600` | TTL in seconds used when `#[Cacheable]` has `ttl: 0`. `0` means pages never expire and are only removed by a purge or `page-cache:clear`. Negative values throw a `PageCacheException`. |
+| `default_ttl` | `PAGE_CACHE_TTL` | `3600` | TTL in seconds used when `#[Cacheable]` has `ttl: 0`. `0` means pages never expire and are only removed by a purge or `page-cache:clear`. Negative values throw a `PageCacheException`. A `PAGE_CACHE_TTL` that is not a non-negative integer (`abc`, `1h`, `1.5`, `-1`) fails config load with a `ConfigException` rather than silently becoming `0`. |
 | `cacheable_status_codes` | --- | `[200, 301]` | Response status codes eligible for caching |
 | `cacheable_methods` | --- | `['GET', 'HEAD']` | Request methods eligible for caching |
 

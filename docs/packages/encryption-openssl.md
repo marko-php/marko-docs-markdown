@@ -20,9 +20,11 @@ This automatically installs `marko/encryption`. Requires the `ext-openssl` PHP e
 Set the encryption key and cipher in your config:
 
 ```php title="config/encryption.php"
+use Marko\Config\Env;
+
 return [
-    'key' => $_ENV['ENCRYPTION_KEY'] ?? '',
-    'cipher' => $_ENV['ENCRYPTION_CIPHER'] ?? 'aes-256-gcm',
+    'key' => Env::string('ENCRYPTION_KEY', ''),
+    'cipher' => Env::string('ENCRYPTION_CIPHER', 'aes-256-gcm'),
 ];
 ```
 

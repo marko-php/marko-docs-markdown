@@ -33,7 +33,15 @@ return [
 ];
 ```
 
-Any other value (`0`, a negative number, a string such as `'30'` read from an environment variable without a cast) makes `createToken()` throw a `ConfigException`, even when the call passes its own `expiresAt`. Cast environment values in the config file: `(int) $_ENV['TOKEN_EXPIRATION_DAYS']`.
+Any other value (`0`, a negative number, a numeric string such as `'30'`) makes `createToken()` throw a `ConfigException`, even when the call passes its own `expiresAt`. To drive the value from the environment, read it with `Env::int()`, which returns a real integer and enforces the minimum:
+
+```php title="config/authentication-token.php"
+use Marko\Config\Env;
+
+return [
+    'token_expiration_days' => Env::int('TOKEN_EXPIRATION_DAYS', 365, min: 1),
+];
+```
 
 ## Usage
 

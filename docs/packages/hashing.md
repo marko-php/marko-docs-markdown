@@ -14,22 +14,26 @@ composer require marko/hashing
 ## Configuration
 
 ```php title="config/hashing.php"
+use Marko\Config\Env;
+
 return [
-    'default' => $_ENV['HASH_DRIVER'] ?? 'bcrypt',
+    'default' => Env::string('HASH_DRIVER', 'bcrypt'),
 
     'hashers' => [
         'bcrypt' => [
-            'cost' => (int) ($_ENV['BCRYPT_COST'] ?? 12),
+            'cost' => Env::int('BCRYPT_COST', 12, min: 4, max: 31),
         ],
 
         'argon2id' => [
-            'memory' => (int) ($_ENV['ARGON2_MEMORY'] ?? 65536),
-            'time' => (int) ($_ENV['ARGON2_TIME'] ?? 4),
-            'threads' => (int) ($_ENV['ARGON2_THREADS'] ?? 1),
+            'memory' => Env::int('ARGON2_MEMORY', 65536, min: 8),
+            'time' => Env::int('ARGON2_TIME', 4, min: 1),
+            'threads' => Env::int('ARGON2_THREADS', 1, min: 1),
         ],
     ],
 ];
 ```
+
+Out-of-range or non-numeric values throw a `ConfigException` at boot (`BCRYPT_COST` must be 4-31, `ARGON2_MEMORY` at least 8, `ARGON2_TIME` and `ARGON2_THREADS` at least 1).
 
 ## Usage
 

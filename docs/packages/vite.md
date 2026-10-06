@@ -16,13 +16,15 @@ composer require marko/vite
 Configure via `config/vite.php`:
 
 ```php title="config/vite.php"
+use Marko\Config\Env;
+
 return [
-    'entry' => env('VITE_ENTRY', ''),
+    'entry' => Env::string('VITE_ENTRY', ''),
     'buildDirectory' => 'build',
     'manifestFilename' => '.vite/manifest.json',
-    'devServerUrl' => env('VITE_DEV_SERVER_URL', ''),
+    'devServerUrl' => Env::string('VITE_DEV_SERVER_URL', ''),
     'devServerStylesheets' => [],
-    'useDevServer' => env('VITE_USE_DEV_SERVER', env('APP_ENV', 'local') === 'local'),
+    'useDevServer' => Env::bool('VITE_USE_DEV_SERVER', Env::string('APP_ENV', 'local') === 'local'),
 ];
 ```
 
@@ -113,4 +115,4 @@ class Vite
 ## Related Packages
 
 - [`marko/config`](/docs/packages/config/) — provides the configuration repository
-- [`marko/env`](/docs/packages/env/) — provides the `env()` helper used in `config/vite.php`
+- [`marko/env`](/docs/packages/env/) — loads the `.env` values read by [`Env`](/docs/packages/config/#environment-variables) in `config/vite.php`

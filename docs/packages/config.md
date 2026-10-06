@@ -103,6 +103,8 @@ The repository is a shared instance (a singleton). Config files are discovered a
 
 Use typed accessor methods to get values with automatic type validation. These methods throw `ConfigNotFoundException` when the key is missing and `ConfigException` on type mismatch.
 
+`getInt()` accepts an `int` or a string of digits (`'8080'`); a float, `'1.5'` or `'1e3'` throws. `getBool()` accepts a `bool`, the ints `0` and `1`, or the strings `Env::bool()` accepts (`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`, case-insensitive), so `'off'` reads as `false`. Any other value throws instead of being cast.
+
 ```php
 <?php
 
@@ -152,21 +154,50 @@ $name = $config->get('mail.from.name'); // 'My App'
 
 ### Environment Variables
 
-Config files are regular PHP, so you can use environment variables directly. When [marko/env](/docs/packages/env/) is installed, real environment variables are mirrored into `$_ENV` at boot, so `$_ENV` reads work even when PHP's `variables_order` setting lacks `E` and there is no `.env` file.
+Read environment variables in config files with `Marko\Config\Env`. Each method returns a typed value and throws `ConfigException` when the variable holds something it can't parse, so a typo stops the boot instead of quietly becoming `0`, `false` or `true`. Config files load before the container exists, so `Env` is a plain class with static methods: import it and call it.
 
 ```php title="config/database.php"
 <?php
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['DB_HOST'] ?? 'localhost',
-    'port' => (int) ($_ENV['DB_PORT'] ?? 3306),
-    'name' => $_ENV['DB_NAME'] ?? 'my_app',
-    'username' => $_ENV['DB_USERNAME'] ?? 'root',
-    'password' => $_ENV['DB_PASSWORD'] ?? '',
+    'host' => Env::string('DB_HOST', 'localhost'),
+    'port' => Env::int('DB_PORT', 3306, min: 1, max: 65535),
+    'name' => Env::string('DB_NAME', 'my_app'),
+    'username' => Env::string('DB_USERNAME', 'root'),
+    'password' => Env::string('DB_PASSWORD', ''),
 ];
 ```
+
+| Method | Returns | Accepts |
+|---|---|---|
+| `Env::string($name, $default)` | `string` | Any value, returned as is |
+| `Env::nullableString($name, $default = null)` | `?string` | Any value, returned as is |
+| `Env::int($name, $default, min:, max:)` | `int` | Whole numbers written with digits, optionally signed (`3600`, `-5`). `abc`, `10s`, `1h`, `1.5` and `1e3` throw. |
+| `Env::nullableInt($name, $default = null, min:, max:)` | `?int` | Same as `int()`; returns `null` when unset |
+| `Env::float($name, $default, min:, max:)` | `float` | Numbers with a dot as the decimal separator (`1.5`, `2`, `1e3`). `abc`, `1,5`, `inf` and `nan` throw. |
+| `Env::bool($name, $default)` | `bool` | `true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`, case-insensitive and trimmed. Anything else (`ture`, `enabled`) throws. |
+| `Env::list($name, $default)` | `list<string>` | A comma-separated value. Items are trimmed and empty items are dropped (`a, b,,c` is `['a', 'b', 'c']`). |
+
+How values are read:
+
+- `$_ENV` is checked first, then `getenv()`. When [marko/env](/docs/packages/env/) is installed, real environment variables and `.env` entries are in `$_ENV` at boot, even when PHP's `variables_order` setting lacks `E`.
+- **An unset variable or an empty value returns the default.** `KEY=` in `.env` means "use the default", not "use an empty string". The typed readers (`int`, `nullableInt`, `float`, `bool`, `list`) also treat a value of only spaces as unset. To make a string empty when its default isn't, change the value in your app's config file instead of the environment.
+- The default is returned as written and isn't checked against `min`/`max`.
+- `min:` and `max:` are optional named arguments. Use them to state the valid range where the value is read: `Env::int('PAGE_CACHE_TTL', 3600, min: 0)` rejects `-1`.
+
+A rejected value throws `ConfigException`. The message names the variable, the context shows the value and the suggestion lists the accepted forms:
+
+```text
+Environment variable "PAGE_CACHE_TTL" must be an integer
+Got "1h"
+Set PAGE_CACHE_TTL to a whole number written with digits only (no units, decimals or exponents) of 0 or greater, or remove it to use the default (3600).
+```
+
+Don't cast `$_ENV` values (`(int) ($_ENV['PORT'] ?? 80)`) or parse them with `filter_var()`: `(int) 'abc'` is `0` and an unrecognised `filter_var()` boolean is `false`, with no error. Every config file Marko ships reads its environment variables through `Env`. The global `env()` helper from `marko/env` is still available, but it coerces only a few strings and returns everything else unchanged, so prefer `Env` in config files.
 
 ### Scoped Configuration (Multi-tenant)
 
@@ -377,6 +408,20 @@ public function withScope(string $scope): ConfigRepositoryInterface
 ```
 
 All getter methods throw `ConfigNotFoundException` when the key does not exist. Use `has()` to check for existence before accessing, or define all defaults in your config files.
+
+### Env
+
+```php
+public static function string(string $name, string $default): string
+public static function nullableString(string $name, ?string $default = null): ?string
+public static function int(string $name, int $default, ?int $min = null, ?int $max = null): int
+public static function nullableInt(string $name, ?int $default = null, ?int $min = null, ?int $max = null): ?int
+public static function float(string $name, float $default, ?float $min = null, ?float $max = null): float
+public static function bool(string $name, bool $default): bool
+public static function list(string $name, array $default): array
+```
+
+`Env::TRUE_VALUES` and `Env::FALSE_VALUES` hold the accepted boolean tokens. Every method throws `ConfigException` for a value it can't parse or one outside `min`/`max`.
 
 ### ConfigLoader
 

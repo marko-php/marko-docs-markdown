@@ -20,6 +20,8 @@ composer require marko/filesystem marko/filesystem-s3
 Configure your disks in the filesystem config file:
 
 ```php title="config/filesystem.php"
+use Marko\Config\Env;
+
 return [
     'default' => 'local',
     'disks' => [
@@ -34,10 +36,10 @@ return [
         ],
         's3' => [
             'driver' => 's3',
-            'bucket' => $_ENV['AWS_BUCKET'],
-            'region' => $_ENV['AWS_DEFAULT_REGION'],
-            'key' => $_ENV['AWS_ACCESS_KEY_ID'],
-            'secret' => $_ENV['AWS_SECRET_ACCESS_KEY'],
+            'bucket' => Env::string('AWS_BUCKET', ''),
+            'region' => Env::string('AWS_DEFAULT_REGION', ''),
+            'key' => Env::string('AWS_ACCESS_KEY_ID', ''),
+            'secret' => Env::string('AWS_SECRET_ACCESS_KEY', ''),
         ],
     ],
 ];
@@ -284,11 +286,11 @@ MinIO, DigitalOcean Spaces, Cloudflare R2, and other S3-compatible services work
 ```php title="config/filesystem.php"
 'minio' => [
     'driver' => 's3',
-    'bucket' => $_ENV['MINIO_BUCKET'],
-    'region' => $_ENV['MINIO_REGION'],
-    'key' => $_ENV['MINIO_KEY'],
-    'secret' => $_ENV['MINIO_SECRET'],
-    'endpoint' => $_ENV['MINIO_ENDPOINT'],
+    'bucket' => Env::string('MINIO_BUCKET', ''),
+    'region' => Env::string('MINIO_REGION', ''),
+    'key' => Env::string('MINIO_KEY', ''),
+    'secret' => Env::string('MINIO_SECRET', ''),
+    'endpoint' => Env::string('MINIO_ENDPOINT', ''),
     'path_style_endpoint' => true,
 ],
 ```
@@ -300,15 +302,17 @@ MinIO, DigitalOcean Spaces, Cloudflare R2, and other S3-compatible services work
 Change your default disk from local to S3 by updating the config:
 
 ```php title="config/filesystem.php"
+use Marko\Config\Env;
+
 return [
     'default' => 's3',
     'disks' => [
         's3' => [
             'driver' => 's3',
-            'bucket' => $_ENV['AWS_BUCKET'],
-            'region' => $_ENV['AWS_DEFAULT_REGION'],
-            'key' => $_ENV['AWS_ACCESS_KEY_ID'],
-            'secret' => $_ENV['AWS_SECRET_ACCESS_KEY'],
+            'bucket' => Env::string('AWS_BUCKET', ''),
+            'region' => Env::string('AWS_DEFAULT_REGION', ''),
+            'key' => Env::string('AWS_ACCESS_KEY_ID', ''),
+            'secret' => Env::string('AWS_SECRET_ACCESS_KEY', ''),
         ],
     ],
 ];
@@ -351,9 +355,9 @@ The `#[FilesystemDriver('ftp')]` attribute registers the factory under the `ftp`
 ```php title="config/filesystem.php"
 'ftp' => [
     'driver' => 'ftp',
-    'host' => $_ENV['FTP_HOST'],
-    'username' => $_ENV['FTP_USER'],
-    'password' => $_ENV['FTP_PASS'],
+    'host' => Env::string('FTP_HOST', ''),
+    'username' => Env::string('FTP_USER', ''),
+    'password' => Env::string('FTP_PASS', ''),
 ],
 ```
 

@@ -20,14 +20,16 @@ composer require marko/cors
 All options are set via environment variables and default values are defined in `config/cors.php`:
 
 ```php title="config/cors.php"
+use Marko\Config\Env;
+
 return [
-    'paths' => array_filter(explode(',', $_ENV['CORS_PATHS'] ?? '*')),
-    'allowed_origins' => array_filter(explode(',', $_ENV['CORS_ALLOWED_ORIGINS'] ?? '')),
-    'allowed_methods' => explode(',', $_ENV['CORS_ALLOWED_METHODS'] ?? 'GET,POST,PUT,PATCH,DELETE,OPTIONS'),
-    'allowed_headers' => explode(',', $_ENV['CORS_ALLOWED_HEADERS'] ?? 'Content-Type,Authorization'),
-    'expose_headers' => array_filter(explode(',', $_ENV['CORS_EXPOSE_HEADERS'] ?? '')),
-    'supports_credentials' => filter_var($_ENV['CORS_SUPPORTS_CREDENTIALS'] ?? false, FILTER_VALIDATE_BOOLEAN),
-    'max_age' => (int) ($_ENV['CORS_MAX_AGE'] ?? 0),
+    'paths' => Env::list('CORS_PATHS', ['*']),
+    'allowed_origins' => Env::list('CORS_ALLOWED_ORIGINS', []),
+    'allowed_methods' => Env::list('CORS_ALLOWED_METHODS', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']),
+    'allowed_headers' => Env::list('CORS_ALLOWED_HEADERS', ['Content-Type', 'Authorization']),
+    'expose_headers' => Env::list('CORS_EXPOSE_HEADERS', []),
+    'supports_credentials' => Env::bool('CORS_SUPPORTS_CREDENTIALS', false),
+    'max_age' => Env::int('CORS_MAX_AGE', 0, min: 0),
 ];
 ```
 
@@ -38,7 +40,7 @@ return [
 | `CORS_ALLOWED_METHODS`      | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | Comma-separated HTTP methods allowed in CORS requests     |
 | `CORS_ALLOWED_HEADERS`      | `Content-Type,Authorization`        | Comma-separated request headers the browser may send      |
 | `CORS_EXPOSE_HEADERS`       | _(empty)_                           | Comma-separated response headers the browser may read     |
-| `CORS_SUPPORTS_CREDENTIALS` | `false`                             | Whether cookies and auth headers are allowed              |
+| `CORS_SUPPORTS_CREDENTIALS` | `false`                             | Whether cookies and auth headers are allowed (`true`, `false`, `1`, `0`, `yes`, `no`, `on`, `off`) |
 | `CORS_MAX_AGE`              | `0`                                 | Preflight cache duration in seconds (`0` disables caching)|
 
 To override defaults, publish `config/cors.php` into your application and modify it directly, or set the corresponding environment variables.

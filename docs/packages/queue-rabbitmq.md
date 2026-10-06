@@ -20,16 +20,19 @@ This automatically installs `marko/queue` and `php-amqplib/php-amqplib`. A non-e
 Installing the package binds `QueueInterface`, `FailedJobRepositoryInterface`, a shared `RabbitmqConnection` and the `ExchangeConfig` from `config/queue-rabbitmq.php`. No hand-written bindings are needed. Set the environment variables, or override the file in your app:
 
 ```php title="config/queue-rabbitmq.php"
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['RABBITMQ_HOST'] ?? 'localhost',
-    'port' => (int) ($_ENV['RABBITMQ_PORT'] ?? 5672),
-    'user' => $_ENV['RABBITMQ_USER'] ?? 'guest',
-    'password' => $_ENV['RABBITMQ_PASSWORD'] ?? 'guest',
-    'vhost' => $_ENV['RABBITMQ_VHOST'] ?? '/',
+    'host' => Env::string('RABBITMQ_HOST', 'localhost'),
+    'port' => Env::int('RABBITMQ_PORT', 5672, min: 1, max: 65535),
+    'user' => Env::string('RABBITMQ_USER', 'guest'),
+    'password' => Env::string('RABBITMQ_PASSWORD', 'guest'),
+    'vhost' => Env::string('RABBITMQ_VHOST', '/'),
+    // SSL stream context options (e.g. ['cafile' => '/path/ca.pem', 'verify_peer' => true]), or null for plain TCP
     'tls' => null,
     'exchange' => [
-        'name' => $_ENV['RABBITMQ_EXCHANGE'] ?? 'marko',
-        'type' => $_ENV['RABBITMQ_EXCHANGE_TYPE'] ?? 'direct',
+        'name' => Env::string('RABBITMQ_EXCHANGE', 'marko'),
+        'type' => Env::string('RABBITMQ_EXCHANGE_TYPE', 'direct'),
         'durable' => true,
         'auto_delete' => false,
     ],

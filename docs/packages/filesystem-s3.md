@@ -20,15 +20,17 @@ This automatically installs `marko/filesystem` and `aws/aws-sdk-php`.
 Add an S3 disk to your filesystem config:
 
 ```php title="config/filesystem.php"
+use Marko\Config\Env;
+
 return [
     'default' => 'local',
     'disks' => [
         's3' => [
             'driver' => 's3',
-            'bucket' => $_ENV['AWS_BUCKET'],
-            'region' => $_ENV['AWS_DEFAULT_REGION'],
-            'key' => $_ENV['AWS_ACCESS_KEY_ID'],
-            'secret' => $_ENV['AWS_SECRET_ACCESS_KEY'],
+            'bucket' => Env::string('AWS_BUCKET', ''),
+            'region' => Env::string('AWS_DEFAULT_REGION', ''),
+            'key' => Env::string('AWS_ACCESS_KEY_ID', ''),
+            'secret' => Env::string('AWS_SECRET_ACCESS_KEY', ''),
             'prefix' => '',
         ],
     ],
@@ -40,11 +42,11 @@ For S3-compatible services, add endpoint configuration:
 ```php title="config/filesystem.php"
 's3' => [
     'driver' => 's3',
-    'bucket' => $_ENV['S3_BUCKET'],
-    'region' => $_ENV['S3_REGION'],
-    'key' => $_ENV['S3_KEY'],
-    'secret' => $_ENV['S3_SECRET'],
-    'endpoint' => $_ENV['S3_ENDPOINT'],
+    'bucket' => Env::string('S3_BUCKET', ''),
+    'region' => Env::string('S3_REGION', ''),
+    'key' => Env::string('S3_KEY', ''),
+    'secret' => Env::string('S3_SECRET', ''),
+    'endpoint' => Env::string('S3_ENDPOINT', ''),
     'path_style_endpoint' => true,
 ],
 ```

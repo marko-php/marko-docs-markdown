@@ -24,15 +24,18 @@ All log settings live in `config/log.php`:
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
-    'driver' => $_ENV['LOG_DRIVER'] ?? 'file',
-    'path' => $_ENV['LOG_PATH'] ?? 'storage/logs',
-    'level' => $_ENV['LOG_LEVEL'] ?? 'debug',
-    'channel' => $_ENV['LOG_CHANNEL'] ?? 'app',
+    'driver' => Env::string('LOG_DRIVER', 'file'),
+    'path' => Env::string('LOG_PATH', 'storage/logs'),
+    'level' => Env::string('LOG_LEVEL', 'debug'),
+    'channel' => Env::string('LOG_CHANNEL', 'app'),
     'format' => '[{datetime}] {channel}.{level}: {message} {context}',
     'date_format' => 'Y-m-d H:i:s',
-    'max_files' => (int) ($_ENV['LOG_MAX_FILES'] ?? 30),
-    'max_file_size' => (int) ($_ENV['LOG_MAX_FILE_SIZE'] ?? 10 * 1024 * 1024),
+    'max_files' => Env::int('LOG_MAX_FILES', 30, min: 0),
+    'max_file_size' => Env::int('LOG_MAX_FILE_SIZE', 10 * 1024 * 1024, min: 0),
+    'escape_newlines' => true,
 ];
 ```
 

@@ -83,6 +83,8 @@ class MediaService
 Configure disks in your config file:
 
 ```php title="config/filesystem.php"
+use Marko\Config\Env;
+
 return [
     'default' => 'local',
     'disks' => [
@@ -97,10 +99,10 @@ return [
         ],
         's3' => [
             'driver' => 's3',
-            'bucket' => $_ENV['AWS_BUCKET'],
-            'region' => $_ENV['AWS_DEFAULT_REGION'],
-            'key' => $_ENV['AWS_ACCESS_KEY_ID'],
-            'secret' => $_ENV['AWS_SECRET_ACCESS_KEY'],
+            'bucket' => Env::string('AWS_BUCKET', ''),
+            'region' => Env::string('AWS_DEFAULT_REGION', ''),
+            'key' => Env::string('AWS_ACCESS_KEY_ID', ''),
+            'secret' => Env::string('AWS_SECRET_ACCESS_KEY', ''),
         ],
     ],
 ];

@@ -27,29 +27,25 @@ BROADCASTING_AMPHP_ALLOWED_ORIGINS=https://example.com
 ```
 
 ```php title="config/broadcasting-amphp.php"
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['BROADCASTING_AMPHP_HOST'] ?? '0.0.0.0',
-    'port' => (int) ($_ENV['BROADCASTING_AMPHP_PORT'] ?? 8085),
-    'path' => $_ENV['BROADCASTING_AMPHP_PATH'] ?? '/stream',
-    'health_path' => $_ENV['BROADCASTING_AMPHP_HEALTH_PATH'] ?? '/health',
-    'public_url' => $_ENV['BROADCASTING_AMPHP_PUBLIC_URL'] ?? 'http://localhost:8085',
-    'channel_prefix' => $_ENV['BROADCASTING_AMPHP_CHANNEL_PREFIX'] ?? 'broadcast.',
-    'app_key' => $_ENV['BROADCASTING_AMPHP_APP_KEY'] ?? '',
-    'heartbeat' => (int) ($_ENV['BROADCASTING_AMPHP_HEARTBEAT'] ?? 15),
-    'replay_buffer' => (int) ($_ENV['BROADCASTING_AMPHP_REPLAY_BUFFER'] ?? 100),
-    'replay_ttl' => (int) ($_ENV['BROADCASTING_AMPHP_REPLAY_TTL'] ?? 300),
-    'max_connections' => (int) ($_ENV['BROADCASTING_AMPHP_MAX_CONNECTIONS'] ?? 10000),
-    'max_connections_per_ip' => (int) ($_ENV['BROADCASTING_AMPHP_MAX_CONNECTIONS_PER_IP'] ?? 100),
-    'allowed_origins' => array_values(array_filter(array_map(
-        'trim',
-        explode(',', $_ENV['BROADCASTING_AMPHP_ALLOWED_ORIGINS'] ?? '*'),
-    ))),
-    'trusted_proxies' => array_values(array_filter(array_map(
-        'trim',
-        explode(',', $_ENV['BROADCASTING_AMPHP_TRUSTED_PROXIES'] ?? ''),
-    ))),
-    'token_ttl' => (int) ($_ENV['BROADCASTING_AMPHP_TOKEN_TTL'] ?? 3600),
-    'log_interval' => (int) ($_ENV['BROADCASTING_AMPHP_LOG_INTERVAL'] ?? 60),
+    'host' => Env::string('BROADCASTING_AMPHP_HOST', '0.0.0.0'),
+    'port' => Env::int('BROADCASTING_AMPHP_PORT', 8085, min: 1, max: 65535),
+    'path' => Env::string('BROADCASTING_AMPHP_PATH', '/stream'),
+    'health_path' => Env::string('BROADCASTING_AMPHP_HEALTH_PATH', '/health'),
+    'public_url' => Env::string('BROADCASTING_AMPHP_PUBLIC_URL', 'http://localhost:8085'),
+    'channel_prefix' => Env::string('BROADCASTING_AMPHP_CHANNEL_PREFIX', 'broadcast.'),
+    'app_key' => Env::string('BROADCASTING_AMPHP_APP_KEY', ''),
+    'heartbeat' => Env::int('BROADCASTING_AMPHP_HEARTBEAT', 15, min: 0),
+    'replay_buffer' => Env::int('BROADCASTING_AMPHP_REPLAY_BUFFER', 100, min: 0),
+    'replay_ttl' => Env::int('BROADCASTING_AMPHP_REPLAY_TTL', 300, min: 0),
+    'max_connections' => Env::int('BROADCASTING_AMPHP_MAX_CONNECTIONS', 10000, min: 0),
+    'max_connections_per_ip' => Env::int('BROADCASTING_AMPHP_MAX_CONNECTIONS_PER_IP', 100, min: 0),
+    'allowed_origins' => Env::list('BROADCASTING_AMPHP_ALLOWED_ORIGINS', ['*']),
+    'trusted_proxies' => Env::list('BROADCASTING_AMPHP_TRUSTED_PROXIES', []),
+    'token_ttl' => Env::int('BROADCASTING_AMPHP_TOKEN_TTL', 3600, min: 0),
+    'log_interval' => Env::int('BROADCASTING_AMPHP_LOG_INTERVAL', 60, min: 0),
 ];
 ```
 

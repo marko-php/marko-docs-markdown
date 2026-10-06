@@ -16,14 +16,16 @@ This installs `marko/broadcasting` and `marko/http`. You also need an HTTP clien
 ## Configuration
 
 ```php title="config/broadcasting-pusher.php"
+use Marko\Config\Env;
+
 return [
-    'app_id' => $_ENV['PUSHER_APP_ID'] ?? '',
-    'key' => $_ENV['PUSHER_APP_KEY'] ?? '',
-    'secret' => $_ENV['PUSHER_APP_SECRET'] ?? '',
-    'cluster' => $_ENV['PUSHER_APP_CLUSTER'] ?? 'mt1',
-    'host' => $_ENV['PUSHER_HOST'] ?? '',
-    'port' => (int) ($_ENV['PUSHER_PORT'] ?? 443),
-    'scheme' => $_ENV['PUSHER_SCHEME'] ?? 'https',
+    'app_id' => Env::string('PUSHER_APP_ID', ''),
+    'key' => Env::string('PUSHER_APP_KEY', ''),
+    'secret' => Env::string('PUSHER_APP_SECRET', ''),
+    'cluster' => Env::string('PUSHER_APP_CLUSTER', 'mt1'),
+    'host' => Env::string('PUSHER_HOST', ''),
+    'port' => Env::int('PUSHER_PORT', 443, min: 1, max: 65535),
+    'scheme' => Env::string('PUSHER_SCHEME', 'https'),
     'timeout' => 5,
 ];
 ```

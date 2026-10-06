@@ -16,8 +16,10 @@ composer require marko/routing
 The only setting is the base URL used for absolute URLs from the [URL generator](#named-routes-and-url-generation). It reads `APP_URL`:
 
 ```php title="config/routing.php"
+use Marko\Config\Env;
+
 return [
-    'url' => $_ENV['APP_URL'] ?? '',
+    'url' => Env::string('APP_URL', ''),
 ];
 ```
 

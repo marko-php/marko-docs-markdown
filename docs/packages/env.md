@@ -30,9 +30,13 @@ The `.env` file is optional. Real environment variables always take precedence o
 
 Before reading `.env`, the loader copies every real environment variable (everything `getenv()` returns) into `$_ENV`, without overwriting entries that are already there. This happens even when no `.env` file exists.
 
-PHP only fills `$_ENV` itself when the `variables_order` ini setting contains `E`, and the `php.ini-production` default (`GPCS`) does not. Without mirroring, a config file such as `'host' => $_ENV['DB_HOST'] ?? 'localhost'` would silently fall back to its default in a typical container deployment. With mirroring, `$_ENV` and `getenv()` agree no matter how PHP is configured, so config files can safely read `$_ENV`.
+PHP only fills `$_ENV` itself when the `variables_order` ini setting contains `E`, and the `php.ini-production` default (`GPCS`) does not. Without mirroring, a config file such as `'host' => $_ENV['DB_HOST'] ?? 'localhost'` would silently fall back to its default in a typical container deployment. With mirroring, `$_ENV` and `getenv()` agree no matter how PHP is configured, so config files can safely read `$_ENV`, which is where [`Marko\Config\Env`](/docs/packages/config/#environment-variables) looks first.
 
 ### The `env()` Helper
+
+:::note
+In config files, read environment variables with [`Marko\Config\Env`](/docs/packages/config/#environment-variables) instead. `Env::int()`, `Env::bool()` and the other typed readers throw on a value they can't parse, while `env()` coerces only the strings in the table below and returns everything else unchanged: `DEBUGBAR_ENABLED=off` reaches the config as the string `'off'`. The config files Marko ships no longer call `env()`. `Env` also doesn't treat `null` or `empty` as special words: unset the variable or leave it empty to use the default.
+:::
 
 Retrieve environment variables with automatic type coercion:
 
@@ -64,12 +68,20 @@ ANOTHER_KEY='single quotes too'
 Environment variables should only be referenced in [config](/docs/packages/config/) files, not in application code:
 
 ```php title="config/database.php"
+<?php
+
+declare(strict_types=1);
+
+use Marko\Config\Env;
+
 return [
-    'host' => env('DB_HOST', 'localhost'),
-    'port' => (int) env('DB_PORT', 3306),
-    'name' => env('DB_NAME', 'marko'),
+    'host' => Env::string('DB_HOST', 'localhost'),
+    'port' => Env::int('DB_PORT', 3306, min: 1, max: 65535),
+    'name' => Env::string('DB_NAME', 'marko'),
 ];
 ```
+
+`Env` lives in [marko/config](/docs/packages/config/#environment-variables), which documents every reader, the accepted values, and the rule that an unset or empty variable returns the default.
 
 Application code then reads config values:
 

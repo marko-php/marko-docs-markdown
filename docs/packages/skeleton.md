@@ -67,7 +67,7 @@ marko up
 | Package | Description |
 |---|---|
 | [`marko/framework`](/docs/packages/framework/) | Metapackage bundling core, routing, CLI, errors, config, hashing, validation |
-| [`marko/env`](/docs/packages/env/) | Environment variable loading with `env()` helper |
+| [`marko/env`](/docs/packages/env/) | Environment variable loading (read in config files with [`Env`](/docs/packages/config/#environment-variables)) |
 
 ### Dev Dependencies
 
