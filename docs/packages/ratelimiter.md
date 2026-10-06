@@ -1,6 +1,6 @@
 ---
 title: marko/ratelimiter
-description: Cache-backed rate limiter with route middleware — per-route limits via an attribute, IPv6-safe keys and automatic Retry-After headers.
+description: Cache-backed rate limiter with route middleware — per-route limits via an attribute, IPv6 /64 bucketing, CIDR trusted proxies and automatic Retry-After headers.
 ---
 
 Cache-backed rate limiter with route middleware --- set limits per route with `#[RateLimit]`, throttle by client IP (or any identity you choose), and send `Retry-After` headers automatically. Rate limiting uses the [cache](/docs/packages/cache/) layer to count attempts per key with atomic increments, so it works with every cache driver, including [`marko/cache-redis`](/docs/packages/cache-redis/). When a limit is exceeded, the middleware returns a JSON 429 response. Every response includes `X-RateLimit-Limit` and `X-RateLimit-Remaining` headers so clients can throttle themselves.
@@ -22,6 +22,7 @@ return [
     'default_max_attempts' => 60,
     'default_decay_seconds' => 60,
     'trusted_proxies' => [],
+    'ipv6_prefix' => 64,
 ];
 ```
 
@@ -29,7 +30,8 @@ return [
 |---|---|---|
 | `default_max_attempts` | `60` | Requests allowed per window on a route without a `#[RateLimit]` attribute, or whose attribute leaves `maxAttempts` unset. |
 | `default_decay_seconds` | `60` | Window length in seconds on a route without a `#[RateLimit]` attribute, or whose attribute leaves `decaySeconds` unset. |
-| `trusted_proxies` | `[]` | IP addresses (IPv4 or IPv6) of trusted reverse proxies. When empty, `REMOTE_ADDR` is always used and `X-Forwarded-For` is ignored. |
+| `trusted_proxies` | `[]` | Trusted reverse proxies: IP addresses (IPv4 or IPv6) or CIDR ranges such as `10.0.0.0/8` or `2001:db8::/32`. When empty, `REMOTE_ADDR` is always used and `X-Forwarded-For` is ignored. An invalid entry throws `ClientIpException`. |
+| `ipv6_prefix` | `64` | Network prefix length (1--128) IPv6 clients are bucketed by. `128` keys by the full address. |
 
 ## Usage
 
@@ -93,6 +95,14 @@ Give routes the same `name` to make them share one counter (for example, login a
 
 The middleware asks `RateLimitKeyResolverInterface` who the request belongs to. The default binding, `ClientIpKeyResolver`, returns the real client IP through `ClientIpResolver`. `REMOTE_ADDR` is used directly unless it is a configured trusted proxy. In that case the right-most untrusted hop from `X-Forwarded-For` is used instead. IPv4 and IPv6 clients are both supported.
 
+IPv6 clients are limited per network, not per address. One subscriber is usually handed a whole `/64`, so keying by the full address would let a single client rotate through 2^64 fresh buckets. `ClientIpKeyResolver` masks IPv6 addresses to `ratelimiter.ipv6_prefix` bits (`2001:db8:aa:bb::1` and `2001:db8:aa:bb:dead:beef::7` both become `2001:db8:aa:bb::/64`). IPv4 clients, including IPv4-mapped IPv6 addresses such as `::ffff:203.0.113.9`, are keyed by their full IPv4 address.
+
+Behind a cloud load balancer whose addresses change, trust its subnet with a CIDR range:
+
+```php title="config/ratelimiter.php"
+'trusted_proxies' => ['10.0.0.0/8', 'fd00::/8'],
+```
+
 To limit by user instead of IP, bind your own resolver in your module's `module.php`:
 
 ```php title="app/myapp/module.php"
@@ -108,7 +118,7 @@ return [
 
 ```php title="app/myapp/src/RateLimit/UserKeyResolver.php"
 use Marko\Authentication\AuthManager;
-use Marko\RateLimiter\ClientIpResolver;
+use Marko\RateLimiter\ClientIpKeyResolver;
 use Marko\RateLimiter\Contracts\RateLimitKeyResolverInterface;
 use Marko\Routing\Http\Request;
 
@@ -116,7 +126,7 @@ readonly class UserKeyResolver implements RateLimitKeyResolverInterface
 {
     public function __construct(
         private AuthManager $authManager,
-        private ClientIpResolver $clientIpResolver,
+        private ClientIpKeyResolver $clientIpKeyResolver,
     ) {}
 
     public function resolve(
@@ -124,7 +134,7 @@ readonly class UserKeyResolver implements RateLimitKeyResolverInterface
     ): string {
         $id = $this->authManager->id();
 
-        return $id !== null ? "user:$id" : 'ip:' . $this->clientIpResolver->resolve($request);
+        return $id !== null ? "user:$id" : 'ip:' . $this->clientIpKeyResolver->resolve($request);
     }
 }
 ```
@@ -251,6 +261,8 @@ public function tooManyAttempts(string $key, int $maxAttempts): bool;
 public function clear(string $key): void;
 ```
 
+`attempt()` fails closed: when the cache can't count the attempt (for example, an unwritable or full file cache directory), the driver's `CacheException` propagates instead of the request being allowed.
+
 ### RateLimitResult
 
 ```php
@@ -283,11 +295,11 @@ use Marko\RateLimiter\Contracts\RateLimitKeyResolverInterface;
 public function resolve(Request $request): string;
 ```
 
-Bound to `ClientIpKeyResolver` by default.
+Bound to `ClientIpKeyResolver` by default, which returns the client IP from `ClientIpResolver`, with IPv6 addresses masked to `ratelimiter.ipv6_prefix` bits (for example `2001:db8:aa:bb::/64`). Throws `ClientIpException` if `ipv6_prefix` is outside 1--128.
 
 ### ClientIpResolver
 
-Resolves the real client IP from a request, respecting the `ratelimiter.trusted_proxies` config. When `REMOTE_ADDR` is not in the trusted list, `X-Forwarded-For` is ignored entirely, which prevents header forgery. When it is trusted, the right-most untrusted hop in the `X-Forwarded-For` chain is returned.
+Resolves the real client IP from a request, respecting the `ratelimiter.trusted_proxies` config (exact addresses and CIDR ranges). It returns the full address; use `ClientIpKeyResolver` for a rate-limit key that buckets IPv6 networks. When `REMOTE_ADDR` is not in the trusted list, `X-Forwarded-For` is ignored entirely, which prevents header forgery. When it is trusted, the right-most untrusted hop in the `X-Forwarded-For` chain is returned.
 
 ```php
 use Marko\RateLimiter\ClientIpResolver;
@@ -295,7 +307,7 @@ use Marko\RateLimiter\ClientIpResolver;
 public function resolve(Request $request): string;
 ```
 
-Throws `ClientIpException` if `REMOTE_ADDR` is missing, and `ConfigNotFoundException` if the config key is absent.
+Throws `ClientIpException` if `REMOTE_ADDR` is missing or a `trusted_proxies` entry is not a valid address or CIDR range, and `ConfigNotFoundException` if the config key is absent.
 
 ### RateLimiterConfig
 
@@ -304,6 +316,7 @@ use Marko\RateLimiter\Config\RateLimiterConfig;
 
 public function defaultMaxAttempts(): int;
 public function defaultDecaySeconds(): int;
+public function ipv6Prefix(): int;
 ```
 
 ### RateLimitMiddleware

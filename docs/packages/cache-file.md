@@ -107,11 +107,13 @@ Implements all methods from `CacheInterface`. See `marko/cache` for the full con
 
 ### Errors
 
-`set()`, `setMultiple()` and `increment()` throw `Marko\Cache\File\Exceptions\FileCacheException` (a `CacheException`) when the disk refuses the write. They don't return `false`. The exception context includes the operating system's reason, such as `Permission denied`, `No space left on device` or `Not a directory`.
+`set()`, `setMultiple()` and `increment()` throw `Marko\Cache\File\Exceptions\FileCacheException` (a `CacheException`) when the disk refuses the write. They don't return `false`, and `increment()` never fails open by returning `1`: a rate limiter on a full or unwritable cache directory rejects requests loudly instead of allowing all of them. The exception context includes the operating system's reason, such as `Permission denied`, `No space left on device` or `Not a directory`.
 
 | Method | When thrown |
 |---|---|
 | `FileCacheException::directoryNotCreatable($path, $reason)` | The configured `cache.path` doesn't exist and can't be created |
-| `FileCacheException::writeFailed($path, $reason)` | The temp file can't be written or can't be renamed onto the cache entry; the temp file is removed |
+| `FileCacheException::writeFailed($path, $reason)` | The temp file can't be written or can't be renamed onto the cache entry (the temp file is removed), or `increment()` can't write the new counter value |
+| `FileCacheException::openFailed($path, $reason)` | `increment()` can't open the counter file |
+| `FileCacheException::lockFailed($path, $reason)` | `increment()` can't take an exclusive `flock()` on the counter file |
 
 Every read and write path (`get()`, `has()`, `getItem()`, `getMultiple()`, `set()`, `setMultiple()`, `increment()`) throws `Marko\Cache\Exceptions\TamperedCacheValueException::emptySigningKey()` when `encryption.key` is empty. A tampered entry never throws: it is a miss.
