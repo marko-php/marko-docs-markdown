@@ -88,6 +88,15 @@ The concrete indexer. Holds both the raw key/value cache and the high-level symb
 
 The one swappable seam. Defines the raw cache backend (`get`, `set`, `has`, `invalidate`) so the storage mechanism can be replaced via a `#[Preference]` — e.g. an in-memory or Redis-backed cache instead of the default file cache. The symbol-query methods above are concrete to `IndexCache`; type-hint the concrete class when you need them.
 
+### `IndexCacheException`
+
+Thrown when the cache file can't be written or removed. The context includes the operating system's reason, such as `Permission denied`. A corrupt or unreadable cache file isn't an error: `load()` returns `false` and the next read rebuilds the index, without a PHP warning.
+
+| Method | When thrown |
+|---|---|
+| `IndexCacheException::cacheDirUnwritable($path, $reason)` | `build()` can't create `.marko/` or write `.marko/index.cache` |
+| `IndexCacheException::cacheNotRemovable($path, $reason)` | `invalidate()` can't delete an existing `.marko/index.cache` |
+
 ## Related Packages
 
 - [`marko/mcp`](/docs/packages/mcp/) — MCP server that exposes the index to AI agents

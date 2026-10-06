@@ -135,6 +135,19 @@ Low-level SMTP protocol transport --- manages the socket connection, TLS negotia
 | `data(string $content): void` | Send the message content |
 | `quit(): void` | Close the SMTP session and disconnect |
 
+### Connection and TLS Errors
+
+Connection and STARTTLS failures throw `TransportException` (from [`marko/mail`](/docs/packages/mail/)). The context includes the operating system's or OpenSSL's reason, so you can tell the causes apart. No raw PHP warning is emitted.
+
+```text
+Failed to connect to mail server.
+Could not establish connection to smtp.example.com:587 (Connection refused)
+```
+
+Typical reasons are `Connection refused` (nothing listening on that port), `Connection timed out` (a firewall dropping packets), `getaddrinfo ... failed` (the host name doesn't resolve) and, with `ssl://`, `certificate verify failed`. A failed STARTTLS handshake throws `TransportException::tlsFailed()`, and its context includes the OpenSSL error, for example `SSL routines::wrong version number` when the port doesn't speak TLS.
+
+`TransportException::connectionFailed($host, $port, ?string $reason = null)` and `tlsFailed($host, ?string $reason = null)` take the reason as an optional last argument, so custom transports can pass one too.
+
 ### SmtpConfig
 
 Reads SMTP settings from the `smtp` key in `config/mail.php` via `MailConfig`. The required keys throw `MailException` if absent; `username` and `password` return `null` when not set (no-auth SMTP).

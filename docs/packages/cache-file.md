@@ -90,6 +90,16 @@ Implements all methods from `CacheInterface`. See `marko/cache` for the full con
 
 - Each cache key is hashed with `xxh128` and stored as a `.cache` file in the configured path.
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption.
+- The cache directory is created on the first write. Later writes check `is_dir()` and never call `mkdir()` again.
 - A `null` TTL falls back to `default_ttl` from config. A TTL of `0` or less means the entry never expires.
 - Expired entries are deleted lazily --- on the next `get()`, `has()`, or `getItem()` call for that key.
 - Expiry and `created_at` timestamps come from the PSR-20 `ClockInterface` ([`marko/clock`](/docs/packages/clock/)), not `time()`. Construct the driver with a [`FakeClock`](/docs/packages/testing/#fakeclock) to test expiry without sleeping (see [Expiry and the Clock](/docs/packages/cache/#expiry-and-the-clock)).
+
+### Errors
+
+`set()`, `setMultiple()` and `increment()` throw `Marko\Cache\File\Exceptions\FileCacheException` (a `CacheException`) when the disk refuses the write. They don't return `false`. The exception context includes the operating system's reason, such as `Permission denied`, `No space left on device` or `Not a directory`.
+
+| Method | When thrown |
+|---|---|
+| `FileCacheException::directoryNotCreatable($path, $reason)` | The configured `cache.path` doesn't exist and can't be created |
+| `FileCacheException::writeFailed($path, $reason)` | The temp file can't be written or can't be renamed onto the cache entry; the temp file is removed |

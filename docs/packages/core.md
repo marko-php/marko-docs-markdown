@@ -534,6 +534,20 @@ throw new MarkoException(
 );
 ```
 
+### Capturing PHP Warning Reasons
+
+Many PHP functions (`mkdir()`, `rename()`, `file_put_contents()`, `stream_socket_client()`, `unserialize()`) report failure by returning `false` and raising a warning that holds the only explanation. Don't hide that warning with `@`. Run the call through `Marko\Core\Support\ErrorCapture::run()`, which captures the message instead of emitting it, and put the reason into your exception:
+
+```php
+use Marko\Core\Support\ErrorCapture;
+
+if (!ErrorCapture::run($reason, fn (): bool => rename($tmp, $path))) {
+    throw ExportException::notWritable($path, $reason); // e.g. "rename(...): Permission denied"
+}
+```
+
+`run()` returns the call's result and sets `$reason` to the message, or to `null` when nothing was raised. When the call raises several messages, they're joined with `; `. It always restores the previous error handler, even if the call throws. It captures every error level, so wrap only the one call that can fail.
+
 ## API Reference
 
 ### Attributes
