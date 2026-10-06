@@ -141,6 +141,37 @@ These mistakes fail at boot with a `RouteException` that names the path:
 - a catch-all that is not the whole final segment (`/docs/{path*}/edit`, `/files/v-{path*}`)
 - a parameter name that is not an identifier, or the same name used twice in one path
 
+### Parameter Values and Filesystem Paths
+
+The router matches the raw, still-encoded request path and URL-decodes each parameter value afterwards. That means `%2F` passes a segment pattern like `{file}` and only becomes `/` once decoded, and a web server that passes the path through unnormalised (nginx's `$request_uri`, `curl --path-as-is`) can deliver literal `../` segments. To stop those values from walking a filesystem path, a route doesn't match when a decoded value breaks these rules:
+
+| Parameter | Rejected after decoding |
+|---|---|
+| `{name}` and `{name:regex}` | a `/` (including `%2F`), a value that is exactly `.` or `..`, a NUL byte |
+| `{path*}` | a `.` or `..` segment (`a/../b`, `./a`, `%2E%2E/x`), a NUL byte |
+
+A rejected value is treated like a failed constraint: the router tries the next route and answers 404 if none matches. Dots inside a value are fine (`report.pdf`, `.env`, `v1..2`, `.well-known/x`). A catch-all may contain `/` by design --- spanning segments is what it is for --- so `/assets/{path*}` still matches `/assets/css/app.css` (and `/assets/css%2Fapp.css`) with `path` = `css/app.css`. A value that needs a `/` must use a catch-all.
+
+These checks keep values from climbing out of a directory, but they don't make a value a safe filename on their own. When a parameter becomes part of a filesystem path, join it with `SafePath::join()`, which normalises the path and refuses anything that escapes the base directory:
+
+```php title="AssetController.php"
+use Marko\Routing\SafePath;
+
+#[Get('/assets/{path*}')]
+public function show(string $path): Response
+{
+    $file = SafePath::join('/var/www/app/public/assets', $path);
+
+    if (!is_file($file)) {
+        throw HttpException::notFound();
+    }
+
+    return new Response((string) file_get_contents($file));
+}
+```
+
+`SafePath::join($base, $relative)` drops empty and `.` segments and resolves `..` against the segments before it, so `css/../app.css` becomes `<base>/app.css`. It throws `UnsafePathException` when `$relative` is absolute, contains a NUL byte or climbs above `$base`. The exception implements `HttpExceptionInterface` and renders as a `404` with `{"message": "Not Found"}`; the rejected path is only in the exception message, for your logs. The check is lexical and never touches the filesystem, so a symlink inside the base directory can still point outside it.
+
 ### Route Precedence
 
 Which route handles a URL never depends on registration order, module order or file layout. For each HTTP method the router tries routes in this order:
@@ -191,7 +222,7 @@ $urlGenerator->route('docs', ['path' => 'guides/routing']);        // /docs/guid
 $urlGenerator->route('shows.show', ['id' => 42], absolute: true);  // https://example.com/shows/42
 ```
 
-- Values are URL-encoded with `rawurlencode()`. A `/` in a normal parameter becomes `%2F`. In a catch-all, each segment is encoded and the slashes are kept.
+- Values are URL-encoded with `rawurlencode()`. In a catch-all, each segment is encoded and the slashes are kept.
 - Parameters the path doesn't use are appended as a query string.
 - `absolute: true` prefixes the [configured](#configuration) base URL.
 
@@ -201,6 +232,7 @@ Each of these throws a `UrlGenerationException`:
 - a missing or empty parameter
 - a non-scalar parameter value
 - a value that fails the parameter's constraint
+- a value the router would not match back (see [Parameter Values and Filesystem Paths](#parameter-values-and-filesystem-paths)): a `/`, `.`, `..` or NUL byte in a normal parameter, or a `.`/`..` segment or NUL byte in a catch-all
 - an absolute URL when no base URL is configured
 
 Templates get the same generator through `route()` in [Latte](/docs/packages/view-latte/) and [Twig](/docs/packages/view-twig/).
@@ -600,6 +632,7 @@ These framework exceptions implement `HttpExceptionInterface`, so they render wi
 | Exception | Status | Body |
 |---|---|---|
 | `Marko\Routing\Exceptions\InvalidRouteParameterException` | `400` | `{"message": "Missing required parameter 'id' of type 'int'"}` |
+| `Marko\Routing\Exceptions\UnsafePathException` | `404` | `{"message": "Not Found"}` (never the rejected path) |
 | `Marko\Security\Exceptions\CsrfTokenMismatchException` | `419` | `{"message": "CSRF token mismatch."}` |
 | `Marko\Validation\Exceptions\ValidationException` | `422` | `{"message": "The given data was invalid.", "errors": {"email": ["..."]}}` |
 | `Marko\Database\Exceptions\EntityNotFoundException` | `404` | `{"message": "Not found."}` (never the entity class or ID) |
@@ -747,6 +780,17 @@ class RouteCollection
 ### RouteDefinition
 
 Each route is a `readonly` value object. Every constructor argument is a string or a list of strings (`method`, `path`, `controller`, `action`, `middleware`, `name`, `withoutMiddleware`). The path already includes any prefix. Everything else (`parameters`, `constraints`, `catchAll`, `regex`) is derived from the path.
+
+```php
+public function satisfiesConstraint(string $parameter, string $value): bool;
+public function acceptsValue(string $parameter, string $value): bool; // the decoded-value rules the matcher and URL generator apply
+```
+
+### SafePath
+
+```php
+public static function join(string $base, string $relative): string; // throws UnsafePathException (404) on an absolute path, NUL byte or escape
+```
 
 ### Request
 
@@ -947,4 +991,4 @@ protected function renderHtml(int $statusCode, array $data): Response;
 
 ### Parameter Resolution
 
-The router binds each controller method parameter from, in order: a `Request` type hint → an input attribute (`#[FromQuery]`, `#[FromBody]`, `#[FromInput]`) → a route path param of the same name → the container, for class and interface types → the default value → `null` for a nullable type. Request input never binds a parameter without an attribute (see [Binding Request Input](#binding-request-input)). Values are converted strictly to `int`, `float`, `bool`, `string` or `array`, and a value that does not fit renders a `400`. A required attributed parameter with no value throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; both implement `HttpExceptionInterface` and the pipeline renders them as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). URL-encoded path segments are decoded once before matching.
+The router binds each controller method parameter from, in order: a `Request` type hint → an input attribute (`#[FromQuery]`, `#[FromBody]`, `#[FromInput]`) → a route path param of the same name → the container, for class and interface types → the default value → `null` for a nullable type. Request input never binds a parameter without an attribute (see [Binding Request Input](#binding-request-input)). Values are converted strictly to `int`, `float`, `bool`, `string` or `array`, and a value that does not fit renders a `400`. A required attributed parameter with no value throws `InvalidRouteParameterException`, and a malformed JSON body throws `MalformedJsonException`; both implement `HttpExceptionInterface` and the pipeline renders them as a `400` response (see [Errors and HTTP Exceptions](#errors-and-http-exceptions)). Route path literals containing dots or other regex metacharacters are matched literally (via `preg_quote`). The raw path is matched first and each parameter value is URL-decoded once afterwards; a decoded value with a `/` (outside a catch-all), a `.`/`..` segment or a NUL byte does not match (see [Parameter Values and Filesystem Paths](#parameter-values-and-filesystem-paths)).
