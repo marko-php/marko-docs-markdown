@@ -76,6 +76,30 @@ public ?array $settings = null;
 
 Values are serialized and deserialized automatically. The root value must be an array --- top-level JSON scalars are not supported. See [marko/database](/docs/packages/database/) for JSON query operators (`whereJsonContains`, arrow-path syntax, etc.) and indexing guidance.
 
+### Column Modifications
+
+When an entity changes a column's type, nullability or default, the migration restates the whole column with `MODIFY COLUMN`. Anything the statement leaves out, MySQL resets, so the generator restates what the database already has wherever the entity doesn't say otherwise:
+
+| Kept from the database | When |
+|---|---|
+| Length (`VARCHAR(500)`) | The entity declares no `length` |
+| Default | The entity declares no `default`, and the new type can hold one (`TEXT`, `BLOB` and `JSON` can't) |
+| Native type: precision, `UNSIGNED`, fractional seconds, `ENUM` values (`decimal(12,4) unsigned`) | The entity keeps the same base type and, for `CHAR`/`VARCHAR`/`BINARY`/`VARBINARY`, the same length |
+| Collation (`utf8mb4_bin`) | The column stays a string type. A collation equal to the table default is never pinned |
+| `ON UPDATE CURRENT_TIMESTAMP` | The column stays a `TIMESTAMP` or `DATETIME` |
+
+For example, making a `DECIMAL(12,4) UNSIGNED` column nullable with `#[Column(type: 'decimal')]` generates:
+
+```sql
+ALTER TABLE `products` MODIFY COLUMN `price` decimal(12,4) unsigned NULL DEFAULT '0.0000'
+```
+
+When the entity changes the type, its type wins: `INT UNSIGNED` to `bigint` becomes `BIGINT`. A string column that changes length keeps its collation.
+
+The down migration restates the column exactly as the introspector read it (native type, collation, default and `ON UPDATE`), so `db:rollback` restores the previous schema. A column whose only differences are ones the diff accepts gets no `MODIFY COLUMN` in either direction.
+
+`MODIFY COLUMN` never restates `UNIQUE`: on a column that already has a unique index, it would add a second one. The index diff handles uniqueness.
+
 ### Partial Indexes
 
 MySQL has no partial indexes. Generating SQL for an `#[Index]` with `where:` throws a `MigrationException` naming the index instead of silently creating a full index. Create the index you need by hand in a migration and list it in `#[Table(unmanagedIndexes: [...])]` (see [Hand-Made Indexes](/docs/packages/database/#hand-made-indexes)).
@@ -243,7 +267,7 @@ Implements `ConnectionFactoryInterface`. Creates `MySqlConnection` instances fro
 | `getTables(): array` | List all table names in the database |
 | `getTable(string $name): ?Table` | Get a full `Table` schema object (columns, indexes, foreign keys) |
 | `tableExists(string $name): bool` | Check whether a table exists |
-| `getColumns(string $table): array` | Get column definitions for a table |
+| `getColumns(string $table): array` | Get column definitions for a table, including each column's native type (`nativeType`), a collation that differs from the table default (`collation`) and its `ON UPDATE` expression (`onUpdateExpression`) |
 | `getIndexes(string $table): array` | Get index definitions for a table |
 | `getForeignKeys(string $table): array` | Get foreign key definitions for a table |
 | `getPrimaryKey(string $table): array` | Get primary key column names for a table |

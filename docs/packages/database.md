@@ -1493,11 +1493,12 @@ Changing a column's type, nullability or default on an existing entity generates
 ALTER TABLE "posts" ALTER COLUMN "views" TYPE BIGINT, ALTER COLUMN "views" SET DEFAULT 0
 ```
 
-MySQL restates the whole column with `MODIFY COLUMN`. The down migration puts back the column's previous type, nullability and default, so `db:rollback` reverses the change.
+MySQL restates the whole column with `MODIFY COLUMN`, and keeps what the entity can't declare (precision, `UNSIGNED`, collation, `ON UPDATE`) unless the entity changes the type. See [Column Modifications](/docs/packages/database-mysql/#column-modifications). The down migration puts back the column's previous definition, so `db:rollback` reverses the change.
 
 A few things to know:
 
-- **An undeclared default or length is kept.** If the entity declares no `default`, or no `length`, the column keeps the one the database already has. A migration never drops a default or resizes a `VARCHAR` just because the entity leaves it out.
+- **An undeclared default or length is kept.** If the entity declares no `default`, or no `length`, the column keeps the one the database already has. A migration never drops a default or resizes a `VARCHAR` just because the entity leaves it out. Both drivers apply the same rule, `Column::resolveAgainst()`, which mirrors the tolerances the diff uses to decide that a column is unchanged.
+- **A column with nothing left to change gets no statement.** When every difference is one the diff accepts (an undeclared length or default, or uniqueness, which the index diff handles), neither the up nor the down migration touches the column.
 - **Primary key and auto-increment changes are refused on PostgreSQL.** They need a table rebuild, so generating SQL for one throws a `MigrationException` naming the column. Write that change in a migration by hand.
 - **`SET NOT NULL` needs data that satisfies it.** Making a column required fails if existing rows hold `NULL`. Fill those rows in first.
 
