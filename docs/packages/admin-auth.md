@@ -36,7 +36,7 @@ class CatalogController
 When no admin is logged in, `AdminAuthMiddleware` does one of two things:
 
 - **Redirects** to `{prefix}/login` (`/admin/login` by default) when the request does not want JSON.
-- **Throws a `401` `HttpException`** when the request wants JSON (`Request::wantsJson()`: an `Accept` header with `application/json` or a `+json` type), because an API client can't follow a login redirect.
+- **Throws a `401` `UnauthenticatedException`** (an `HttpException` from `marko/authentication`) when the request wants JSON (`Request::wantsJson()`: an `Accept` header with `application/json` or a `+json` type), because an API client can't follow a login redirect.
 
 The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), so it looks like every other HTTP error in the application:
 
@@ -228,7 +228,7 @@ class AdminAuthMiddleware implements MiddlewareInterface
 }
 ```
 
-Throws `Marko\Routing\Exceptions\HttpException` with status `401` (unauthenticated request that wants JSON) or `403` (missing permission). Unauthenticated requests that don't want JSON get a redirect response to `{prefix}/login`.
+Throws `Marko\Authentication\Exceptions\UnauthenticatedException` with status `401` for an unauthenticated request that wants JSON (with the guard's `WWW-Authenticate` challenge when the guard is stateless), or `Marko\Routing\Exceptions\HttpException` with status `403` for a missing permission. Unauthenticated requests that don't want JSON get a redirect response to `{prefix}/login`.
 
 Permission enforcement relies on the router attaching route context to the request before middleware runs (see [`marko/routing`](/docs/packages/routing/) --- `Request::withRoute()`). If no route context is present, `#[RequiresPermission]` is not evaluated and the request passes through authenticated.
 

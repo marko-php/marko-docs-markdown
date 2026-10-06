@@ -139,7 +139,7 @@ class PostController
 Installing `marko/authorization` registers `AuthorizationMiddleware` as global middleware, so you don't attach it to routes yourself. For every matched route it reads `#[Can]` from the controller action and checks the Gate:
 
 - **No `#[Can]`**: the request passes through untouched.
-- **Not logged in**: throws `HttpException::unauthorized()`, which renders as `401 Unauthorized`.
+- **Not logged in**: throws `UnauthenticatedException` (from `marko/authentication`), which renders as `401 Unauthorized`. When the guard is stateless, such as the [token guard](/docs/packages/authentication-token/), the `401` carries the guard's `WWW-Authenticate` challenge (`WWW-Authenticate: Bearer`), exactly as `AuthMiddleware` sends it.
 - **Logged in but denied**: throws `AuthorizationException`, which renders as `403 Forbidden`.
 
 The middleware never builds these responses itself; see [Failure Responses](#failure-responses).
@@ -252,7 +252,7 @@ Authorization failures are thrown as exceptions that implement `Marko\Core\Excep
 
 | Failure | Thrown by | Exception | Status |
 |---|---|---|---|
-| `#[Can]` route, no authenticated user | `AuthorizationMiddleware` | `Marko\Routing\Exceptions\HttpException` | `401` |
+| `#[Can]` route, no authenticated user | `AuthorizationMiddleware` | `Marko\Authentication\Exceptions\UnauthenticatedException` (an `HttpException`) | `401`, with the guard's `WWW-Authenticate` challenge when the guard is [stateless](/docs/packages/authentication/#stateless-guards) |
 | `#[Can]` route, ability denied | `AuthorizationMiddleware` | `Marko\Authorization\Exceptions\AuthorizationException` | `403` |
 | `$gate->authorize()` denied in a controller or service | `Gate` | `Marko\Authorization\Exceptions\AuthorizationException` | `403` |
 

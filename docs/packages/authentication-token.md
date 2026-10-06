@@ -145,7 +145,7 @@ class ApiController
 }
 ```
 
-A missing, unknown, revoked or expired token gets a `401` with `WWW-Authenticate: Bearer` from `AuthMiddleware`, never a login redirect, because the token guard implements `StatelessGuardInterface`. `#[Can]` answers the same requests with a `401` too.
+A missing, unknown, revoked or expired token gets a `401` with `WWW-Authenticate: Bearer` from `AuthMiddleware`, never a login redirect, because the token guard implements `StatelessGuardInterface`. A route protected only by [`#[Can]`](/docs/packages/authorization/) answers the same requests with the same `401` and `WWW-Authenticate: Bearer` when the token guard is the authorization guard.
 
 ### Stateless Methods
 

@@ -111,7 +111,7 @@ For APIs using bearer tokens:
 $this->auth->guard('api')->user();
 ```
 
-The token guard is stateless: `login()`, `logout()` and `attempt()` throw, and you issue or revoke tokens with `TokenManager` instead. `AuthMiddleware` answers an unauthenticated token request with a `401` and `WWW-Authenticate: Bearer`, never a login redirect.
+The token guard is stateless: `login()`, `logout()` and `attempt()` throw, and you issue or revoke tokens with `TokenManager` instead. `AuthMiddleware` answers an unauthenticated token request with a `401` and `WWW-Authenticate: Bearer`, never a login redirect. A `#[Can]` route on the token guard sends the same `401` and header.
 
 ## Middleware
 
@@ -220,7 +220,7 @@ return [
 ];
 ```
 
-`AuthMiddleware` answers an unauthenticated request on a stateless guard with a `401` carrying its `getChallenge()` value as `WWW-Authenticate`. See [Guard Drivers](/docs/packages/authentication/#guard-drivers).
+Every framework `401` for a guest on a stateless guard (from `AuthMiddleware`, `#[Can]` or `AdminAuthMiddleware`) carries its `getChallenge()` value as `WWW-Authenticate`, because all of them throw `UnauthenticatedException::forGuard()`. See [Guard Drivers](/docs/packages/authentication/#guard-drivers).
 
 ## Events
 

@@ -223,7 +223,17 @@ if ($guard->check()) {
 
 ### Stateless Guards
 
-A guard that authenticates each request from credentials the request carries implements `Marko\Authentication\Contracts\StatelessGuardInterface`. It adds one method to `GuardInterface`, `getChallenge()`, which returns the `WWW-Authenticate` challenge (for example `Bearer`). `AuthMiddleware` never redirects a stateless guard and sends its challenge with the `401`. Its `attempt()`, `login()`, `loginById()` and `logout()` must throw and explain what to do instead, never silently do nothing.
+A guard that authenticates each request from credentials the request carries implements `Marko\Authentication\Contracts\StatelessGuardInterface`. It adds one method to `GuardInterface`, `getChallenge()`, which returns the `WWW-Authenticate` challenge (for example `Bearer`). `AuthMiddleware` never redirects a stateless guard. Every `401` the framework sends for a guest (from `AuthMiddleware`, from `#[Can]` in [marko/authorization](/docs/packages/authorization/#failure-responses), and from `AdminAuthMiddleware`) carries the guard's challenge, because each one is built by `UnauthenticatedException::forGuard()`. Throw the same exception from your own middleware so its `401` looks identical:
+
+```php title="ApiKeyMiddleware.php"
+use Marko\Authentication\Exceptions\UnauthenticatedException;
+
+if (!$guard->check()) {
+    throw UnauthenticatedException::forGuard($guard); // 401, plus WWW-Authenticate for a stateless guard
+}
+```
+
+A stateless guard's `attempt()`, `login()`, `loginById()` and `logout()` must throw and explain what to do instead, never silently do nothing.
 
 ### Guard Drivers
 
@@ -463,7 +473,7 @@ class DashboardController
 When the request is not authenticated, `AuthMiddleware` does one of two things:
 
 - **Redirects** to `redirectTo` (default `/login`) when the guard is stateful, such as `SessionGuard`, and the request does not want JSON. A redirect is a real response, not an error.
-- **Throws a `401` `HttpException`** otherwise: when `redirectTo` is `null`, when the request wants JSON (`Request::wantsJson()`, whatever the guard), and always for a [stateless guard](#stateless-guards) such as the token guard, because API clients can't follow a login redirect. A stateless guard's `401` also carries its `WWW-Authenticate` challenge (`WWW-Authenticate: Bearer` for the token guard).
+- **Throws a `401` `UnauthenticatedException`** (an `HttpException`) otherwise: when `redirectTo` is `null`, when the request wants JSON (`Request::wantsJson()`, whatever the guard), and always for a [stateless guard](#stateless-guards) such as the token guard, because API clients can't follow a login redirect. A stateless guard's `401` also carries its `WWW-Authenticate` challenge (`WWW-Authenticate: Bearer` for the token guard).
 
 The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), so the format comes from the request, not from the guard. It is JSON when the `Accept` header asks for `application/json` or a `+json` type (or when the request has a JSON `Content-Type` and no `Accept`), and a minimal HTML page otherwise:
 
@@ -639,6 +649,14 @@ Extends `GuardInterface`:
 
 ```php
 public function getChallenge(): string;
+```
+
+### UnauthenticatedException
+
+Extends `Marko\Routing\Exceptions\HttpException`. Its message is `Unauthorized.`, and the guard name goes in the log-only context:
+
+```php
+public static function forGuard(GuardInterface $guard): self; // 401; adds WWW-Authenticate: getChallenge() for a StatelessGuardInterface
 ```
 
 ### GuardDriverRegistry
