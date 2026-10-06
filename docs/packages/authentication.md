@@ -402,21 +402,32 @@ class DashboardController
 }
 ```
 
-For web routes, configure a redirect:
+When the request is not authenticated, `AuthMiddleware` does one of two things:
 
-```php
-// In module.php bindings
-new AuthMiddleware(
-    auth: $authManager,
-    redirectTo: '/login',
-);
-```
+- **Redirects** to `redirectTo` (default `/login`) when the guard is stateful, such as `SessionGuard`. A redirect is a real response, not an error.
+- **Throws `HttpException::unauthorized()`** when `redirectTo` is `null`, and always for `TokenGuard`, because API clients can't follow a login redirect.
 
-For API routes using TokenGuard, unauthenticated requests receive a 401 JSON response:
+The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), so the format comes from the request, not from the guard. It is JSON when the `Accept` header asks for `application/json` or a `+json` type (or when the request has a JSON `Content-Type` and no `Accept`), and a minimal HTML page otherwise:
 
 ```json
-{"error": "Unauthorized"}
+{"message": "Unauthorized."}
 ```
+
+To disable the redirect for a web guard, register a binding with `redirectTo: null`:
+
+```php title="module.php"
+use Marko\Authentication\AuthManager;
+use Marko\Authentication\Middleware\AuthMiddleware;
+use Marko\Core\Container\ContainerInterface;
+
+// In 'bindings'
+AuthMiddleware::class => fn (ContainerInterface $container): AuthMiddleware => new AuthMiddleware(
+    auth: $container->get(AuthManager::class),
+    redirectTo: null,
+),
+```
+
+To change how the `401` looks (a branded page, a different JSON shape), replace `ExceptionRenderer` with a `#[Preference]`. See [Custom error pages](/docs/packages/routing/#custom-error-pages). Authorization failures from `#[Can]` and `Gate::authorize()` use the same renderer; see [Failure Responses](/docs/packages/authorization/#failure-responses).
 
 ### GuestMiddleware
 

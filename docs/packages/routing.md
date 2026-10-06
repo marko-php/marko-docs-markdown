@@ -518,6 +518,7 @@ These framework exceptions implement `HttpExceptionInterface`, so they render wi
 | `Marko\Database\Exceptions\EntityNotFoundException` | `404` | `{"message": "Not found."}` (never the entity class or ID) |
 | `Marko\Database\Exceptions\UniqueConstraintViolationException` | `409` | `{"message": "Conflict."}` (never the constraint, SQL or values) |
 | `Marko\Database\Exceptions\ForeignKeyConstraintViolationException` | `409` | `{"message": "Conflict."}` (never the constraint, SQL or values) |
+| `Marko\Authorization\Exceptions\AuthorizationException` | `403` | `{"message": "Forbidden."}` (never the ability or resource) |
 
 Your own exceptions can implement the interface too --- useful for domain exceptions in packages that should not depend on `marko/routing`:
 

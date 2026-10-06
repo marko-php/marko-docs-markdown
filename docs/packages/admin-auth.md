@@ -105,6 +105,7 @@ $permissionRegistry->matches('catalog.products.*', 'catalog.orders'); // false
 
 ```php title="OrderService.php"
 use Marko\AdminAuth\Entity\AdminUserInterface;
+use Marko\Routing\Exceptions\HttpException;
 
 class OrderService
 {
@@ -113,7 +114,7 @@ class OrderService
         int $orderId,
     ): void {
         if (!$adminUser->hasPermission('orders.cancel')) {
-            throw new AuthorizationException('Cannot cancel orders');
+            throw HttpException::forbidden('Cannot cancel orders.');
         }
 
         if ($adminUser->hasRole('super-admin')) {

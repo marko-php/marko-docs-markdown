@@ -66,6 +66,8 @@ $this->gate->authorize('edit-settings');
 // Throws AuthorizationException if denied
 ```
 
+You don't need to catch it in a controller. `AuthorizationException` implements `HttpExceptionInterface`, so the routing pipeline turns an uncaught denial into a `403` (see [Failure Responses](#failure-responses)).
+
 ### Using Policies
 
 Policies group authorization logic per entity. Create a policy class with methods named after abilities:
@@ -137,10 +139,10 @@ class PostController
 Installing `marko/authorization` registers `AuthorizationMiddleware` as global middleware, so you don't attach it to routes yourself. For every matched route it reads `#[Can]` from the controller action and checks the Gate:
 
 - **No `#[Can]`**: the request passes through untouched.
-- **Not logged in**: returns `401 Unauthorized`.
-- **Logged in but denied**: returns `403 Forbidden`.
+- **Not logged in**: throws `HttpException::unauthorized()`, which renders as `401 Unauthorized`.
+- **Logged in but denied**: throws `AuthorizationException`, which renders as `403 Forbidden`.
 
-When the request's `Accept` header contains `application/json`, both responses are JSON: `{"error":"Unauthorized"}` or `{"error":"Forbidden"}`.
+The middleware never builds these responses itself; see [Failure Responses](#failure-responses).
 
 The middleware checks authentication with the same guard the Gate uses, so the guard named by `authorization.default_guard` decides whether the request gets a `401`. If that value is `null`, the authentication default guard is used.
 
@@ -223,6 +225,31 @@ readonly class PostController
 }
 ```
 
+### Failure Responses
+
+Authorization failures are thrown as exceptions that implement `Marko\Core\Exceptions\HttpExceptionInterface`. The routing pipeline renders them through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), in the same way as every other HTTP error:
+
+| Failure | Thrown by | Exception | Status |
+|---|---|---|---|
+| `#[Can]` route, no authenticated user | `AuthorizationMiddleware` | `Marko\Routing\Exceptions\HttpException` | `401` |
+| `#[Can]` route, ability denied | `AuthorizationMiddleware` | `Marko\Authorization\Exceptions\AuthorizationException` | `403` |
+| `$gate->authorize()` denied in a controller or service | `Gate` | `Marko\Authorization\Exceptions\AuthorizationException` | `403` |
+
+The renderer picks the format from the request. It sends JSON when the `Accept` header asks for `application/json` or any `+json` type (such as `application/vnd.api+json`), or when the request has a JSON `Content-Type` and no `Accept` header. Otherwise it sends a minimal HTML page:
+
+```json
+{"message": "Unauthorized."}
+{"message": "Forbidden."}
+```
+
+The `403` body never contains the ability or the resource name, because they can leak internals. Both stay on the exception for logging, through `getAbility()` and `getResource()`.
+
+A `Gate` has no notion of a guest. A denied `authorize()` call is always a `403`, even when nobody is logged in. Use `#[Can]` (or [`AuthMiddleware`](/docs/packages/authentication/#authmiddleware)) when a guest should get a `401`.
+
+To render branded error pages or a different JSON shape, replace `ExceptionRenderer` with a `#[Preference]`. See [Custom error pages](/docs/packages/routing/#custom-error-pages) in the routing docs. Authorization failures go through it like any other HTTP error, so nothing authorization-specific is needed.
+
+Mistakes in policy setup are a different case: registering two policies for one entity, or checking an ability the policy has no method for. These throw `PolicyException`, which does **not** implement `HttpExceptionInterface`. It reaches your error handler as a `500` with the full message, instead of being hidden behind a `403`.
+
 ### Implementing AuthorizableInterface
 
 Your user entity must implement `AuthorizableInterface`, which extends [`AuthenticatableInterface`](/docs/packages/authentication/):
@@ -298,23 +325,38 @@ class AuthorizationMiddleware implements MiddlewareInterface
 
 ### AuthorizationException
 
+Rendered as `403` with `{"message": "Forbidden."}`. The ability and resource are never sent to the client.
+
 ```php
-class AuthorizationException extends Exception
+class AuthorizationException extends MarkoException implements HttpExceptionInterface
 {
     public function __construct(
-        string $message,
+        string $message = 'Forbidden',
         string $ability = '',
         string $resource = '',
         string $context = '',
         string $suggestion = '',
+        ?Throwable $previous = null,
     );
 
     public function getAbility(): string;
     public function getResource(): string;
-    public function getContext(): string;
-    public function getSuggestion(): string;
+    public function getStatusCode(): int;          // 403
+    public function getHeaders(): array;           // []
+    public function getResponseData(): array;      // ['message' => 'Forbidden.']
 
     public static function forbidden(string $ability, string $resource): self;
-    public static function missingPolicy(string $entityClass, string $ability): self;
+}
+```
+
+### PolicyException
+
+Thrown for policy misconfiguration. It is not an HTTP exception, so it surfaces as a `500`.
+
+```php
+class PolicyException extends MarkoException
+{
+    public static function duplicatePolicy(string $entityClass, string $policyClass, string $existing): self;
+    public static function missingMethod(string $policyClass, string $ability): self;
 }
 ```
