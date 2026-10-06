@@ -136,7 +136,7 @@ Resolves the project's base path for the packaged `worker.php`, in order: the `M
 
 ### `Marko\Roadrunner\Http\Psr7RequestBridge` / `Psr7ResponseBridge`
 
-Convert between PSR-7 messages and `Marko\Routing\Http\Request`/`Response`. `Psr7RequestBridge` maps PSR-7 uploaded files to `Marko\Routing\Http\UploadedFile`; `removeTemporaryFiles()` deletes any temporary upload files it had to write. `Psr7ResponseBridge` consumes `Response::headerLines()` and uses `withAddedHeader()` for `Set-Cookie` so multiple cookies on one response are preserved rather than overwritten.
+Convert between PSR-7 messages and `Marko\Routing\Http\Request`/`Response`. `Psr7RequestBridge` maps PSR-7 uploaded files to `Marko\Routing\Http\UploadedFile`; `removeTemporaryFiles()` deletes any temporary upload files it had to write. When building `$_SERVER`, it drops any request header whose name contains an underscore (e.g. `X_Forwarded_For`), matching nginx's default `underscores_in_headers off` behaviour in front of PHP-FPM. Without this, `X_Forwarded_For` and `X-Forwarded-For` would both map to `HTTP_X_FORWARDED_FOR`, letting a client override a proxy-set header and spoof the client IP or scheme. Send custom headers with dashes, not underscores. `Psr7ResponseBridge` consumes `Response::headerLines()` and uses `withAddedHeader()` for `Set-Cookie` so multiple cookies on one response are preserved rather than overwritten.
 
 ### `Marko\Roadrunner\GuardRails\UnsafePackageChecker`
 
