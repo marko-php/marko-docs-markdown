@@ -19,7 +19,7 @@ Override defaults in your config file:
 
 ```php title="config/webhook.php"
 return [
-    'timeout'             => 30,  // seconds before the HTTP request times out
+    'timeout'             => 30,  // seconds before an outgoing webhook request is abandoned; must be > 0
     'max_retries'         => 3,   // maximum delivery attempts (including the first)
     'retry_delay'         => 60,  // base delay in seconds; multiplied exponentially per attempt
     'timestamp_tolerance' => 300, // seconds a webhook timestamp may differ from server time
@@ -27,6 +27,8 @@ return [
 ```
 
 With the defaults, a job that fails on every attempt retries at 120 s, 240 s, and 480 s.
+
+`WebhookDispatcher` passes `timeout` to the HTTP client on every delivery, so a receiver that accepts the connection and never answers fails the attempt after that many seconds instead of blocking the queue worker. The timed-out attempt is recorded as a failure and retried like any other transport error. `timeout` must be a positive integer: `0` would mean "wait forever" to the HTTP client, so `WebhookConfig` throws a `ConfigException` naming `webhook.timeout` for `0` or a negative value. That check runs wherever `WebhookConfig` is resolved, so a bad value fails loudly both when sending and when receiving webhooks. A missing `timeout` throws `ConfigNotFoundException`.
 
 The `timestamp_tolerance` controls replay-attack protection for inbound webhooks. Requests whose `X-Webhook-Timestamp` header is more than this many seconds in the past or future are rejected.
 
@@ -96,10 +98,10 @@ The job decides what to do from the outcome of each attempt:
 
 | Outcome | Recorded as | Retried |
 |---|---|---|
-| `2xx` response | Success: status code and response body | No |
+| `2xx` response | Success: status code and response body (capped at 500 bytes) | No |
 | `408`, `429` or `5xx` response | Failure: status code, response body (capped at 500 bytes) and `Webhook receiver responded with HTTP {status}.` | Yes |
 | Any other non-2xx response (`3xx`, other `4xx`) | Failure, same fields | No. The receiver will answer the same way again |
-| Receiver unreachable (connection or transport error) | Failure: the error message | Yes |
+| Receiver unreachable or too slow (connection error, transport error, or no answer within `timeout` seconds) | Failure: the error message | Yes |
 
 Retries go back onto the queue with `retry_delay * 2^attempt` seconds of delay until `max_retries` attempts have been made. When `max_retries` or `retry_delay` is missing from config, the attempt is still recorded but not retried. Only the send is retried: if recording a delivered webhook fails (for example, the database is down), the exception propagates instead of sending the webhook again.
 
@@ -156,7 +158,9 @@ class StripeWebhookController
 
 ### Delivery Tracking
 
-Every attempt is saved to the `webhook_attempts` table via `WebhookDeliveryService`. Successful attempts store the HTTP status code and response body. Attempts the receiver rejected with a non-2xx status store the status code, the response body (capped at 500 bytes) and an error message. Attempts that never reached the receiver store only the error message. Use `WebhookAttemptRepositoryInterface` to query the records:
+Every attempt is saved to the `webhook_attempts` table via `WebhookDeliveryService`. Successful attempts store the HTTP status code and response body. Attempts the receiver rejected with a non-2xx status store the status code, the response body and an error message. Attempts that never reached the receiver, or got no answer within `timeout` seconds, store only the error message.
+
+Every recorded response body, successful or rejected, is trimmed and capped at 500 bytes. A longer body is cut at a UTF-8 character boundary and ends with `... [truncated N bytes]`, so a receiver that returns a large page cannot overflow the `response_body` column after the webhook was already delivered. Use `WebhookAttemptRepositoryInterface` to query the records:
 
 ```php
 use Marko\Webhook\Contracts\WebhookAttemptRepositoryInterface;
@@ -197,12 +201,22 @@ public function isRetryable(): bool;  // true for 408, 429 and 5xx
 ### WebhookDispatcher
 
 ```php
+use Marko\Http\Contracts\HttpClientInterface;
+use Marko\Webhook\Config\WebhookConfig;
 use Marko\Webhook\Sending\WebhookDispatcher;
 use Marko\Webhook\Value\WebhookPayload;
 use Marko\Webhook\Value\WebhookResponse;
+use Psr\Clock\ClockInterface;
+
+public function __construct(
+    HttpClientInterface $httpClient,
+    ClockInterface $clock,
+    WebhookConfig $config,
+);
 
 // Returns a WebhookResponse for every HTTP response (4xx/5xx included).
-// @throws HttpException|ConnectionException when the receiver cannot be reached
+// Sends webhook.timeout as the request timeout.
+// @throws HttpException|ConnectionException when the receiver cannot be reached or does not answer in time
 public function dispatch(WebhookPayload $payload): WebhookResponse;
 ```
 
@@ -255,8 +269,9 @@ use Marko\Webhook\Sending\WebhookDeliveryService;
 use Marko\Webhook\Value\WebhookPayload;
 use Marko\Webhook\Value\WebhookResponse;
 
-public function recordSuccess(WebhookPayload $payload, WebhookResponse $response, int $attempt): void;
-public function recordRejection(WebhookPayload $payload, WebhookResponse $response, int $attempt): void; // non-2xx; body capped at 500 bytes
+// Both store the response body trimmed and capped at 500 bytes (HttpResponse::bodyExcerpt())
+public function recordSuccess(WebhookPayload $payload, WebhookResponse $response, int $attempt): void;   // 2xx
+public function recordRejection(WebhookPayload $payload, WebhookResponse $response, int $attempt): void; // non-2xx
 public function recordFailure(WebhookPayload $payload, string $error, int $attempt): void;
 ```
 
@@ -269,7 +284,7 @@ public function recordFailure(WebhookPayload $payload, string $error, int $attem
 | `event`          | string | Event name                         |
 | `attempt_number` | int    | Which attempt this record covers   |
 | `status_code`    | int    | HTTP status code (null when the receiver was unreachable) |
-| `response_body`  | string | Response body (capped at 500 bytes for a rejection; null when unreachable) |
+| `response_body`  | string | Response body, trimmed and capped at 500 bytes (null when unreachable or timed out) |
 | `error_message`  | string | Error message (failures and rejections only) |
 | `attempted_at`   | string | Timestamp in `Y-m-d H:i:s` format, in the [database timezone](/docs/packages/database/#datetimes-and-timezones) (UTC by default) |
 
@@ -278,7 +293,7 @@ public function recordFailure(WebhookPayload $payload, string $error, int $attem
 ```php
 use Marko\Webhook\Config\WebhookConfig;
 
-public int $timeout;             // from webhook.timeout
+public int $timeout;             // from webhook.timeout; ConfigException when not positive
 public int $maxRetries;          // from webhook.max_retries
 public int $retryDelay;          // from webhook.retry_delay
 public int $timestampTolerance;  // from webhook.timestamp_tolerance
