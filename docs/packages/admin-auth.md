@@ -35,6 +35,69 @@ Earlier versions shipped hand-written MySQL migrations in `database/migrations/`
 
 ## Usage
 
+### The Admin Guard
+
+The admin area authenticates on its own guard, never the application's default guard. The package merges this guard into `authentication` config:
+
+```php title="vendor/marko/admin-auth/config/authentication.php"
+return [
+    'guards' => [
+        'admin' => ['driver' => 'session', 'provider' => 'admins'],
+    ],
+    'providers' => [
+        'admins' => ['class' => AdminUserProvider::class],
+    ],
+];
+```
+
+`admin-auth.guard` names the guard the admin area uses (`admin` by default):
+
+```php title="config/admin-auth.php"
+return [
+    'guard' => 'admin',
+    'super_admin_role' => 'super-admin',
+];
+```
+
+`AdminAuthMiddleware`, the [admin panel](/docs/packages/admin-panel/) login and logout, and the [admin API](/docs/packages/admin-api/) resolve that guard by name through `AdminGuardResolver` (`AuthManager::guard($config->getGuardName())`). Because the `admin` guard has its own provider and its own session key (`auth_admin_user_id`), the admin and frontend logins are separate: a customer logged in on the frontend is a guest in the admin area, and an admin login never logs into the frontend. The package does not bind `UserProviderInterface`, so your frontend provider binding stays in place. See [User Providers](/docs/packages/authentication/#user-providers).
+
+Resolve the admin guard in your own admin code the same way:
+
+```php title="ReportController.php"
+use Marko\AdminAuth\AdminGuardResolver;
+
+readonly class ReportController
+{
+    public function __construct(
+        private AdminGuardResolver $adminGuard,
+    ) {}
+
+    public function index(): Response
+    {
+        $admin = $this->adminGuard->guard()->user();
+        // ...
+    }
+}
+```
+
+To serve the admin area through a token guard instead, for example a headless admin on [`marko/admin-api`](/docs/packages/admin-api/), define a token guard on the `admins` provider and point `admin-auth.guard` at it:
+
+```php title="config/authentication.php"
+return [
+    'guards' => [
+        'admin-api' => ['driver' => 'token', 'provider' => 'admins'],
+    ],
+];
+```
+
+```php title="config/admin-auth.php"
+return [
+    'guard' => 'admin-api',
+];
+```
+
+In tests, authenticate an admin on the admin guard with the [HTTP test client](/docs/packages/testing/): `actingAs($admin, guard: 'admin')`.
+
 ### Protecting Admin Routes
 
 Add `AdminAuthMiddleware` to controller methods or classes to require authentication:
@@ -60,7 +123,9 @@ When no admin is logged in, `AdminAuthMiddleware` does one of two things:
 - **Redirects** to `{prefix}/login` (`/admin/login` by default) when the guard is stateful (the session guard) and the request does not want JSON.
 - **Throws a `401` `UnauthenticatedException`** (an `HttpException` from `marko/authentication`) in every other case: when the request wants JSON (`Request::wantsJson()`: an `Accept` header with `application/json` or a `+json` type), and always when the guard is stateless (`StatelessGuardInterface`, such as the token guard), whatever the `Accept` header, because an API client can't follow a login redirect. On a stateless guard the `401` carries the guard's `WWW-Authenticate` challenge (`Bearer` for the token guard), the same response [`AuthMiddleware`](/docs/packages/authentication/) sends.
 
-`AdminAuthMiddleware` uses the default guard (`GuardInterface`), so an application whose default guard is the token guard, such as a headless admin served through [`marko/admin-api`](/docs/packages/admin-api/), never redirects.
+`AdminAuthMiddleware` uses the [admin guard](#the-admin-guard) (`admin-auth.guard`), so when that guard is a token guard, such as a headless admin served through [`marko/admin-api`](/docs/packages/admin-api/), it never redirects.
+
+A user the admin guard authenticates that is not an `AdminUserInterface` gets a `403` on every admin route, whether or not the route requires a permission.
 
 The routing pipeline renders the thrown `401` through [`ExceptionRenderer`](/docs/packages/routing/#errors-and-http-exceptions), so it looks like every other HTTP error in the application:
 
@@ -282,18 +347,18 @@ class OrderService
 `AdminUser` implements `AdminUserInterface` and integrates with the [authentication](/docs/packages/authentication/) system:
 
 ```php title="DashboardController.php"
+use Marko\AdminAuth\AdminGuardResolver;
 use Marko\AdminAuth\Entity\AdminUserInterface;
-use Marko\Authentication\Contracts\GuardInterface;
 
 readonly class DashboardController
 {
     public function __construct(
-        private GuardInterface $guard,
+        private AdminGuardResolver $adminGuard,
     ) {}
 
     public function index(): Response
     {
-        $user = $this->guard->user();
+        $user = $this->adminGuard->guard()->user();
 
         if ($user instanceof AdminUserInterface) {
             $name = $user->getName();
@@ -413,7 +478,7 @@ class AdminAuthMiddleware implements MiddlewareInterface
 }
 ```
 
-Throws `Marko\Authentication\Exceptions\UnauthenticatedException` with status `401` for an unauthenticated request that wants JSON or whose guard is stateless (with the guard's `WWW-Authenticate` challenge when the guard is stateless), or `Marko\Routing\Exceptions\HttpException` with status `403` for a missing permission. An unauthenticated request on a stateful guard that doesn't want JSON gets a redirect response to `{prefix}/login`; a stateless guard never redirects.
+Throws `Marko\Authentication\Exceptions\UnauthenticatedException` with status `401` for an unauthenticated request that wants JSON or whose guard is stateless (with the guard's `WWW-Authenticate` challenge when the guard is stateless), or `Marko\Routing\Exceptions\HttpException` with status `403` for a user that is not an `AdminUserInterface` or lacks the required permission. An unauthenticated request on a stateful guard that doesn't want JSON gets a redirect response to `{prefix}/login`; a stateless guard never redirects.
 
 Permission enforcement relies on the router attaching route context to the request before middleware runs (see [`marko/routing`](/docs/packages/routing/) --- `Request::withRoute()`). If no route context is present, `#[RequiresPermission]` is not evaluated and the request passes through authenticated.
 
@@ -482,6 +547,15 @@ readonly class UnregisteredPermission
 `getPermissionsForRoles()` returns the deduplicated permission set across all given role IDs in a single query. Empty input returns an empty array without issuing a query.
 
 `syncPermissions()` replaces a role's permissions and `syncRoles()` replaces an admin user's roles. Each deletes the existing rows and inserts the new set in batches, all inside one `transaction()`. A failure part-way through rolls the whole sync back, so a role is never left half-synced and a user keeps their previous roles when an id is unknown or repeated (the foreign key or the unique index rejects it). Called inside your own transaction, the sync runs in a savepoint. If it fails, only the sync's changes are undone, and you can catch the exception and still commit the rest of your transaction.
+
+### AdminGuardResolver
+
+```php
+readonly class AdminGuardResolver
+{
+    public function guard(): GuardInterface; // AuthManager::guard(admin-auth.guard)
+}
+```
 
 ### AdminAuthConfigInterface
 

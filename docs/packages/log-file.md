@@ -146,8 +146,10 @@ The constructor accepts the following parameters:
 | `$formatter` | `LogFormatterInterface` | Formats log records into strings |
 | `$clock` | `ClockInterface` | PSR-20 clock that stamps each record |
 | `$rotation` | `?RotationStrategyInterface` | Rotation strategy (defaults to `DailyRotation` on the same clock) |
+| `$fileMode` | `int` | Mode applied to newly created log files (default `0600`, from `log.file_mode`) |
+| `$dirMode` | `int` | Mode applied to a newly created log directory (default `0700`, from `log.dir_mode`) |
 
-Writes use `FILE_APPEND | LOCK_EX` for safe concurrent appends. The log directory is created automatically if it does not exist. A `LogWriteException` is thrown if the directory is not writable or a write fails.
+Writes use `FILE_APPEND | LOCK_EX` for safe concurrent appends. The log directory is created automatically if it does not exist, with `$dirMode`. Each new log file is created empty and `chmod`-ed to `$fileMode` before the first record is written, so log content is never readable by other local users under a permissive umask. Existing files and directories keep their current permissions. Set `log.file_mode` to `0640` and `log.dir_mode` to `0750` if a log shipper running as a group member needs read access. A `LogWriteException` is thrown if the directory is not writable, the mode cannot be applied, or a write fails.
 
 ### RotationStrategyInterface
 
