@@ -103,7 +103,7 @@ Create a directory in `app/` with a `composer.json`:
 app/
   mymodule/
     composer.json    # Required: name, autoload
-    module.php       # Optional: enabled, bindings
+    module.php       # Optional: enabled, sequence, bindings, singletons, boot, globalMiddleware, discovery
     src/
       MyService.php
 ```
@@ -273,9 +273,17 @@ class RefundCommand implements CommandInterface
 
 ### Discovery Cache
 
-On every boot, Marko scans all module PHP files to discover `#[Preference]`, `#[Plugin]`, `#[Observer]`, and `#[Command]` attributes. In production this scan can be eliminated by compiling its results into a single PHP file --- the discovery cache.
+Without a cache, every boot discovers the application from scratch: it scans every `vendor/*/*` package and parses its `composer.json` to find modules, sorts them by dependency, scans every module PHP file for `#[Preference]`, `#[Plugin]`, `#[Observer]`, `#[Command]` and route attributes, resolves global middleware, and (with `marko/database`) scans for entities. Boot cost grows with every class in the app. In production all of this is compiled once into a single PHP file --- the discovery cache --- so a request skips every scan.
 
-**Routes are deliberately not part of the discovery cache.** `Application::initialize()` always runs route discovery live on every boot, in every environment --- so adding or changing a `#[Get]`, `#[Post]`, or any other route attribute takes effect on the next request with no rebuild, ever. The cache covers only the four attribute types listed above.
+The cache holds:
+
+- the resolved module list, in load order (the `composer.json` fields only --- each `module.php` is still loaded, so its bindings and `boot` closures stay live)
+- preferences, plugins, observers and commands
+- the global middleware order
+- one section per [discovery contributor](#adding-a-section-to-the-discovery-cache): routes from [`marko/routing`](/docs/packages/routing/#route-cache), entities from [`marko/database`](/docs/packages/database/#entity-discovery-cache)
+- a fingerprint of the installed packages and module directories, so a stale cache fails loudly
+
+On a cached boot no `vendor/` directory is scanned, no `composer.json` is parsed and no PHP file is tokenized. Controllers and other classes load only when a request needs them.
 
 #### Compiling the cache
 
@@ -292,7 +300,12 @@ preferences: 4
 plugins: 12
 observers: 7
 commands: 9
+modules: 31
+global middleware: 3
+sections: routes (48), entities (12)
 ```
+
+`discovery:cache` and `discovery:clear` always boot from live discovery, so they work even when the existing cache is stale, corrupt or from an older version.
 
 #### Clearing the cache
 
@@ -320,9 +333,76 @@ The cache is used when **all three conditions** are true:
 
 If the cache file is **missing**, boot falls back to a normal full rescan --- no error.
 
-If the cache file is **corrupt, malformed, or version-mismatched**, boot throws `DiscoveryCacheException` immediately. There is no silent fallback. Run `marko discovery:clear` then `marko discovery:cache` to rebuild.
+If the cache file is **corrupt, malformed, version-mismatched or stale**, boot throws `DiscoveryCacheException` immediately. There is no silent fallback and the cache is never rebuilt behind your back. Run `marko discovery:cache` to rebuild it, or `marko discovery:clear` to go back to live discovery.
 
-In a **development** environment (`development`, `dev`, or `local` --- the skeleton ships `APP_ENV=local`) the cache is always bypassed, so adding or editing a `#[Plugin]`, `#[Observer]`, `#[Preference]`, or `#[Command]` takes effect on the next request without any manual step.
+In a **development** environment (`development`, `dev`, or `local` --- the skeleton ships `APP_ENV=local`) the cache is always bypassed, so adding or editing a module, route, `#[Plugin]`, `#[Observer]`, `#[Preference]`, or `#[Command]` takes effect on the next request without any manual step.
+
+#### Stale cache detection
+
+The cache stores a fingerprint of:
+
+- the contents of `vendor/composer/installed.json` --- any `composer install`, `update`, `require` or `remove` changes it
+- every directory holding a `composer.json` under `modules/` (recursively, stopping at a module) and `app/` (one level), with a hash of that `composer.json`
+
+Each boot recomputes the fingerprint (one file hash plus a directory listing of `modules/` and `app/`) and throws a stale `DiscoveryCacheException` when it differs. Each module's `module.php` is loaded on every boot anyway, so a module whose `module.php` now disables it, or changes its `sequence` or `globalMiddleware`, is also reported as stale.
+
+The fingerprint does not cover the PHP files inside a module: a new route, plugin, observer, preference, command or entity in an existing module is only picked up by recompiling. Enabling a module that was disabled when the cache was compiled is not detected either.
+
+#### Deploying to production
+
+`marko discovery:cache` is a required deploy step. Run it after installing dependencies, every time:
+
+```bash
+composer install --no-dev --optimize-autoloader
+marko discovery:cache
+```
+
+Recompiling on every deploy covers new code in existing modules (which the fingerprint cannot see) and framework upgrades that change the cache format: a cache written by an older version fails boot with a version-mismatch `DiscoveryCacheException` rather than loading incomplete data. Module paths are stored relative to the project root, so a cache compiled during a build step stays valid when the build is moved to its final location.
+
+Under a long-running worker such as [`marko/roadrunner`](/docs/packages/roadrunner/) the application boots once per worker, so the cache only shortens worker start-up.
+
+#### Adding a section to the discovery cache
+
+A package that runs its own discovery at boot can store the result in the cache. Implement `DiscoveryCacheContributorInterface` and declare the class under the `discovery` key of `module.php`:
+
+```php title="src/Discovery/WidgetCacheContributor.php"
+use Acme\Widgets\WidgetScanner;
+use Marko\Core\Discovery\DiscoveryCacheContributorInterface;
+
+class WidgetCacheContributor implements DiscoveryCacheContributorInterface
+{
+    public function __construct(
+        private WidgetScanner $widgetScanner,
+    ) {}
+
+    public function key(): string
+    {
+        return 'widgets';
+    }
+
+    public function compile(array $modules): array
+    {
+        return $this->widgetScanner->scan($modules); // scalars, null and arrays only
+    }
+}
+```
+
+```php title="module.php"
+use Acme\Widgets\Discovery\WidgetCacheContributor;
+use Acme\Widgets\WidgetRegistry;
+use Acme\Widgets\WidgetScanner;
+use Marko\Core\Discovery\CachedDiscovery;
+
+return [
+    'discovery' => [WidgetCacheContributor::class],
+    'boot' => function (CachedDiscovery $cachedDiscovery, WidgetScanner $widgetScanner, WidgetRegistry $widgetRegistry): void {
+        $widgets = $cachedDiscovery->section('widgets') ?? $widgetScanner->scan(/* ... */);
+        $widgetRegistry->register($widgets);
+    },
+];
+```
+
+`discovery:cache` resolves each contributor through the container and stores its result under `key()`. At boot, `Marko\Core\Discovery\CachedDiscovery::section()` returns `null` when the boot did not use the cache (run your own discovery) and the stored array when it did. A contributor class that does not exist or does not implement the interface, two contributors with the same key, or data that `var_export()` cannot write as plain arrays (objects, closures) fails `discovery:cache` with a `DiscoveryCacheException`.
 
 #### Configuration via `marko/config`
 
@@ -338,29 +418,17 @@ return [
 
 The core-owned `config/discovery.php` is shipped with `marko/core` and populates these values from `$_ENV` automatically. The boot gate reads `DiscoveryEnvironment` directly and does not depend on `marko/config`.
 
-#### Deploy requirement
-
-There is no file-modification-time invalidation. Whenever code changes (new modules, updated attributes), regenerate the cache as part of your deploy:
-
-```bash
-composer install --no-dev --optimize-autoloader
-marko discovery:cache
-```
-
-Serving stale discovery results in missing preferences, plugins, observers, or commands until the cache is recompiled.
-
-Recompiling on every deploy also covers framework upgrades that change the cache format. A cache written by an older version fails boot with a version-mismatch `DiscoveryCacheException` rather than loading incomplete data (for example, command `flags` were added in cache version 2).
-
 #### Not the same as the code index
 
 Marko has **two separate caches** that are easy to confuse --- different files, different commands, different consumers:
 
 | Cache | File | Built by | Consumed by | Rebuild when |
 |---|---|---|---|---|
-| **Discovery cache** | `storage/cache/discovery.php` | `marko discovery:cache` | the **running app** at boot | deploying to a non-`development` environment after plugins, observers, preferences, or commands changed |
+| **Discovery cache** | `storage/cache/discovery.php` | `marko discovery:cache` | the **running app** at boot | every deploy to a non-`development` environment |
 | **Code index** | `.marko/index.cache` | `marko indexer:rebuild` | **MCP / LSP tooling** ([`marko/codeindexer`](/docs/packages/codeindexer/)) | the AI tools show stale or missing symbols |
 
-The discovery cache makes the **app** boot faster in production. The code index lets **AI tooling** answer questions about your code. Rebuilding one has no effect on the other. Neither is required for routes or newly-added modules to work at runtime --- see [the routing note above](#discovery-cache) and the codeindexer page.
+The discovery cache makes the **app** boot faster in production. The code index lets **AI tooling** answer questions about your code. Rebuilding one has no effect on the other.
+
 
 ### Throwing Rich Exceptions
 
@@ -476,7 +544,7 @@ Implements `Psr\Container\ContainerExceptionInterface`.
 use Marko\Core\Exceptions\DiscoveryCacheException;
 ```
 
-Thrown by `Application::initialize()` when the discovery cache file is corrupt, structurally invalid, or carries a version number that does not match the running core version. There is no silent fallback --- a bad cache is a loud error.
+Thrown by `Application::initialize()` when the discovery cache file is corrupt, structurally invalid, stale, or carries a version number that does not match the running core version, and by `discovery:cache` when a contributor is invalid. There is no silent fallback --- a bad cache is a loud error.
 
 Named constructors:
 
@@ -485,6 +553,12 @@ Named constructors:
 | `DiscoveryCacheException::unreadable($path)` | Cache file exists but cannot be read |
 | `DiscoveryCacheException::malformed($path, $reason)` | Cache file structure is invalid or missing required keys |
 | `DiscoveryCacheException::versionMismatch($path, $found, $expected)` | Cache was compiled by a different core version |
+| `DiscoveryCacheException::stale($path, $reason)` | Installed packages, module directories or a module's `module.php` changed since the cache was compiled |
+| `DiscoveryCacheException::missingSection($path, $key)` | A cached boot asked for a contributor section the cache does not hold |
+| `DiscoveryCacheException::malformedSection($key, $reason)` | A contributor section has the wrong shape when hydrated |
+| `DiscoveryCacheException::invalidContributor($module, $class, $reason)` | A `discovery` entry in `module.php` is not an existing `DiscoveryCacheContributorInterface` (thrown by `discovery:cache`) |
+| `DiscoveryCacheException::duplicateContributorKey($key, $first, $second)` | Two contributors use the same `key()` (thrown by `discovery:cache`) |
+| `DiscoveryCacheException::unexportableSection($key, $class, $reason)` | A contributor returned objects or closures (thrown by `discovery:cache`) |
 | `DiscoveryCacheException::notWritable($path)` | Cache directory or file is not writable (thrown by `discovery:cache`) |
 
-Fix in all cases: `marko discovery:clear && marko discovery:cache`.
+Fix for a bad cache file: `marko discovery:cache` (or `marko discovery:clear` to fall back to live discovery). Both commands boot without the cache, so they work while it is broken.

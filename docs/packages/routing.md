@@ -573,6 +573,14 @@ class BrandedExceptionRenderer extends ExceptionRenderer
 }
 ```
 
+### Route Cache
+
+Without a cache, every boot finds routes by reading, tokenizing and loading every PHP file under every module's `src/` --- controllers or not. `marko/routing` declares `RouteCacheContributor` as a [discovery cache contributor](/docs/packages/core/#adding-a-section-to-the-discovery-cache), so `marko discovery:cache` also stores every route: method, path (with any `#[RoutePrefix]` applied), controller, action, middleware, name and `#[WithoutMiddleware]` exclusions, including routes a `#[Preference]` inherits from the controller it replaces.
+
+A production boot from the cache rebuilds the same routes in the same order, so [precedence](#route-precedence), names and URL generation are unchanged. No source file is scanned, and a controller class loads only when a request matches one of its routes. Excluded middleware is still checked against each route's stack at boot.
+
+In a development environment (`APP_ENV=local`, `development` or `dev`) routes are always discovered live, so a new or changed route attribute takes effect on the next request. In production, run `marko discovery:cache` on every deploy --- see [Deploying to production](/docs/packages/core/#deploying-to-production). Until you do, a route added to an existing controller is not served.
+
 ## CLI
 
 Requires [`marko/cli`](/docs/packages/cli/) for the `marko` binary.

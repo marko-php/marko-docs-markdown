@@ -446,6 +446,10 @@ $userRepo->save($loaded);
 
 If an extender's columns are not yet present in the database (the deploy that adds the module has shipped but its migration hasn't run yet), hydration silently skips that extender. No exception, no companion attached. Once the migration runs, hydration begins populating the companion automatically.
 
+### Entity discovery cache
+
+To link extenders to their parents, the package's boot callback needs every `#[Table]` entity class. Without a cache it scans the `src/Entity` directories of `vendor/`, `modules/` and `app/` on every request. `marko/database` declares `EntityCacheContributor` as a [discovery cache contributor](/docs/packages/core/#adding-a-section-to-the-discovery-cache), so `marko discovery:cache` stores the entity list under the `entities` section and a production boot reads it instead of scanning. An entity added after the cache was compiled is picked up by the next `marko discovery:cache` --- see [Deploying to production](/docs/packages/core/#deploying-to-production).
+
 ## Data Mapper Pattern
 
 Entities are plain PHP objects. They don't save themselves or know about the database. Repositories handle all persistence.
