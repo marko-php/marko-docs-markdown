@@ -225,6 +225,7 @@ $$
 - **Widening raises `MAXVALUE` with the type**, so the insert after id 2,147,483,647 gets 2,147,483,648.
 - **The down migration narrows both back.** When the sequence has already passed the smaller type's range, PostgreSQL refuses (`RESTART value (...) cannot be greater than MAXVALUE (...)`), and the column keeps its wider type.
 - **The sequence must be owned by the column.** `SERIAL` and `BIGSERIAL` columns, including every key Marko creates, already are. A key that reads from a sequence it doesn't own fails before anything changes, with an error naming the table and column. Run `ALTER SEQUENCE ... OWNED BY "posts"."id"`, then run the migration again.
+- **Names containing `$$` are safe.** The block is dollar-quoted with `$$` only when that cannot occur inside it. Otherwise it uses `$marko$` (or `$marko_1$`, `$marko_2$`, ...), so a table or column name can never end the block early.
 - **Identity columns** (`GENERATED ... AS IDENTITY`) work the same way. PostgreSQL already changes their sequence with the column, so the sequence step changes nothing.
 
 ### Expression Defaults
@@ -275,6 +276,7 @@ Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInt
 | `prepare(string $sql): StatementInterface` | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Get the last inserted ID |
 | `supportsReturning(): bool` | Always `true`: `INSERT ... RETURNING` is available, so repositories read generated keys back |
+| `quoteIdentifier(string $identifier): string` | Quote a table or column name with double quotes through `PgSqlIdentifier` (`group` becomes `"group"`, and `displayName` keeps its case); needs no live connection |
 | `beginTransaction(): void` | Start a transaction, or a savepoint when one is open |
 | `commit(): void` | Commit the innermost level (`RELEASE SAVEPOINT` when nested); throws `TransactionException` when none is open |
 | `rollback(): void` | Roll back the innermost level (`ROLLBACK TO SAVEPOINT` when nested); throws `TransactionException` when none is open |
@@ -377,9 +379,17 @@ Implements `IntrospectorInterface` and `ExpressionDefaultMatcherInterface`. Read
 | `getPrimaryKey(string $table): array` | Get primary key column names |
 | `matchesStoredDefault(string $table, string $column, Expression $expression): bool` | Whether the column would store its current default if it were declared with `$expression`, checked on a temporary table that is rolled back. Throws `ExpressionDefaultProbeException` when PostgreSQL rejects the expression or the probe table |
 
+### PgSqlIdentifier
+
+`PgSqlIdentifier` is the driver's one identifier-quoting rule. `PgSqlConnection::quoteIdentifier()`, `PgSqlGenerator`, `PgSqlQueryBuilder` and `PgSqlIntrospector` all quote through it, so a name is quoted the same way in migrations, queries and repository SQL.
+
+| Method | Description |
+|---|---|
+| `static quote(string $identifier): string` | Wrap a name in double quotes and double any double quote inside it. Each part of a `table.column` name is quoted separately: `"posts"."order"`. Quoted names keep their case |
+
 ### PgSqlGenerator
 
-Implements `SqlGeneratorInterface`. Generates PostgreSQL DDL for schema migrations --- uses `SERIAL`/`BIGSERIAL` for auto-increment, double-quoted identifiers, and PostgreSQL-specific types (JSONB, BYTEA, etc.).
+Implements `SqlGeneratorInterface`. Generates PostgreSQL DDL for schema migrations --- uses `SERIAL`/`BIGSERIAL` for auto-increment, identifiers quoted through `PgSqlIdentifier`, and PostgreSQL-specific types (JSONB, BYTEA, etc.).
 
 | Method | Description |
 |---|---|

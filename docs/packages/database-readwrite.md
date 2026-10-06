@@ -266,6 +266,7 @@ Implements `ConnectionInterface`, `TransactionInterface`, `PendingAfterCommitInt
 | `runPendingAfterCommitCallbacks(): void` | Write | Run the write connection's queued `afterCommit()` callbacks without committing (for test helpers such as `RefreshDatabase`); throws `TransactionException` when the write connection does not implement `PendingAfterCommitInterface` |
 | `driverName(): string` | Write (delegates) | Return the write connection's driver name (e.g. `'mysql'`, `'pgsql'`) |
 | `supportsReturning(): bool` | Write (delegates) | Whether the write connection supports `INSERT ... RETURNING` |
+| `quoteIdentifier(string $identifier): string` | Write (delegates) | Quote a table or column name with the write connection's quoting rule |
 | `resetStickyState(): void` | — | Clear the sticky flag; subsequent reads route to replicas again |
 | `reset(): void` | — | `ResettableInterface` contract method; rolls back every open transaction level (delegating to a resettable write connection) and clears the sticky flag |
 

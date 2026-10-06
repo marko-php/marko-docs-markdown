@@ -219,6 +219,7 @@ class MyService
 | `prepare(string $sql): StatementInterface` | Prepare a statement for repeated execution |
 | `lastInsertId(): int` | Get the last auto-increment ID |
 | `supportsReturning(): bool` | Always `false`: MySQL has no `INSERT ... RETURNING`, so a [database-generated key](/docs/packages/database/#database-generated-keys) must be set in PHP |
+| `quoteIdentifier(string $identifier): string` | Quote a table or column name with backticks through `MySqlIdentifier` (`group` becomes `` `group` ``); needs no live connection |
 | `connect(): void` | Explicitly open the database connection |
 | `disconnect(): void` | Close the connection and discard the transaction depth and pending callbacks |
 | `isConnected(): bool` | Check whether the connection is open |
@@ -319,9 +320,17 @@ Implements `ConnectionFactoryInterface`. Creates `MySqlConnection` instances fro
 
 The factory hands every connection it makes the container-bound `TransactionBackoff`, so the write primary and the replicas wait between `transaction()` retries the same way as the default connection.
 
+### MySqlIdentifier
+
+`MySqlIdentifier` is the driver's one identifier-quoting rule. `MySqlConnection::quoteIdentifier()`, `MySqlGenerator`, `MySqlQueryBuilder` and `MySqlIntrospector` all quote through it, so a name is quoted the same way in migrations, queries and repository SQL.
+
+| Method | Description |
+|---|---|
+| `static quote(string $identifier): string` | Wrap a name in backticks and double any backtick inside it. Each part of a `table.column` name is quoted separately: `` `posts`.`order` `` |
+
 ### SQL Generator
 
-`MySqlGenerator` implements `SqlGeneratorInterface` --- produces MySQL-specific DDL from schema diffs (used by the migration system).
+`MySqlGenerator` implements `SqlGeneratorInterface` --- produces MySQL-specific DDL from schema diffs (used by the migration system). Every table, column, index and constraint name is quoted through `MySqlIdentifier`, so reserved words and names containing a backtick are safe.
 
 | Abstract Type | MySQL Type |
 |---|---|

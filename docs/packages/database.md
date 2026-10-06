@@ -81,6 +81,20 @@ class Post extends Entity
 
 Property names are automatically converted from camelCase to snake_case for column names. For example, `$createdAt` maps to the `created_at` column. Use the `name` parameter to override this: `#[Column(name: 'custom_column')]`.
 
+### Reserved Words and Mixed Case
+
+Table and column names can be SQL reserved words (`key`, `group`, `order`, `user`, `rank`) or mixed case (`#[Column(name: 'displayName')]`). Every name Marko writes into SQL is quoted with the driver's delimiter: the migration DDL, the query builder, the repository (`find()`, `findBy()`, `save()`, `insertBatch()`, `delete()`, `exists()` and the rest), `DataMigration`'s `insert()`/`update()`/`delete()` helpers and `DatabaseTestHelper`. MySQL and MariaDB use backticks, PostgreSQL double quotes, and a delimiter inside a name is doubled. The quoting comes from `ConnectionInterface::quoteIdentifier()`, so use it too when you write your own SQL:
+
+```php
+$sql = sprintf(
+    'SELECT * FROM %s WHERE %s = ?',
+    $this->connection->quoteIdentifier('permissions'),
+    $this->connection->quoteIdentifier('group'),
+);
+```
+
+On PostgreSQL a quoted name is case-sensitive. A mixed-case `#[Table]` or `#[Column(name: ...)]` name therefore has to match the table exactly as it was created. Tables created by `db:migrate` always match. A table created by a hand-written migration with unquoted mixed-case names was folded to lower case by PostgreSQL, so declare the lower-case name on the entity.
+
 ### Type Inference Rules
 
 Marko infers database types from PHP types:
@@ -1878,7 +1892,7 @@ Every driver package binds six interfaces. They fall into two categories:
 
 | Interface | Category | Role |
 |-----------|----------|------|
-| `ConnectionInterface` | **Wire** | PDO connection, DSN format, PostgreSQL/MySQL protocol; exposes `driverName(): string` (e.g. `'mysql'`, `'pgsql'`) so dialect-aware code can branch without a live connection, and `supportsReturning(): bool` so the repository knows whether it can read generated keys back with `INSERT ... RETURNING` |
+| `ConnectionInterface` | **Wire** | PDO connection, DSN format, PostgreSQL/MySQL protocol; exposes `driverName(): string` (e.g. `'mysql'`, `'pgsql'`) so dialect-aware code can branch without a live connection, `supportsReturning(): bool` so the repository knows whether it can read generated keys back with `INSERT ... RETURNING`, and `quoteIdentifier(string $identifier): string`, which the repository, `DataMigration` and `DatabaseTestHelper` quote every table and column name through (see [Reserved Words and Mixed Case](#reserved-words-and-mixed-case)) |
 | `ConnectionFactoryInterface` | **Wire** | Creates `ConnectionInterface` instances from a `DatabaseConfig` |
 | `SqlGeneratorInterface` | Dialect | DDL generation for schema diffs |
 | `IntrospectorInterface` | Dialect | Reading existing schema from `information_schema` etc. Implement `ExpressionDefaultMatcherInterface` on it too so the diff can settle expression defaults the database rewrites (see [Column Defaults](#column-defaults)) |
@@ -1886,6 +1900,16 @@ Every driver package binds six interfaces. They fall into two categories:
 | `QueryBuilderFactoryInterface` | Dialect | Constructs query builder instances |
 
 A wire-compatible variant inherits the parent's `ConnectionInterface` and `ConnectionFactoryInterface` bindings unchanged and overrides the four dialect interfaces.
+
+### Implementing `ConnectionInterface`
+
+A class that implements `ConnectionInterface` itself (a new driver, a decorator or a test fake) must implement every method, including `quoteIdentifier()`, or PHP refuses to load it. Keep one quoting rule per driver and use it in the connection, the SQL generator and the query builder, as `MySqlIdentifier` and `PgSqlIdentifier` do. `quoteIdentifier()` must:
+
+- wrap the name in the dialect's identifier delimiter and double any delimiter inside it, so no name can break out
+- quote each part of a `table.column` name separately
+- work without a live connection, like `driverName()` and `supportsReturning()`
+
+A decorator delegates to the connection it wraps, as `ReadWriteConnection` delegates to its write connection.
 
 ### CockroachDB example
 
