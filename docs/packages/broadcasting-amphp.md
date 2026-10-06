@@ -211,7 +211,7 @@ The server also sends `X-Accel-Buffering: no`. If you rely on `max_connections_p
 
 Run several `broadcasting:serve` processes behind a load balancer. Each one subscribes to pub/sub, so `marko/pubsub-redis` or `marko/pubsub-pgsql` fans every event out to all nodes, the same way Laravel Reverb uses Redis.
 
-`marko/pubsub-redis` opens one Redis connection per subscription. This server keeps one subscription per **distinct active channel**, so a process with 5,000 per-user private channels holds 5,000 Redis connections. Size Redis `maxclients` for that, or prefer shared channels where you can.
+With `marko/pubsub-redis`, each SSE process holds **one Redis connection** for all its subscriptions. The server keeps one subscription per distinct active channel, and all of them share that connection, so a process with 5,000 per-user private channels still uses one Redis subscriber connection. Size Redis `maxclients` by the number of processes, not the number of channels. See [Connections](/docs/packages/pubsub-redis/#connections) for how the shared connection unsubscribes and reconnects.
 
 ### RoadRunner
 
