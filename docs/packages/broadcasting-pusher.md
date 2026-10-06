@@ -125,11 +125,13 @@ When a client subscribes to `private-*` or `presence-*`, pusher-js `POST`s `sock
 |---|---|
 | Private channel authorized | `200 {"auth": "key:HMAC-SHA256(secret, socket_id:channel_name)"}` |
 | Presence channel authorized | `200 {"auth": "key:HMAC-SHA256(secret, socket_id:channel_name:channel_data)", "channel_data": "{\"user_id\":\"7\",\"user_info\":{...}}"}` |
-| The authorizer denies the user (guests included) | `HttpException::forbidden()` --- `403` |
+| The authorizer denies the user (guests included) | `HttpException` --- `403` |
+| No authorizer matches the channel (including names with characters no pattern accepts), or it serves the other channel kind | `HttpException` --- `403` |
 | Missing/malformed `socket_id`, missing `channel_name`, or a public channel (no `private-`/`presence-` prefix) | `HttpException::badRequest()` --- `400` |
-| No authorizer matches the channel, or it serves the other channel kind | `ChannelAuthorizationException` (loud error) |
 
 Errors are thrown as `HttpException` and rendered by the routing pipeline's [exception renderer](/docs/packages/routing/#errors-and-http-exceptions), so the body format follows the request (pusher-js only reads the status).
+
+Every `403` carries the same generic `Forbidden.` message, so a client cannot tell an unknown channel from a refused one, and the authorizer-setup hint never reaches the response. When the registry cannot authorize the channel, the original `ChannelAuthorizationException` is kept as the `HttpException`'s previous exception for server-side debugging. A `PusherException` for missing credentials is not converted and still surfaces as a server error.
 
 ### Presence Channels
 
@@ -220,7 +222,7 @@ public function presenceChannelAuth(string $socketId, string $channelName, strin
 use Marko\Broadcasting\Pusher\Controller\PusherAuthController;
 
 #[Post('/broadcasting/auth')]
-/** @throws HttpException|ChannelAuthorizationException */
+/** @throws HttpException|PusherException */
 public function authorize(Request $request): Response;
 ```
 
@@ -233,7 +235,7 @@ Readonly value object built from `config/broadcasting-pusher.php` by the module 
 | Exception | Thrown when |
 |---|---|
 | `PusherException::missingCredentials()` | `app_id`, `key` or `secret` is empty when signing |
-| `HttpException` (`marko/routing`) | `/broadcasting/auth` rejects a request (`400`) or the authorizer denies the user (`403`) |
+| `HttpException` (`marko/routing`) | `/broadcasting/auth` rejects a request (`400`), or the authorizer denies the user or no authorizer matches the channel (`403`) |
 | `BroadcastException::invalidChannelName()` | A channel name contains characters the Pusher protocol does not allow |
 | `BroadcastException::rejected()` | The server answers with a non-2xx status; the context holds the status and the capped response body |
 | `BroadcastException::publishFailed()` | The server cannot be reached (connection or transport failure); the signed query is redacted from the context |
