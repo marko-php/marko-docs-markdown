@@ -192,6 +192,16 @@ It reads `MARKO_ENV` first, then `APP_ENV`, from `$_ENV` with a `getenv()` fallb
 
 Any other name (for example `staging`) is none of these. Code that should only act on a disposable environment checks for one by name rather than for the absence of production: [marko/database](/docs/packages/database/#environment-behaviour)'s destructive commands run freely only when `isDevelopment()` or `isTesting()` is true. `name()` returns the trimmed, lowercased value, or `production` when neither variable is set (or both are empty). Defaulting to production means a deployment that forgets to set the environment fails safe instead of exposing development behavior.
 
+### Errors During Boot
+
+An errors module ([marko/errors-simple](/docs/packages/errors-simple/) or [marko/errors-advanced](/docs/packages/errors-advanced/)) registers its handler from its boot callback, which runs near the end of boot. To cover everything before that (`.env` loading, discovery, `module.php` files, earlier boot callbacks), `Application::initialize()` first installs `Marko\Core\Error\BootstrapErrorHandler`:
+
+- Outside development (including an unset environment) it sets `display_errors` to `0` and answers an uncaught exception with a generic `500`: `Server Error` as plain text, or `{"message":"Server Error"}` when the request's `Accept` header asks for JSON. The full exception, stack trace included, goes to `error_log()`.
+- In development (`development`, `dev`, `local`, including when set only in `.env`) it shows the exception's class and message, escaped.
+- The process exits with status `255`, so a failed boot in a CLI command or deploy script is still a failure.
+
+The errors module's boot callback removes the bootstrap handler before registering its own, so the two never stack. Without an errors module, `initialize()` removes it once boot succeeds. When boot fails, the handler stays installed so it can handle the uncaught exception. A test that expects `initialize()` to throw and catches the exception removes it with `$app->bootstrapErrorHandler->unregister()`.
+
 ### Environment-Specific Bindings
 
 When different environments need different implementations (e.g., a mock service in development vs the real one in production), use the `boot` callback to conditionally override bindings:
