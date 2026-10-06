@@ -68,6 +68,10 @@ This deletes rows where `last_activity` is older than the configured session lif
 
 A session cookie only resumes a row that exists and is within the lifetime (see [Strict session IDs](/docs/packages/session/#strict-session-ids)). Replaying an unknown or expired cookie inserts nothing, and a resumed session that wasn't modified only updates `last_activity`.
 
+### Read Replicas
+
+With [`marko/database-readwrite`](/docs/packages/database-readwrite/), `read()` and `validateId()` run on the primary through [`onPrimary()`](/docs/packages/database-readwrite/#reads-that-must-hit-the-primary), never on a replica. Logout and ID regeneration delete the old row on the primary, and a lagging replica would otherwise still return it, letting a replayed old cookie resume the logged-out session.
+
 ## API Reference
 
 ### DatabaseSessionHandler

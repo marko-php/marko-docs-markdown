@@ -99,6 +99,9 @@ class MyService
         $maxFiles = $this->logConfig->maxFiles();
         $maxFileSize = $this->logConfig->maxFileSize();
         $escapeNewlines = $this->logConfig->escapeNewlines(); // default true
+        $redactKeys = $this->logConfig->redactKeys(); // password, token, secret, ...
+        $fileMode = $this->logConfig->fileMode(); // default 0600
+        $dirMode = $this->logConfig->dirMode(); // default 0700
     }
 }
 ```
@@ -139,7 +142,11 @@ class JsonFormatter implements LogFormatterInterface
 }
 ```
 
-The default `LineFormatter` uses the format `[{datetime}] {channel}.{level}: {message} {context}` and accepts custom format and date format strings via its constructor. It also accepts an `escapeNewlines` boolean (default `true`) that collapses any CR (`\r`) or LF (`\n`) characters in the interpolated message and serialized context to the literal escape sequences `\r` and `\n`. This prevents log line-injection attacks where a message containing embedded newlines could be mistaken for multiple log entries. Disable it only if a downstream log processor requires literal newlines.
+The default `LineFormatter` uses the format `[{datetime}] {channel}.{level}: {message} {context}` and accepts custom format and date format strings via its constructor. The formatter neutralizes untrusted input before it reaches the log file:
+
+- **Control characters** --- in the interpolated message, backslashes are escaped first (`\` becomes `\\`, so a literal `\n` in the input can never be confused with an escaped newline), then every C0 control, DEL, C1 control and the U+2028/U+2029 line terminators are written as escape sequences (`\t`, `\x1b`, `\u0085`, ` `, ...). An ANSI sequence in a value such as `"Login failed for {username}"` therefore cannot repaint an admin's terminal during `tail -f`. In the context JSON the same characters become `\uXXXX` escapes, so it stays valid JSON.
+- **Newlines** --- the `escapeNewlines` boolean (default `true`, `log.escape_newlines`) controls whether CR and LF in the message are written as `\r` and `\n`, which prevents log line-injection where one message masquerades as several entries. Disable it only if a downstream log processor requires literal newlines; the other control characters are escaped regardless.
+- **Redaction** --- the `redactKeys` list (`log.redact_keys`, default `password`, `password_confirmation`, `token`, `secret`, `api_key`, `authorization`) replaces the value of any matching context key with `[redacted]`. Keys match case-insensitively at any nesting depth of context arrays, and redaction happens before interpolation, so `{token}` in a message is masked too. Pass an empty list to disable it. Objects in the context are not traversed --- convert them to arrays first if they carry secrets.
 
 ## API Reference
 
@@ -214,7 +221,12 @@ public function dateFormat(): string;
 public function maxFiles(): int;
 public function maxFileSize(): int;
 public function escapeNewlines(): bool; // log.escape_newlines, default true
+public function redactKeys(): array; // log.redact_keys, list of context keys to mask
+public function fileMode(): int; // log.file_mode, default 0600
+public function dirMode(): int; // log.dir_mode, default 0700
 ```
+
+`redactKeys()` throws `InvalidLogConfigException` for an entry that is not a non-empty string; `fileMode()` and `dirMode()` throw it for a mode outside `0`--`0777`.
 
 ### Exceptions
 
@@ -222,4 +234,5 @@ public function escapeNewlines(): bool; // log.escape_newlines, default true
 |-----------|-------------|
 | `LogException` | Base exception for all log errors --- includes `getContext()` and `getSuggestion()` methods |
 | `InvalidLogLevelException` | Thrown when a log level string does not match any valid level |
+| `InvalidLogConfigException` | Thrown when `log.redact_keys`, `log.file_mode` or `log.dir_mode` holds an invalid value |
 | `LogWriteException` | Thrown when writing to a log file fails (missing directory, permissions) |
