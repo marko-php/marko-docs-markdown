@@ -200,8 +200,8 @@ foreach ($unread as $notification) {
 Mark individual notifications or all at once:
 
 ```php
-// Mark one notification as read
-$this->notificationRepository->markAsRead($notificationId);
+// Mark one of the user's notifications as read (false: not found or not theirs)
+$this->notificationRepository->markAsReadFor($user, $notificationId);
 
 // Mark all notifications as read for a user
 $this->notificationRepository->markAllAsRead($user);
@@ -210,12 +210,14 @@ $this->notificationRepository->markAllAsRead($user);
 ### Deleting Notifications
 
 ```php
-// Delete a single notification
-$this->notificationRepository->delete($notificationId);
+// Delete one of the user's notifications (false: not found or not theirs)
+$this->notificationRepository->deleteFor($user, $notificationId);
 
 // Delete all notifications for a user
 $this->notificationRepository->deleteAll($user);
 ```
+
+When the notification ID comes from a request, always use the owner-scoped `markAsReadFor()` and `deleteFor()`. The unscoped `markAsRead($id)` and `delete($id)` act on any notification by ID and are meant for admin and internal code. See the [notification-database docs](/docs/packages/notification-database/) for details.
 
 ## Custom Channels
 
