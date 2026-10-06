@@ -55,6 +55,41 @@ marko devai:update
 | `--force` | Overwrite an existing install |
 | `--update-gitignore` | Append devai's generated paths to `.gitignore` |
 | `--skip-lsp-deps` | Skip installing the intelephense LSP dependency (Claude Code) |
+| `--yes` | Install the pinned intelephense globally without asking first (Claude Code) |
+
+### Global intelephense install
+
+Claude Code's PHP language server needs [intelephense](https://intelephense.com). When it is not on `PATH`, `devai:install` installs one exact, pinned release (`IntelephenseEnsurer::VERSION`) with `npm install -g intelephense@<version>` — never whatever is latest. Because a global install changes your machine outside the project, an interactive run asks first; answering no skips it and prints the command to run later. `--yes` accepts without asking, and a non-interactive run (`--no-interaction`, CI, no TTY) installs without a prompt. `--skip-lsp-deps` skips it entirely.
+
+## Configuration
+
+devai reads `config/devai.php`. Override any key in your project's `config/devai.php`:
+
+```php
+<?php
+
+declare(strict_types=1);
+
+return [
+    'claude_code' => [
+        'marketplace_ref' => null,
+    ],
+    'guidelines' => [
+        'allow_packages' => null,
+    ],
+];
+```
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `claude_code.marketplace_ref` | `null` | Git tag or commit the Claude Code plugin marketplace (`github: marko-php/marko`) is pinned to. `null` uses the installed `marko/devai` release tag, falling back to a known-good tag (`ClaudeCodeAgent::DEFAULT_MARKETPLACE_REF`) on dev installs. Claude Code installs marketplace plugins automatically once a folder is trusted, so never point this at a branch. |
+| `guidelines.allow_packages` | `null` | Which third-party (non-`marko/*`) packages may contribute `resources/ai/guidelines.md` to the generated guidelines. `null` includes every installed package; a list such as `['acme/blog']` includes only those; `[]` includes none. `marko/*` packages are always included. |
+
+An invalid value (an empty ref, or an allowlist that is not a list of package names) fails the install with an error naming the key.
+
+### Third-party guidelines
+
+Any installed module can ship `resources/ai/guidelines.md`, and devai copies it into `AGENTS.md`/`CLAUDE.md` so your agent reads it. Guidelines from packages outside `marko/*` are written under a `### Third-party guidelines: vendor/package` header with a note that they come from that package, not from Marko, and end with a matching closing line — so you (and the agent) can see exactly which instructions a dependency added. Review them as you would the package's code, and use `guidelines.allow_packages` to limit which packages may contribute.
 
 ## How agents are installed
 
@@ -89,7 +124,7 @@ devai ships no static reference docs. Depth in the generated guidelines comes fr
 - **[`marko/docs`](/docs/packages/docs/)** — the docs-search *contract*. devai depends on the interface, not a specific driver; install [`marko/docs-fts`](/docs/packages/docs-fts/) (SQLite FTS5 lexical search) to bind it and enable `search_docs`.
 - **`marko/claude-plugins`** — the skills/plugins marketplace devai distributes into each agent (e.g. `/marko-skills:create-module`).
 
-`marko/cli` and `marko/core` are pulled in transitively as the command/runtime foundation.
+`marko/config` supplies the [configuration](#configuration) above. `marko/cli` and `marko/core` are pulled in transitively as the command/runtime foundation.
 
 ## Related Packages
 

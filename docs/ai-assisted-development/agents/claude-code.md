@@ -39,7 +39,7 @@ Both files are written inside a `<!-- BEGIN/END marko:devai -->` marker block: e
 
 - `extraKnownMarketplaces.marko` — registers the Marko plugin marketplace so Claude Code can fetch plugin metadata.
 
-  This is a named entry under Claude Code's `extraKnownMarketplaces` map. Its `source` tells Claude Code where to read the marketplace manifest (`.claude-plugin/marketplace.json`) from: when run inside the Marko monorepo the source is the local `packages/claude-plugins/plugins` path, and for external projects it is the `marko-php/marko` GitHub repo. Registering the marketplace does not install anything on its own — it only makes the `@marko` plugins discoverable.
+  This is a named entry under Claude Code's `extraKnownMarketplaces` map. Its `source` tells Claude Code where to read the marketplace manifest (`.claude-plugin/marketplace.json`) from: when run inside the Marko monorepo the source is the local `packages/claude-plugins/plugins` path, and for external projects it is the `marko-php/marko` GitHub repo pinned with a `ref` to a release tag (the installed `marko/devai` version, or `devai.claude_code.marketplace_ref` — see [marko/devai configuration](/docs/packages/devai/#configuration)). Because Claude Code installs these plugins automatically once the folder is trusted, the source never tracks a moving branch. Registering the marketplace does not install anything on its own — it only makes the `@marko` plugins discoverable.
 
 - `enabledPlugins` — activates `marko-skills@marko`, `marko-lsp@marko`, and `marko-mcp@marko`.
 
