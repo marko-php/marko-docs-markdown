@@ -91,7 +91,8 @@ public function clear(): bool;
 
 ### Storage Details
 
-- Each cache key is derived from the request URL and query string, normalized and hashed.
+- Each cache key is derived from the request method, scheme, host, path and query string, normalized and hashed.
+- `purgeUrl()` removes the GET entry for both `http` and `https`. An absolute URL purges its own host; a relative URL purges every exact host in `page-cache.trusted_hosts` and throws a `PageCacheException` when there is none.
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption under concurrent traffic.
 - Tag entries are similarly written atomically and updated on each `store()` call.
 - Expired entries are removed on the next `lookup()` call for that key (lazy expiration).
