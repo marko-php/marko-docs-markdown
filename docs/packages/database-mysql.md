@@ -128,13 +128,15 @@ class MyService
 | `rollback(): void` | Roll back the innermost level (`ROLLBACK TO SAVEPOINT` when nested); throws `TransactionException` when none is open |
 | `inTransaction(): bool` | Check whether a transaction is active |
 | `transactionLevel(): int` | Number of open levels (0 outside a transaction) |
-| `transaction(callable $callback): mixed` | Execute a callback inside a transaction (a savepoint when nested) --- auto-commits on success, rolls back on exception |
+| `transaction(callable $callback, int $attempts = 1): mixed` | Execute a callback inside a transaction (a savepoint when nested) --- auto-commits on success, rolls back on exception; the outermost call runs up to `$attempts` times on a deadlock |
 | `afterCommit(callable $callback): void` | Run the callback after the outermost commit (immediately outside a transaction) |
 | `afterRollback(callable $callback): void` | Run the callback if its level rolls back |
 | `runPendingAfterCommitCallbacks(): void` | Run the queued `afterCommit()` callbacks without committing (`PendingAfterCommitInterface`); for test helpers such as `RefreshDatabase`, not production code |
 | `reset(): void` | Roll back every level left open by a failed request and drop pending callbacks; never opens a connection |
 
 See [Nested Transactions](/docs/packages/database/#nested-transactions) and [After-Commit Callbacks](/docs/packages/database/#after-commit-callbacks).
+
+On a deadlock (`1213`), InnoDB rolls back the whole transaction on the server, savepoints included. A nested level that sees the deadlock closes without sending `ROLLBACK TO SAVEPOINT`, and the `DeadlockException` reaches the outermost `transaction()`, which retries when given `attempts`. A lock wait timeout (`1205`) only fails the statement; the transaction stays open. See [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
 :::caution
 MySQL commits implicitly before any DDL statement (`CREATE`, `ALTER`, `DROP`, `TRUNCATE`, ...). Running one inside a transaction ends it on the server while Marko still counts it as open, and the next `commit()` or `rollback()` fails. Keep schema changes out of transactions.
@@ -195,7 +197,7 @@ MySQL commits implicitly before any DDL statement (`CREATE`, `ALTER`, `DROP`, `T
 
 ### MySqlExceptionTranslator
 
-Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `MySqlStatement::execute()` into a typed exception from `marko/database`, keyed on the server error number (MySQL reports every integrity violation as SQLSTATE `23000`): `1062` unique; `1451`, `1452`, `1216`, `1217` foreign key; `1048`, `1364` not null; `3819` (MySQL) and `4025` (MariaDB) check; anything else `QueryException`. The constraint, table and column are parsed from the server message. The duplicate value in a `1062` message is never copied. `MySqlConnection` and `MySqlStatement` take it as an optional last constructor argument. See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions).
+Turns a `PDOException` raised by `query()`, `execute()`, `prepare()` or `MySqlStatement::execute()` into a typed exception from `marko/database`, keyed on the server error number (MySQL reports every integrity violation as SQLSTATE `23000`): `1062` unique; `1451`, `1452`, `1216`, `1217` foreign key; `1048`, `1364` not null; `3819` (MySQL) and `4025` (MariaDB) check; `1213` `DeadlockException` (InnoDB also reports serialization conflicts this way); `1205` (lock wait timeout) and `3572` (`NOWAIT`) `LockTimeoutException`; anything else `QueryException`. Failed `BEGIN`, `COMMIT`, `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK` statements are translated the same way. The constraint, table and column are parsed from the server message. The duplicate value in a `1062` message is never copied. `MySqlConnection` and `MySqlStatement` take it as an optional last constructor argument. See [Query and Constraint Exceptions](/docs/packages/database/#query-and-constraint-exceptions) and [Concurrency Errors and Retries](/docs/packages/database/#concurrency-errors-and-retries).
 
 | Method | Description |
 |---|---|

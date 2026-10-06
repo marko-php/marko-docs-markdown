@@ -932,7 +932,7 @@ class CheckoutService
 }
 ```
 
-`transaction()` commits when the callback returns and rolls back, then rethrows, when it throws. Both saves above are committed together or not at all. Use `beginTransaction()`, `commit()` and `rollback()` when you need to manage the boundaries yourself.
+`transaction()` commits when the callback returns and rolls back, then rethrows, when it throws. Both saves above are committed together or not at all. Use `beginTransaction()`, `commit()` and `rollback()` when you need to manage the boundaries yourself. Pass `attempts` to run the transaction again when it loses a deadlock or serialization conflict: see [Concurrency Errors and Retries](#concurrency-errors-and-retries).
 
 The entity hydrator is shared the same way. An entity loaded by one repository and saved by another is still recognised as an existing entity, and only its changed columns are written.
 
@@ -1017,7 +1017,7 @@ public function reserve(int $productId, int $quantity): void
 | `skipLocked()` | `SKIP LOCKED` | `SKIP LOCKED` |
 | `noWait()` | `NOWAIT` | `NOWAIT` |
 
-`lockForUpdate()` blocks other transactions from updating, deleting or locking the rows. `sharedLock()` lets other transactions read and share-lock them but not change them. Add `skipLocked()` to return only the rows nobody else holds, which is useful for work queues. Add `noWait()` to fail immediately with a database error instead of waiting.
+`lockForUpdate()` blocks other transactions from updating, deleting or locking the rows. `sharedLock()` lets other transactions read and share-lock them but not change them. Add `skipLocked()` to return only the rows nobody else holds, which is useful for work queues. Add `noWait()` to fail immediately with a `LockTimeoutException` instead of waiting (see [Concurrency Errors and Retries](#concurrency-errors-and-retries)).
 
 These misuses throw `LockException`:
 
@@ -1081,6 +1081,7 @@ When the database rejects a statement, the driver turns the `PDOException` into 
 | `ForeignKeyConstraintViolationException` | A row references a missing parent, or a referenced row is deleted or updated | `23503` | `1451`, `1452` (and legacy `1216`, `1217`) | `409` |
 | `NotNullConstraintViolationException` | `NULL` (or no value) is written to a `NOT NULL` column | `23502` | `1048`, `1364` | --- |
 | `CheckConstraintViolationException` | A row fails a `CHECK` constraint | `23514` | `3819` (MySQL), `4025` (MariaDB) | --- |
+| `DeadlockException`, `SerializationFailureException`, `LockTimeoutException` | A transaction conflict or lock timeout: see [Concurrency Errors and Retries](#concurrency-errors-and-retries) | `40P01`, `40001`, `55P03` | `1213`, `1205`, `3572` | --- |
 | `QueryException` | Any other driver error | anything else | anything else | --- |
 
 PostgreSQL is matched on the SQLSTATE and MySQL on the server error number, because MySQL reports every integrity violation as SQLSTATE `23000`.
@@ -1090,11 +1091,15 @@ The hierarchy is:
 ```
 DatabaseException
 └── QueryException                      sql(), bindings(), sqlState()
-    └── ConstraintViolationException    constraintName(), table(), column()
-        ├── UniqueConstraintViolationException
-        ├── ForeignKeyConstraintViolationException
-        ├── NotNullConstraintViolationException
-        └── CheckConstraintViolationException
+    ├── ConstraintViolationException    constraintName(), table(), column()
+    │   ├── UniqueConstraintViolationException
+    │   ├── ForeignKeyConstraintViolationException
+    │   ├── NotNullConstraintViolationException
+    │   └── CheckConstraintViolationException
+    ├── TransactionConflictException    isRetryable() (abstract)
+    │   ├── DeadlockException
+    │   └── SerializationFailureException
+    └── LockTimeoutException
 ```
 
 The original `PDOException` is always available from `getPrevious()`. `constraintName()`, `table()` and `column()` are parsed from the driver message and return `null` when the driver does not report them. `table()` is the table that owns the constraint. For a foreign key violation that is the referencing (child) table, whether the statement inserted the child or deleted the parent. For a unique violation on PostgreSQL, `column()` is the indexed column list as the server reports it, for example `email` or `tenant_id, email`.
@@ -1171,21 +1176,61 @@ The exception context holds the SQL with its placeholders. It never holds the bo
 
 ### Upgrading From `catch (PDOException)`
 
-Before this change the raw `PDOException` escaped from `query()`, `execute()` and the repositories. Code that catches `PDOException` around those calls no longer matches. Catch `QueryException` (or a constraint subclass) instead, and read `sqlState()` or `getPrevious()` where you used to inspect the PDO error. This includes retry loops for deadlocks and serialization failures (SQLSTATE `40001` / `40P01`, MySQL `1213`):
+Before this change the raw `PDOException` escaped from `query()`, `execute()` and the repositories. Code that catches `PDOException` around those calls no longer matches. Catch `QueryException` (or a constraint subclass) instead, and read `sqlState()` or `getPrevious()` where you used to inspect the PDO error. Retry loops that matched SQLSTATE `40001` / `40P01` or MySQL `1213` should catch `TransactionConflictException`, or pass `attempts` to `transaction()` (see below).
 
-```php
-use Marko\Database\Exceptions\QueryException;
+## Concurrency Errors and Retries
 
-try {
-    $this->transaction->transaction($work);
-} catch (QueryException $e) {
-    if (!in_array($e->sqlState(), ['40001', '40P01'], true)) {
-        throw $e;
-    }
+Under concurrency, the database sometimes aborts a transaction that did nothing wrong: two transactions deadlocked, or a `REPEATABLE READ` / `SERIALIZABLE` transaction could not be serialized against a concurrent one. Running the transaction again is the expected fix. A statement can also fail because it could not get a lock in time. Each case has its own exception, so you never have to match SQLSTATE strings:
 
-    // retry $work
+| Exception | Raised when | PostgreSQL | MySQL / MariaDB | Retryable |
+|-----------|-------------|------------|-----------------|-----------|
+| `DeadlockException` | The database broke a deadlock by aborting this transaction | `40P01` | `1213` (SQLSTATE `40001`) | yes |
+| `SerializationFailureException` | A `REPEATABLE READ` / `SERIALIZABLE` transaction conflicted with a concurrent one, on a statement or at `COMMIT` | `40001` | --- (InnoDB reports these as `1213` deadlocks) | yes |
+| `LockTimeoutException` | A lock was not granted: `noWait()` hit a locked row, or the lock wait timeout expired | `55P03` (`NOWAIT`, `lock_timeout`) | `3572` (`NOWAIT`), `1205` (`innodb_lock_wait_timeout`) | caller decides |
+
+`DeadlockException` and `SerializationFailureException` extend `TransactionConflictException`, whose `isRetryable()` returns `true`. Catch the base class to handle both. On MySQL a deadlock reports SQLSTATE `40001`, so `DeadlockException::sqlState()` returns `40001` there and `40P01` on PostgreSQL.
+
+`LockTimeoutException` extends `QueryException` directly and is never retried for you. Whether to wait and try again, skip the row (`skipLocked()`), or tell the user the record is busy depends on the use case. On PostgreSQL the error aborts the transaction. On MySQL only the statement fails and the transaction stays open.
+
+A failed `COMMIT` is translated too, so a serialization failure PostgreSQL detects at `COMMIT` arrives as `SerializationFailureException` with `sql()` returning `COMMIT`.
+
+### Retrying a Transaction
+
+Pass `attempts` to `transaction()` to retry the whole transaction on a `TransactionConflictException`:
+
+```php title="app/inventory/Service/StockService.php"
+public function reserve(int $productId, int $quantity): void
+{
+    $this->transaction->transaction(function () use ($productId, $quantity): void {
+        $stock = $this->stockRepository->query()
+            ->where('product_id', '=', $productId)
+            ->lockForUpdate()
+            ->firstEntity();
+
+        // ...
+        $this->stockRepository->save($stock);
+    }, attempts: 3);
 }
 ```
+
+- **Opt-in.** `attempts` defaults to `1`, which runs the transaction once and never retries. A value below `1` throws `TransactionException`.
+- **Only conflicts are retried.** A `DeadlockException` or `SerializationFailureException` raised by the callback or by `COMMIT` rolls the attempt back and starts the next one from `BEGIN`. Any other exception is rethrown at once. After the last attempt, the last conflict is rethrown.
+- **Retries run immediately**, with no delay between attempts.
+- **Callbacks.** The `afterCommit()` callbacks a failed attempt registered are discarded, and its `afterRollback()` callbacks run. Only the attempt that commits runs its after-commit callbacks. The callback itself runs once per attempt, so keep side effects that must happen once in `afterCommit()`.
+- **After commit, no retry.** An exception thrown by an after-commit callback is never retried, even when it is a conflict from the callback's own query, because the data is already committed.
+- **Only the outermost level retries.** A nested `transaction()` (a savepoint) ignores `attempts`: the conflict propagates to the outermost `transaction()`, which owns the retry. Retrying only the savepoint would not help: the outer transaction still holds the locks and snapshot that caused the conflict, and on a deadlock MySQL has already rolled the whole transaction back. Put `attempts` on the outermost call.
+
+:::note
+Under `RefreshDatabase` or `DatabaseTestHelper`, each test runs inside a transaction that is rolled back afterwards, so every `transaction()` your code calls is nested and never retries. Test retry behaviour with `TruncateDatabase` or against a connection outside that wrapper.
+:::
+
+### No HTTP Status
+
+These exceptions do not implement `HttpExceptionInterface`. A conflict that is still failing after the retries, or a lock you could not get, is a server-side failure, so it surfaces as a `500` like any other `QueryException`. If you want a `503 Service Unavailable` with `Retry-After` instead, catch the exception in your controller or middleware and build that response.
+
+### Upgrading `TransactionInterface` Implementations
+
+`TransactionInterface::transaction()` is now `transaction(callable $callback, int $attempts = 1): mixed`. A class that implements the interface itself (a custom driver, decorator or test fake) must add the parameter, or PHP refuses to load it. Decorators should pass `$attempts` on to the connection they wrap, as `ReadWriteConnection` does.
 
 ## Bulk Insert
 
