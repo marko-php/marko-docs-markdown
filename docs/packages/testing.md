@@ -93,6 +93,20 @@ expect($session->destroyed)->toBeTrue();
 
 `has()` returns `true` when a key is stored, even if its value is `null`. This matches the behavior of the production `Session` implementation.
 
+To test code against a [lazily started](/docs/packages/session/#lazy-start) session, call `arm()` instead of `start()`. The fake records it in `$armed`, reports `isAvailable()` as `true`, and starts on the first data access, as `Session` does for a cookieless request:
+
+```php
+$session = new FakeSession();
+$session->arm();
+
+$guard->login($user);
+
+expect($session->started)->toBeTrue()
+    ->and($session->regenerated)->toBeTrue();
+```
+
+Unlike `Session`, a fake that was neither armed nor started does not throw on data access, and `started` stays `false`.
+
 `isModified()` reports whether data changed since `start()` (or the ID was regenerated), and `discard()` sets the public `$discarded` flag without setting `$saved` --- the two calls `SessionMiddleware` makes for [lazy persistence](/docs/packages/session/#lazy-persistence).
 
 ### FakeCookieJar
@@ -731,6 +745,8 @@ public function assertNothingPushed(): void;
 
 ```php
 public function start(): void;
+public function arm(): void;         // sets $armed; the next data access starts the session
+public function isAvailable(): bool; // started or armed
 public function get(string $key, mixed $default = null): mixed;
 public function set(string $key, mixed $value): void;
 public function has(string $key): bool;

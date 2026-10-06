@@ -134,9 +134,20 @@ $id = $this->session->getId();
 
 ### Session Middleware
 
-The `SessionMiddleware` automatically starts the session at the beginning of a request and closes it when the response completes. It is registered globally by the session driver package (e.g., `marko/session-file`, `marko/session-database`) --- no manual registration is needed. Your controllers only need to inject `SessionInterface`; `start()` and `save()` are handled automatically.
+The `SessionMiddleware` prepares the session at the beginning of a request and closes it when the response completes. It is registered globally by the session driver package (e.g., `marko/session-file`, `marko/session-database`) --- no manual registration is needed. Your controllers only need to inject `SessionInterface`; starting and saving are handled automatically.
 
 The middleware runs on every matched route, but not on requests that match no route (404, 405, automatic OPTIONS): those never start a session. See [Which middleware runs](/docs/packages/routing/#which-middleware-runs).
+
+#### Lazy start
+
+How the middleware prepares the session depends on the request:
+
+- **With a session cookie**, it starts the session before the controller runs. The handler is asked whether it knows the ID (see [Strict session IDs](#strict-session-ids)) and reads the stored data, and a resumed session's expiry slides forward on every request, whether or not the controller uses it.
+- **Without a session cookie** (or with a malformed one), there is nothing to resume, so it only **arms** the session. The session starts on the first call that uses it: `get()`, `has()`, `set()`, `flash()`, a guard check, a CSRF token. A request that never touches the session makes no handler call at all: no file check, no `SELECT`, no write, no garbage collection.
+
+Starting on first use is limited to the session `SessionMiddleware` prepared. Outside the middleware (a [stateless route](#stateless-routes), a CLI command), the data methods still throw `SessionNotStartedException`; nothing starts a session behind your back.
+
+`$session->started` only becomes `true` once the session has actually started. To ask whether the session can be used on this request, check `isAvailable()`, which is also `true` for an armed session. The session guard from [`marko/authentication`](/docs/packages/authentication/) does this, so logging in on a cookieless request works.
 
 #### Lazy persistence
 
@@ -145,7 +156,7 @@ A session is only stored when the request actually used it. When the response co
 - **saves** the session when the request resumed a session the store knows, or when the request **modified** it (`set()`, `remove()`, `clear()`, a flash message, `regenerate()`). Saving an unmodified resumed session calls the handler's `updateTimestamp()` instead of `write()`, so its expiry slides forward without rewriting the payload.
 - **discards** it otherwise: `discard()` closes the session without calling the handler's `write()`, and no `Set-Cookie` is sent.
 
-Reading never counts as a modification. A visitor without a session cookie who only views public pages gets no session row or file and no cookie, even if the page calls `get()` or `has()` or checks for a logged-in user. The first write (logging in, adding to a cart, issuing a CSRF token, flashing a message) persists the session and sends the cookie. An empty session is still read from the handler at start.
+Reading never counts as a modification. A visitor without a session cookie who only views public pages gets no session row or file and no cookie, even if the page calls `get()` or `has()` or checks for a logged-in user. The first write (logging in, adding to a cart, issuing a CSRF token, flashing a message) persists the session and sends the cookie. A page that only reads the session (checking for a logged-in user, showing flash messages) still starts it, which reads the handler once, but stores nothing.
 
 #### Strict session IDs
 
@@ -225,6 +236,8 @@ marko session:gc
 
 The session lifetime configured in `config/session.php` determines when sessions expire. Garbage collection probability is also configurable via `gc_probability` and `gc_divisor` settings.
 
+PHP rolls the `gc_probability`/`gc_divisor` dice only when a session starts. Because cookieless requests that never touch the session no longer start one (see [Lazy start](#lazy-start)), anonymous traffic no longer triggers garbage collection. On a busy site where most traffic is anonymous, expired sessions can pile up, so schedule `marko session:gc` (for example from cron every hour) instead of relying on the probability settings.
+
 ## Customization
 
 Replace `Session` via [Preferences](/docs/packages/core/) to add custom behavior (e.g., logging, encryption):
@@ -256,6 +269,8 @@ use Marko\Session\Flash\FlashBag;
 
 public function start(): void;
 public bool $started { get; }
+public function arm(): void;          // start on first access; SessionMiddleware calls this for cookieless requests
+public function isAvailable(): bool;  // started, or armed to start on first access
 public function get(string $key, mixed $default = null): mixed;
 public function set(string $key, mixed $value): void;
 public function has(string $key): bool;
@@ -272,7 +287,7 @@ public function isModified(): bool; // data or ID changed since start(); reads d
 public function discard(): void;    // close without writing to the handler
 ```
 
-`isModified()` and `discard()` are what `SessionMiddleware` uses for [lazy persistence](#lazy-persistence). A custom `SessionInterface` implementation must provide both.
+`arm()` and `isAvailable()` are what `SessionMiddleware` uses for [lazy start](#lazy-start), and `isModified()` and `discard()` are what it uses for [lazy persistence](#lazy-persistence). A custom `SessionInterface` implementation must provide all four. An armed session starts on its first data access, and `save()`, `discard()`, `destroy()` and `reset()` end the armed state. Code that checked `$session->started` to decide whether the session can be used should check `isAvailable()` instead.
 
 ### FlashBag
 

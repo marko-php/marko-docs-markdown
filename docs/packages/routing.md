@@ -218,6 +218,8 @@ Only global middleware marked `#[RunsOnUnmatched]` runs for unmatched requests (
 | `LayoutMiddleware`, `PageCacheMiddleware` | No (they only act on matched routes anyway) |
 | Your own global middleware | No, unless it declares `#[RunsOnUnmatched]` |
 
+Because no session and no authentication run, the 404 and 405 pages are rendered without a session or an authenticated user. A custom `ExceptionRenderer` or error template must not depend on them: calling `$guard->check()` or reading the session there throws, since nothing prepared the session. For the same reason `QueuedCookiesMiddleware` ([`marko/authentication`](/docs/packages/authentication/)) does not run either: only the session guard queues cookies, and it never runs on an unmatched request.
+
 To run your own global middleware on 404/405 responses (request logging, security headers), opt in on the class:
 
 ```php title="app/web/src/Http/Middleware/SecurityHeadersMiddleware.php"
