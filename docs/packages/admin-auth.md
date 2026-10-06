@@ -125,6 +125,7 @@ class CatalogSection implements AdminSectionInterface
 
 You don't register these yourself. `marko/admin-auth`'s boot callback registers every `#[AdminPermission]` on the `#[AdminSection]` classes that [marko/admin](/docs/packages/admin/) discovers. It uses the same section list as marko/admin: one scan per boot, or the discovery cache in production. Each permission's group is the first segment of its key (`catalog` for `catalog.products.view`). Boot fails with an `AdminAuthException` when:
 
+- a key isn't in the [permission key format](#keys-slugs-and-emails) (the message names the key and the section class);
 - two section classes declare the same key (the message names both classes);
 - a key declared by `#[AdminPermission]` was already registered by hand. Remove the manual `register()` call.
 
@@ -172,6 +173,7 @@ The command calls `PermissionRepositoryInterface::syncFromRegistry()`, which wri
 
 - It inserts every registered permission that isn't in the table yet.
 - It updates the `label` and `group` of an existing row when the `#[AdminPermission]` (or `register()` call) changed them.
+- It renames a row whose key differs from a registered key only in letter case (`Posts.Edit` stored, `posts.edit` registered) to the registered key, and reports it as updated. The row keeps its id and role assignments. Without this, the insert would fail on MySQL/MariaDB's case-insensitive unique index and add a second row on PostgreSQL. If several case variants are stored (only possible on PostgreSQL), the one with the lowest id is renamed and the others are reported as unregistered.
 - It reports every row whose key is no longer registered (a removed or renamed permission, or an uninstalled module) and how many roles still hold it.
 - It deletes nothing.
 
@@ -210,6 +212,39 @@ APP_ENV=production marko admin-auth:permissions:sync --prune --force --no-intera
 When nothing is stale, `--prune` prints `No unregistered permissions to prune.` and needs no `--force`. The plain sync never deletes anything, so running it on every deploy is safe: a deploy that temporarily disables a module doesn't strip its permissions from roles.
 
 Every run dispatches [`PermissionsSynced`](#events).
+
+### Keys, Slugs and Emails
+
+Permission keys, role slugs and admin emails are unique columns. MySQL and MariaDB compare them with the server's default collation, which ignores case (and accents), while PostgreSQL and PHP compare them exactly (see [String Comparison and Collation](/docs/packages/database/#string-comparison-and-collation)). So that `posts.edit` and `Posts.Edit` mean the same thing on every driver, admin-auth enforces one canonical form in PHP, before any SQL runs:
+
+| Value | Format | Enforced by |
+|-------|--------|-------------|
+| Permission key | Lowercase segments of `a-z`, `0-9`, `_` and `-` separated by dots (`catalog.products.view`). Segments after the first may contain `*` (`catalog.*`, `catalog.products.ed*`), and `*` alone grants everything | `PermissionRegistryInterface::register()`, `#[AdminPermission]` discovery, `PermissionRepository::save()`/`insertBatch()` throw `AdminAuthException::invalidPermissionKey()`; `findByKey()` returns `null` |
+| Role slug | Lowercase segments of `a-z`, `0-9`, `_` and `-` separated by dots (`content-editor`), no `*` | `RoleRepository::save()`/`insertBatch()` and `isSlugUnique()` throw `AdminAuthException::invalidRoleSlug()`; `findBySlug()` returns `null` |
+| Admin email | Lowercased with `mb_strtolower()` | `AdminUserRepository::save()`/`insertBatch()` store it lowercased and `findByEmail()` looks it up lowercased |
+
+The patterns are `IdentifierFormat::PERMISSION_KEY_PATTERN` and `IdentifierFormat::ROLE_SLUG_PATTERN`; check a value with `IdentifierFormat::isPermissionKey()` or `IdentifierFormat::isRoleSlug()`.
+
+Because emails are lowercased, an admin signs in with `Mark@Example.com` or `mark@example.com` alike on every driver, and saving a second admin whose email differs only in case throws `UniqueConstraintViolationException` on every driver.
+
+:::note
+**Upgrading.** Keys and slugs that earlier versions accepted are now rejected:
+
+- A registered or `#[AdminPermission]` key with uppercase letters or spaces fails the boot. Lowercase it in the code. Stored rows that differ from a registered key only in case are renamed by the next `marko admin-auth:permissions:sync`, keeping their role assignments. Any other stored key outside the format (a wildcard grant such as `Catalog.*`) matches nothing; rename it by hand.
+- Saving a role whose stored slug is outside the format (such as `Editor`) throws, on every driver. Lowercase the stored slugs (on PostgreSQL, first merge any two slugs that differ only in case, found as for emails below):
+
+  ```sql
+  UPDATE roles SET slug = LOWER(slug);
+  ```
+
+  Slugs with spaces or other characters need a new slug chosen by hand. Update any code that calls `hasRole()` or `findBySlug()` with the old slug.
+- Emails stored with uppercase letters aren't found by `findByEmail()` on PostgreSQL until they are lowercased. PostgreSQL may also hold two case variants of one address, which the `UPDATE` would reject on the unique index, so find and merge those first:
+
+  ```sql
+  SELECT LOWER(email) AS email, COUNT(*) FROM admin_users GROUP BY LOWER(email) HAVING COUNT(*) > 1;
+  UPDATE admin_users SET email = LOWER(email);
+  ```
+:::
 
 ### Wildcard Permissions
 
@@ -346,7 +381,7 @@ interface PermissionRegistryInterface
 }
 ```
 
-`register()` throws `AdminAuthException::duplicatePermission()` for a key that is already registered.
+`register()` throws `AdminAuthException::invalidPermissionKey()` for a key outside the [permission key format](#keys-slugs-and-emails) and `AdminAuthException::duplicatePermission()` for a key that is already registered.
 
 ### PermissionDiscovery
 
@@ -359,6 +394,7 @@ public function discoverFromClass(string $className): void;
 
 | Exception | Thrown when |
 |-----------|-------------|
+| `AdminAuthException::invalidPermissionKey()` | A declared key is outside the [permission key format](#keys-slugs-and-emails) (the message names the key and the section class). Nothing is registered |
 | `AdminAuthException::duplicatePermission()` | Two section classes declare the same permission key (the message names both classes) |
 | `AdminAuthException::permissionAlreadyRegistered()` | A key declared by `#[AdminPermission]` was already registered by hand |
 
@@ -420,14 +456,16 @@ interface PermissionRepositoryInterface extends RepositoryInterface
 }
 ```
 
-`syncFromRegistry()` inserts the registered permissions that are missing from the table and updates the label and group of rows that changed, in one transaction. It deletes nothing. It returns a `PermissionSyncResult`:
+`findByEmail()` lowercases the email before the lookup. `findBySlug()` and `findByKey()` return `null` for a slug or key outside the [canonical format](#keys-slugs-and-emails) without querying, and `isSlugUnique()` throws `AdminAuthException::invalidRoleSlug()` for one, since `save()` would reject it.
+
+`syncFromRegistry()` inserts the registered permissions that are missing from the table, updates the label and group of rows that changed and renames rows whose key differs from a registered key only in case, in one transaction. It deletes nothing. It returns a `PermissionSyncResult`:
 
 ```php
 readonly class PermissionSyncResult
 {
     public int $registeredCount;
     public array $created;      // list<string>: keys inserted
-    public array $updated;      // list<string>: keys whose label or group changed
+    public array $updated;      // list<string>: keys whose label or group changed, or whose case was repaired
     public array $unregistered; // list<UnregisteredPermission>: rows no longer registered
     public array $wildcardKeys; // list<string>: keys containing `*`, kept
 

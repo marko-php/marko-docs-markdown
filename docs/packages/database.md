@@ -95,6 +95,18 @@ $sql = sprintf(
 
 On PostgreSQL a quoted name is case-sensitive. A mixed-case `#[Table]` or `#[Column(name: ...)]` name therefore has to match the table exactly as it was created. Tables created by `db:migrate` always match. A table created by a hand-written migration with unquoted mixed-case names was folded to lower case by PostgreSQL, so declare the lower-case name on the entity.
 
+### String Comparison and Collation
+
+`#[Column]` has no collation option, so `db:migrate` creates string columns with the server's default collation, and string equality (`findBy()`, `WHERE`, `isColumnUnique()`) and unique indexes follow it. The drivers disagree:
+
+| Driver | Default collation | `'Posts.Edit' = 'posts.edit'` |
+|--------|-------------------|-------------------------------|
+| MySQL 8 | `utf8mb4_0900_ai_ci`: case- and accent-insensitive | true |
+| MariaDB | `utf8mb4_general_ci` or `utf8mb4_uca1400_ai_ci`: case-insensitive (the `ai` ones accent-insensitive too); PAD SPACE collations also ignore trailing spaces | true |
+| PostgreSQL | Deterministic: exact, byte for byte | false |
+
+PHP compares strings exactly too (`===`, array keys). So on MySQL/MariaDB a unique column rejects `Mark@example.com` next to `mark@example.com` and `findBy(['email' => 'Mark@example.com'])` finds the lower-case row, while PostgreSQL stores both and finds only the exact match. When a value's meaning must not depend on the driver, give it one canonical form in PHP before it reaches SQL: lowercase case-insensitive values such as emails on save and lookup, and validate identifiers against a lowercase pattern. [marko/admin-auth](/docs/packages/admin-auth/#keys-slugs-and-emails) does both for its permission keys, role slugs and admin emails.
+
 ### Type Inference Rules
 
 Marko infers database types from PHP types:
