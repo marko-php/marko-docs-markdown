@@ -19,7 +19,7 @@ Configure via the `view` config key. Settings from `marko/view` (`cache_director
 
 ```php title="config/view.php"
 return [
-    'cache_directory' => '/path/to/cache',
+    'cache_directory' => 'storage/views', // relative to the project root; created 0700
     'auto_refresh' => true,  // Set false in production
     'extension' => '.twig',
     'strict_variables' => true,
@@ -168,7 +168,7 @@ views/
 
 | Option | Type | Description |
 |---|---|---|
-| `cache_directory` | `string` | Directory for compiled template cache (from `marko/view`) |
+| `cache_directory` | `string` | Directory for compiled template cache (from `marko/view`). Defaults to `storage/views` under the project root; the factory refuses a directory that is world-writable or owned by another user --- see [compiled-template cache directory](/docs/packages/view/#compiled-template-cache-directory) |
 | `auto_refresh` | `bool` | Recompile templates when source changes --- set `false` in production (from `marko/view`) |
 | `extension` | `string` | Template file extension (default `.twig`) |
 | `strict_variables` | `bool` | Throw an error for undefined variables (default `true`) |
