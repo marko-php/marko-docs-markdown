@@ -73,19 +73,19 @@ Application code then reads config values:
 $host = $this->config->getString('database.host');
 ```
 
-## Deprecated: the `env()` Helper
+## Removed in 0.9.0: the `env()` Helper
 
 :::caution
-The global `env()` function is deprecated and will be removed in Marko 1.0. Every call emits an `E_USER_DEPRECATED` notice naming the variable and its replacement, for example:
+Marko 0.9.0 removed the global `env()` function, which 0.8.x deprecated. A config file that still calls it stops the app at boot with:
 
 ```text
-env('APP_DEBUG') is deprecated and will be removed in Marko 1.0. Read it in a config file with Marko\Config\Env instead: Env::bool('APP_DEBUG', false). ...
+Call to undefined function env()
 ```
 
-Marko's error handlers report the notice without stopping the request, so remaining calls show up in your output or logs.
+Switch each call to `Marko\Config\Env` before upgrading, using the table below. To upgrade in steps, stay on 0.8.x until your config files are migrated: there, every `env()` call emits an `E_USER_DEPRECATED` notice that names the variable and its `Env` replacement.
 :::
 
-`env()` coerces only a few strings and returns everything else unchanged, so a typo never fails: `APP_DEBUG=off` reaches the config as the string `'off'`, which is truthy. `Env::bool()` reads `off` as `false` and throws on a value such as `ture`. The config files Marko ships no longer call `env()`.
+`env()` coerced only a few strings and returned everything else unchanged, so a typo never failed: `APP_DEBUG=off` reached the config as the string `'off'`, which is truthy. `Env::bool()` reads `off` as `false` and throws on a value such as `ture`. `marko/env` now ships only the `.env` loader.
 
 ### Before and After
 
@@ -141,18 +141,9 @@ Replace each call with the `Env` method for the type the config value needs:
 | `env('DB_HOST', 'localhost')` | Any other string, unchanged | `Env::string('DB_HOST', 'localhost')` |
 | `env('DB_PORT', 3306)` | The string `'3306'`, not an `int` | `Env::int('DB_PORT', 3306)` |
 
-`env()` also differs on an empty value: `KEY=` returns `''` from `env()` and the default from `Env`.
+`env()` also differed on an empty value: `KEY=` returned `''` from `env()` and returns the default from `Env`.
 
-`env()` is defined inside `if (!function_exists('env'))`, so a library that defines its own global `env()` first (Laravel's `illuminate/support` helpers are the common one) silently replaces Marko's, with different coercion rules. `Env` is a class, so it has no such conflict.
-
-### env()
-
-```php
-/** @deprecated */
-function env(string $key, mixed $default = null): mixed;
-```
-
-Retrieves an environment variable by name. Checks `$_ENV` first, then falls back to `getenv()`. Returns the `$default` if the variable is not set. Applies the coercion in the table above, and emits `E_USER_DEPRECATED` on every call.
+Search your config files for `env(` rather than relying on the error. If an upgraded app boots without it but still has `env()` calls, another installed library defines a global `env()` (Laravel's `illuminate/support` helpers are the common one), and those calls now run that library's function, with its own coercion rules. Migrate them to `Env` all the same. `Env` is a class, so it has no such conflict.
 
 ## API Reference
 

@@ -197,7 +197,7 @@ Got "1h"
 Set PAGE_CACHE_TTL to a whole number written with digits only (no units, decimals or exponents) of 0 or greater, or remove it to use the default (3600).
 ```
 
-Don't cast `$_ENV` values (`(int) ($_ENV['PORT'] ?? 80)`) or parse them with `filter_var()`: `(int) 'abc'` is `0` and an unrecognised `filter_var()` boolean is `false`, with no error. Every config file Marko ships reads its environment variables through `Env`. The global `env()` helper from `marko/env` is [deprecated](/docs/packages/env/#deprecated-the-env-helper) and will be removed in 1.0; that section maps each of its coercions to an `Env` method.
+Don't cast `$_ENV` values (`(int) ($_ENV['PORT'] ?? 80)`) or parse them with `filter_var()`: `(int) 'abc'` is `0` and an unrecognised `filter_var()` boolean is `false`, with no error. Every config file Marko ships reads its environment variables through `Env`. The global `env()` helper from `marko/env` was [removed in 0.9.0](/docs/packages/env/#removed-in-090-the-env-helper); that section maps each of its coercions to an `Env` method.
 
 ### Scoped Configuration (Multi-tenant)
 
