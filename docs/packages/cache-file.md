@@ -13,7 +13,15 @@ Implements `CacheInterface` from `marko/cache`.
 composer require marko/cache-file
 ```
 
-This automatically installs `marko/cache`.
+This automatically installs `marko/cache` and [`marko/encryption`](/docs/packages/encryption/). Every cache file is HMAC-signed with `encryption.key`, so a non-empty key is required. Without one, reads and writes throw `Marko\Cache\Exceptions\TamperedCacheValueException`.
+
+```php title="config/encryption.php"
+use Marko\Config\Env;
+
+return [
+    'key' => Env::string('ENCRYPTION_KEY', ''),
+];
+```
 
 ## Configuration
 
@@ -89,6 +97,8 @@ Implements all methods from `CacheInterface`. See `marko/cache` for the full con
 ### Storage Details
 
 - Each cache key is hashed with `xxh128` and stored as a `.cache` file in the configured path.
+- Each file holds an HMAC-SHA256 envelope (`{hmac}.{serialized-entry}`) signed by [`CacheValueSigner`](/docs/packages/cache/#cachevaluesigner). The HMAC is checked with `hash_equals()` before `unserialize()` runs, so a file planted in the cache directory can't inject objects.
+- A file that is unsigned, malformed, tampered with or signed with a different key is treated as a miss and deleted; `increment()` restarts such a counter at `1`. Entries written before signing was introduced are unsigned, so upgrading (or rotating `encryption.key`) empties the file cache.
 - Writes use a temp file with `LOCK_EX` followed by an atomic `rename()` to prevent corruption.
 - The cache directory is created on the first write. Later writes check `is_dir()` and never call `mkdir()` again.
 - A `null` TTL falls back to `default_ttl` from config. A TTL of `0` or less means the entry never expires.
@@ -103,3 +113,5 @@ Implements all methods from `CacheInterface`. See `marko/cache` for the full con
 |---|---|
 | `FileCacheException::directoryNotCreatable($path, $reason)` | The configured `cache.path` doesn't exist and can't be created |
 | `FileCacheException::writeFailed($path, $reason)` | The temp file can't be written or can't be renamed onto the cache entry; the temp file is removed |
+
+Every read and write path (`get()`, `has()`, `getItem()`, `getMultiple()`, `set()`, `setMultiple()`, `increment()`) throws `Marko\Cache\Exceptions\TamperedCacheValueException::emptySigningKey()` when `encryption.key` is empty. A tampered entry never throws: it is a miss.
