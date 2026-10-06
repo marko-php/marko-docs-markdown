@@ -95,7 +95,7 @@ return [
 
 Bind your `TokenRepositoryInterface` implementation (backed by the `personal_access_tokens` table) in your app's `module.php`. The guard resolves it the first time a token guard is built, so commands and requests that never touch a token guard do not need it.
 
-The package also registers `TokenRequestMiddleware` as global middleware. It hands each inbound request to the guard (through the `CurrentRequest` singleton) and clears it when the request ends, so a long-running worker never reuses an earlier request's token. It is sequenced before `marko/authorization`, so `#[Can]` sees the token. Outside an HTTP request (CLI, queue jobs), the token guard has no request and treats the caller as a guest.
+The package also registers `TokenRequestMiddleware` as global middleware. It hands each inbound request to the guard (through the `CurrentRequest` singleton) and clears it when the request ends, so a long-running worker never reuses an earlier request's token. It is sequenced before `marko/authorization`, so `#[Can]` sees the token. Outside an HTTP request (CLI, queue jobs), the token guard has no request and treats the caller as a guest. `TokenRequestMiddleware` is not marked `#[RunsOnUnmatched]`, so it does not run for 404, 405 or automatic OPTIONS responses: no route means nothing authenticates the token (see [Which middleware runs](/docs/packages/routing/#which-middleware-runs)).
 
 ### Bearer Token Authentication Flow
 

@@ -214,6 +214,7 @@ Only global middleware marked `#[RunsOnUnmatched]` runs for unmatched requests (
 | `SessionMiddleware` (`marko/session-file`, `marko/session-database`) | No |
 | `CsrfMiddleware` ([`marko/security`](/docs/packages/security/)) | No |
 | Authentication and `AuthorizationMiddleware` | No |
+| `TokenRequestMiddleware` ([`marko/authentication-token`](/docs/packages/authentication-token/)) | No --- nothing authenticates a token without a route |
 | `LayoutMiddleware`, `PageCacheMiddleware` | No (they only act on matched routes anyway) |
 | Your own global middleware | No, unless it declares `#[RunsOnUnmatched]` |
 
