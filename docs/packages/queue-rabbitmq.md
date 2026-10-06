@@ -67,9 +67,20 @@ return [
 ];
 ```
 
+### Credentials
+
+The shipped `guest`/`guest` credentials only work against a broker on this machine. `RabbitmqConnection` throws a `RabbitmqException` when it is built with `guest`/`guest` and a host that is not loopback (`localhost`, `127.0.0.0/8` or `::1`). That includes a Docker Compose service name such as `rabbitmq`. RabbitMQ itself refuses `guest` from remote clients by default, so a broker that accepts it has had that protection switched off. Create a dedicated user and set `RABBITMQ_USER` and `RABBITMQ_PASSWORD`:
+
+```bash
+rabbitmqctl add_user app 'a-long-random-password'
+rabbitmqctl set_permissions -p / app '.*' '.*' '.*'
+```
+
+Use `tls` for any broker reached over a network.
+
 For `direct` and `topic` exchanges, the queue name is used as the routing key. `fanout` and `headers` exchanges use an empty routing key.
 
-The connection opens on the first call to `channel()`. If the broker refuses it, a `RabbitmqException` names the host and port and points back to this config file. An unknown `exchange.type` also throws `RabbitmqException`, listing the valid types.
+The connection opens on the first call to `channel()`. Credentials are checked earlier, when the connection is built. If the broker refuses it, a `RabbitmqException` names the host and port and points back to this config file. An unknown `exchange.type` also throws `RabbitmqException`, listing the valid types.
 
 ## Usage
 
@@ -130,7 +141,7 @@ $rabbitmqQueue = new RabbitmqQueue(
 
 | Method | Description |
 |---|---|
-| `__construct(string $host, int $port, string $user, string $password, string $vhost, ?array $tlsOptions)` | Create a connection --- defaults: host `localhost`, port `5672`, user `guest`, password `guest`, vhost `/`, no TLS |
+| `__construct(string $host, int $port, string $user, string $password, string $vhost, ?array $tlsOptions)` | Create a connection --- defaults: host `localhost`, port `5672`, user `guest`, password `guest`, vhost `/`, no TLS. Throws `RabbitmqException` for `guest`/`guest` on a non-loopback host |
 | `channel(): AMQPChannel` | Get the AMQP channel --- connected on first call; throws `RabbitmqException` if the connection fails |
 | `disconnect(): void` | Disconnect and release the channel and connection |
 | `isConnected(): bool` | Check whether the connection is currently active |

@@ -46,6 +46,30 @@ DB_USERNAME=postgres
 DB_PASSWORD=your_password
 ```
 
+### TLS
+
+Set `sslmode` in `config/database.php`; it is passed to libpq unchanged. Use `verify-full` for any server reached over a network: it encrypts the connection and checks that the server certificate is valid for `host`.
+
+```php title="config/database.php"
+return [
+    'driver' => 'pgsql',
+    // ...
+    'sslmode' => Env::string('DB_SSLMODE', 'verify-full'),
+    'ssl_ca' => Env::nullableString('DB_SSL_CA'),     // CA that signed the server certificate (sslrootcert)
+    'ssl_cert' => Env::nullableString('DB_SSL_CERT'), // optional client certificate (sslcert)
+    'ssl_key' => Env::nullableString('DB_SSL_KEY'),   // optional client key (sslkey)
+];
+```
+
+| `sslmode` | Encrypted | Server verified |
+|---|---|---|
+| unset / `prefer` | If the server offers TLS --- an attacker in between can strip it | No |
+| `require` | Yes | No |
+| `verify-ca` | Yes | CA only, not the host name |
+| `verify-full` | Yes | CA and host name |
+
+Without `ssl_ca`, `verify-ca` and `verify-full` read the CA from `~/.postgresql/root.crt`. `ssl_cert` and `ssl_key` must be set together.
+
 ## Usage
 
 Once configured, the PostgreSQL driver is automatically used when you interact with the database. See [`marko/database`](/docs/packages/database/) for entity definition and repository usage.

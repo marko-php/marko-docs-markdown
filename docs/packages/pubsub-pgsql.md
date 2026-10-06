@@ -29,9 +29,12 @@ PUBSUB_PGSQL_PORT=5432
 PUBSUB_PGSQL_USER=app
 PUBSUB_PGSQL_PASSWORD=secret
 PUBSUB_PGSQL_DATABASE=app
+PUBSUB_PGSQL_SSLMODE=verify-full
 PUBSUB_DRIVER=pgsql
 PUBSUB_PREFIX=marko_
 ```
+
+`PUBSUB_PGSQL_SSLMODE` (config key `pubsub-pgsql.sslmode`) is passed to libpq as `sslmode`: one of `disable`, `allow`, `prefer`, `require`, `verify-ca` or `verify-full`. Any other value throws `PubSubException`. Use `verify-full` for any server reached over a network: it encrypts the connection and checks that the server certificate is valid for the host. Left unset, libpq uses `prefer`, which falls back to plain text when the server (or an attacker in between) does not offer TLS. `require` encrypts but does not check who is on the other end. With `verify-ca` or `verify-full`, libpq reads the CA from `~/.postgresql/root.crt`, or from the `PGSSLROOTCERT` environment variable.
 
 ## Usage
 
@@ -133,23 +136,17 @@ public function stream(): StreamingResponse
 
 ## Customization
 
-Override the PostgreSQL connection by extending `PgSqlPubSubConnection` via a Preference:
+Override the PostgreSQL connection by extending `PgSqlPubSubConnection` via a Preference, for example to set an application name:
 
 ```php
 use Marko\PubSub\PgSql\PgSqlPubSubConnection;
 use Amp\Postgres\PostgresConfig;
 
-class SslPgSqlPubSubConnection extends PgSqlPubSubConnection
+class NamedPgSqlPubSubConnection extends PgSqlPubSubConnection
 {
     protected function createConfig(): PostgresConfig
     {
-        return new PostgresConfig(
-            host: $this->host,
-            port: $this->port,
-            user: $this->user,
-            password: $this->password,
-            database: $this->database,
-        );
+        return parent::createConfig()->withApplicationName('orders-worker');
     }
 }
 ```
@@ -159,7 +156,7 @@ Register it in your module:
 ```php title="module.php"
 return [
     'bindings' => [
-        \Marko\PubSub\PgSql\PgSqlPubSubConnection::class => SslPgSqlPubSubConnection::class,
+        \Marko\PubSub\PgSql\PgSqlPubSubConnection::class => NamedPgSqlPubSubConnection::class,
     ],
 ];
 ```
@@ -201,7 +198,7 @@ Manages the async PostgreSQL connection used for pub/sub. Lazily connects on fir
 
 | Method | Description |
 |---|---|
-| `__construct(string $host, int $port, ?string $user, ?string $password, ?string $database, string $prefix)` | Create a connection with host (`127.0.0.1`), port (`5432`), optional user/password/database, and channel prefix (`marko_`) |
+| `__construct(string $host, int $port, ?string $user, ?string $password, ?string $database, string $prefix, ?string $sslMode)` | Create a connection with host (`127.0.0.1`), port (`5432`), optional user/password/database, channel prefix (`marko_`) and optional libpq `sslmode` (`verify-full` recommended). Throws `PubSubException` for an unknown `sslmode` |
 | `connection(): PostgresConnection` | Get the async PostgreSQL connection --- lazily connected on first call |
 | `disconnect(): void` | Disconnect and release the connection instance |
 | `isConnected(): bool` | Check whether a connection instance is currently active |
