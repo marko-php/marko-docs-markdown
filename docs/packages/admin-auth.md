@@ -30,14 +30,7 @@ The package ships no migration files. Its tables come from its entities, which `
 Both pivots cascade: deleting a role, permission or admin user deletes its assignment rows.
 
 :::note
-Earlier versions shipped hand-written MySQL migrations in `database/migrations/` that `db:migrate` never ran, so `admin_user_roles` was never created and the first admin login failed. If you created the tables from that SQL by hand, the entities differ from them: `role_permissions` and `admin_user_roles` have an auto-increment `id` primary key, `roles.is_super_admin` and `admin_users.is_active` are string columns (`'1'`/`'0'`) instead of `TINYINT(1)`, and the ids and timestamps use the entity column types. Add the two `id` columns yourself first, in a migration of your own:
-
-```sql
-ALTER TABLE role_permissions ADD COLUMN id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST;
-ALTER TABLE admin_user_roles ADD COLUMN id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST;
-```
-
-Then `marko db:migrate` generates and applies the remaining column changes. Review the generated migrations before you commit them.
+Earlier versions shipped hand-written MySQL migrations in `database/migrations/` that `db:migrate` never ran, so `admin_user_roles` was never created and the first admin login failed. If you created the tables from that SQL by hand, the entities differ from them: `role_permissions` and `admin_user_roles` have an auto-increment `id` primary key, `roles.is_super_admin` and `admin_users.is_active` are string columns (`'1'`/`'0'`) instead of `TINYINT(1)`, and the ids and timestamps use the entity column types. `marko db:migrate` generates and applies all of these changes. It adds each `id` column together with its primary key in one statement and numbers the existing rows, so the step earlier versions of this note asked for (adding the two `id` columns by hand first) is no longer needed. See [Primary Keys on Existing Tables](/docs/packages/database/#primary-keys-on-existing-tables). Review the generated migrations before you commit them.
 :::
 
 ## Usage

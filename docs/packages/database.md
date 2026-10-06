@@ -1766,9 +1766,34 @@ A few things to know:
 
 - **An undeclared default or length is kept.** If the entity declares no `default`, or no `length`, the column keeps the one the database already has. A migration never drops a default or resizes a `VARCHAR` just because the entity leaves it out. Both drivers apply the same rule, `Column::resolveAgainst()`, which mirrors the tolerances the diff uses to decide that a column is unchanged.
 - **A column with nothing left to change gets no statement.** When every difference is one the diff accepts (an undeclared length or default, or uniqueness, which the index diff handles), neither the up nor the down migration touches the column.
-- **Primary key and auto-increment changes are refused on PostgreSQL.** They need a table rebuild, so generating SQL for one throws a `MigrationException` naming the column. Write that change in a migration by hand.
+- **Primary key changes to an existing column are refused, and on PostgreSQL so are auto-increment changes.** Making an existing column part of the key or taking it out can't be done by changing the column, so generating SQL for it throws a `MigrationException` naming the column, on both drivers. Write that change in a migration by hand. Adding a new key column is different, see [Primary Keys on Existing Tables](#primary-keys-on-existing-tables).
 - **`SET NOT NULL` needs data that satisfies it.** Making a column required fails if existing rows hold `NULL`. Fill those rows in first.
 - **A type change needs data that converts.** Changing `VARCHAR` to `INTEGER` on a table holding `'abc'` fails inside the migration's transaction. Clean up those rows first.
+
+### Primary Keys on Existing Tables
+
+When an entity declares a primary key column that a table without a primary key doesn't have yet, the migration adds the column and the key in one `ALTER TABLE`. That is how a surrogate `id` gets added to a pivot table that had none:
+
+```sql
+-- MySQL / MariaDB
+ALTER TABLE `admin_user_roles` ADD COLUMN `id` INT NOT NULL AUTO_INCREMENT, ADD PRIMARY KEY (`id`)
+-- PostgreSQL
+ALTER TABLE "admin_user_roles" ADD COLUMN "id" SERIAL, ADD PRIMARY KEY ("id")
+```
+
+The columns of a composite key all go into the same statement, followed by one `ADD PRIMARY KEY (a, b)`. One statement means a failure never leaves a key column without its key. The down migration drops the added columns, which drops the key with them.
+
+Existing rows need a distinct value in the new key column:
+
+- **Auto-increment** numbers the existing rows (1, 2, ...).
+- **A per-row expression default**, such as `gen_random_uuid()` on PostgreSQL or `UUID()` on MariaDB, gives each row its own value. MySQL 8 with binary logging on (its default) refuses any `ADD COLUMN` whose default is non-deterministic, key or not, with error 1674. On MySQL, add a UUID key to a table with rows by hand.
+- **No default** works on an empty table only. With rows, MySQL fills the column with the type's implicit default (`0`, `''`), and PostgreSQL with `NULL`, so adding the key fails and the table is left unchanged.
+
+These primary key changes still need a migration written by hand, and generating SQL for them throws a `MigrationException`:
+
+- **Adding key columns to a table that already has a primary key.** A table has one primary key, and the diff never replaces it, even when the same change drops the current key's columns. The exception names the table, the current key columns and the new ones.
+- **Dropping some, but not all, of the columns of a composite key.** PostgreSQL would drop the whole key and MySQL would shrink it, so the diff refuses either way. Dropping every key column is fine: the table is then left without a primary key.
+- **Making an existing column part of the key, or taking it out.** See [Column Changes](#column-changes).
 
 ### Unique Columns on Existing Tables
 

@@ -399,7 +399,7 @@ Implements `SqlGeneratorInterface`. Generates PostgreSQL DDL for schema migratio
 | `generateDown(SchemaDiff $diff): array` | Generate rollback SQL statements |
 | `generateCreateTable(Table $table): string` | Generate a CREATE TABLE statement |
 | `generateDropTable(string $tableName): string` | Generate a DROP TABLE statement |
-| `generateAddColumn(string $table, Column $column): string` | Generate an ALTER TABLE ADD COLUMN statement |
+| `generateAddColumn(string $table, Column $column): string` | Generate an ALTER TABLE ADD COLUMN statement. A primary key column gets its `ADD PRIMARY KEY` in the same statement |
 | `generateDropColumn(string $table, string $columnName): string` | Generate an ALTER TABLE DROP COLUMN statement |
 | `generateModifyColumn(string $table, Column $column, Column $oldColumn): string` | Generate one ALTER TABLE with the type (cast with `USING`), nullability and default changes from `$oldColumn` to `$column`. Throws `MigrationException` when none of those differ, or when the primary key or auto-increment changes |
 | `generateAddIndex(string $table, Index $index): string` | Generate a CREATE INDEX statement, or `ADD CONSTRAINT ... UNIQUE` for an index that backs a unique constraint |
