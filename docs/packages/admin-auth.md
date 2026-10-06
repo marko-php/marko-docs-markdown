@@ -24,10 +24,14 @@ The package ships no migration files. Its tables come from its entities, which `
 | `roles` | `Role` | Roles and the `is_super_admin` flag (unique `slug`) |
 | `permissions` | `Permission` | Permission keys, labels and groups (unique `key`, index on `group`) |
 | `role_permissions` | `RolePermission` | Role to permission assignments (unique `role_id`, `permission_id`; index on `permission_id`) |
-| `admin_users` | `AdminUser` | Admin users (unique `email`) |
+| `admin_users` | `AdminUser` | Admin users (unique `email`), with the remember-me token hash and its `remember_token_expires_at` |
 | `admin_user_roles` | `AdminUserRole` | User to role assignments (unique `user_id`, `role_id`; index on `role_id`) |
 
 Both pivots cascade: deleting a role, permission or admin user deletes its assignment rows.
+
+:::note
+`admin_users.remember_token_expires_at` holds when an admin's remember-me token stops being accepted; the expiry is enforced server-side rather than trusted from the cookie. Run `marko db:migrate` after upgrading to add the column. Remember tokens issued before the column existed have no expiry and are rejected, so admins who were remembered sign in again once.
+:::
 
 :::note
 Earlier versions shipped hand-written MySQL migrations in `database/migrations/` that `db:migrate` never ran, so `admin_user_roles` was never created and the first admin login failed. If you created the tables from that SQL by hand, the entities differ from them: `role_permissions` and `admin_user_roles` have an auto-increment `id` primary key, `roles.is_super_admin` and `admin_users.is_active` are string columns (`'1'`/`'0'`) instead of `TINYINT(1)`, and the ids and timestamps use the entity column types. `marko db:migrate` generates and applies all of these changes. It adds each `id` column together with its primary key in one statement and numbers the existing rows, so the step earlier versions of this note asked for (adding the two `id` columns by hand first) is no longer needed. See [Primary Keys on Existing Tables](/docs/packages/database/#primary-keys-on-existing-tables). Review the generated migrations before you commit them.

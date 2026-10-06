@@ -137,9 +137,13 @@ use Marko\Security\Middleware\SecurityHeadersMiddleware;
 
 Headers are configured in `config/security.php` under the `headers` key (see [Configuration](#configuration) above). Empty values are omitted from the response --- only headers with non-empty values are added.
 
+### Token Rotation on Login and Logout
+
+When [marko/authentication](/docs/packages/authentication/) is installed, the token is regenerated on every `LoginEvent` and `LogoutEvent` (by the `RotateCsrfTokenOnLogin` and `RotateCsrfTokenOnLogout` observers). A token issued before login --- including one an attacker learned by planting a session from a sibling subdomain --- stops validating once the victim logs in, and the next person on a shared machine does not inherit the logged-out user's token. Forms rendered before the login or logout must be reloaded to pick up the new token. Without marko/authentication these events are never dispatched, so nothing changes.
+
 ### Using the CSRF Token Manager Directly
 
-Regenerate tokens (e.g., after login):
+Regenerate tokens (e.g., after a privilege change of your own):
 
 ```php
 $newToken = $this->csrfTokenManager->regenerate();

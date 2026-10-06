@@ -123,11 +123,14 @@ public function logout(): Response
 }
 ```
 
+`logout()` removes the user from the session, clears any remember token, and regenerates the session ID (deleting the old session), so the logged-out session ID cannot be reused on a shared machine. Other session data (for example, another guard's login) is kept; call `$session->destroy()` yourself if you want to discard everything. With [marko/security](/docs/packages/security/) installed, the CSRF token is also rotated on every login and logout.
+
 ### Making Users Authenticatable
 
 Your user model must implement `AuthenticatableInterface`:
 
 ```php title="User.php"
+use DateTimeImmutable;
 use Marko\Authentication\AuthenticatableInterface;
 
 class User implements AuthenticatableInterface
@@ -137,6 +140,7 @@ class User implements AuthenticatableInterface
         private string $email,
         private string $password,
         private ?string $rememberToken = null,
+        private ?DateTimeImmutable $rememberTokenExpiresAt = null,
     ) {}
 
     public function getAuthIdentifier(): int|string
@@ -163,6 +167,17 @@ class User implements AuthenticatableInterface
         ?string $token,
     ): void {
         $this->rememberToken = $token;
+    }
+
+    public function getRememberTokenExpiresAt(): ?DateTimeImmutable
+    {
+        return $this->rememberTokenExpiresAt;
+    }
+
+    public function setRememberTokenExpiresAt(
+        ?DateTimeImmutable $expiresAt,
+    ): void {
+        $this->rememberTokenExpiresAt = $expiresAt;
     }
 
     public function getRememberTokenName(): string
@@ -433,16 +448,18 @@ class LoginController
 
 ### How It Works
 
-1. `login($user, remember: true)` generates a random token, stores its SHA-256 hash through `UserProviderInterface::updateRememberToken()`, and queues a `remember_{guard}` cookie (e.g. `remember_session`) holding `{user id}|{plain token}`.
+1. `login($user, remember: true)` generates a random token, stores its SHA-256 hash and an expiry (`remember.lifetime` minutes from now) through `UserProviderInterface::updateRememberToken()`, and queues a `remember_{guard}` cookie (e.g. `remember_session`) holding `{user id}|{plain token}`.
 2. `QueuedCookiesMiddleware` attaches the queued cookie to the response with `Response::withCookie()`. The package registers this middleware as global middleware and orders it after the session driver modules, so there is nothing to wire up. Cookies never go through `setcookie()`, so behavior is identical under PHP-FPM and RoadRunner.
-3. On a later request with no authenticated session, `user()` reads the cookie, calls `retrieveByRememberToken($id, $hash)` with the **hash** of the cookie's token, verifies it against `getRememberToken()` with a constant-time comparison, and rotates the token (a new cookie is sent) to prevent replay.
-4. `logout()` clears the stored token (`updateRememberToken($user, null)`) and sends an expired remember cookie.
+3. On a later request with no authenticated session, `user()` reads the cookie, calls `retrieveByRememberToken($id, $hash)` with the **hash** of the cookie's token, and verifies it against `getRememberToken()` with a constant-time comparison.
+4. The stored expiry is enforced server-side: the cookie's own `Expires` is controlled by the client, so a token whose `getRememberTokenExpiresAt()` has passed (or is `null`) is rejected, and the stored token and cookie are cleared.
+5. A valid cookie logs the user in exactly like a password login: the user ID is written to the session, the session ID is regenerated, and `LoginEvent` is dispatched with `remember: true`. Later requests authenticate from the session, so the cookie is consumed once per session. The token is rotated (a new cookie is sent) to prevent replay, keeping its original expiry: a remember-me login lasts at most `remember.lifetime` however often it is used.
+6. `logout()` clears the stored token (`updateRememberToken($user, null, null)`) and sends an expired remember cookie.
 
 ### User Provider Requirements
 
 Remember-me stores tokens through your user provider, so the provider and user must persist them:
 
-- `updateRememberToken()` must call `$user->setRememberToken($token)` and save it (typically a nullable `remember_token` column). If the user's `getRememberToken()` does not return the new hash afterwards, `login(..., remember: true)` throws an `AuthException` rather than issuing a cookie that can never be honored.
+- `updateRememberToken()` must call `$user->setRememberToken($token)` and `$user->setRememberTokenExpiresAt($expiresAt)` and save both (typically nullable `remember_token` and `remember_token_expires_at` columns). If the user's `getRememberToken()` and `getRememberTokenExpiresAt()` do not return the new hash and expiry afterwards, `login(..., remember: true)` throws an `AuthException` rather than issuing a cookie that can never be honored.
 - `retrieveByRememberToken()` receives the stored hash. Compare it to the stored value with `hash_equals()`.
 
 ```php title="UserProvider.php"
@@ -463,8 +480,10 @@ public function retrieveByRememberToken(
 public function updateRememberToken(
     AuthenticatableInterface $user,
     ?string $token,
+    ?DateTimeImmutable $expiresAt,
 ): void {
     $user->setRememberToken($token);
+    $user->setRememberTokenExpiresAt($expiresAt);
     $this->userRepository->save($user);
 }
 ```
@@ -475,7 +494,7 @@ All remember-me options live under `remember` in `config/authentication.php`:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `lifetime` | `43200` | Cookie and token lifetime in minutes (30 days) |
+| `lifetime` | `43200` | Cookie and token lifetime in minutes (30 days), enforced server-side from the stored expiry |
 | `cookie.prefix` | `'remember_'` | Cookie name prefix; the guard name is appended (`remember_session`) |
 | `cookie.path` | `'/'` | Cookie `Path` attribute |
 | `cookie.domain` | `''` | Cookie `Domain` attribute; an empty string omits it |
@@ -497,13 +516,13 @@ use Marko\Testing\Fake\FakeClock;
 
 $clock = new FakeClock('2026-01-01 12:00:00 UTC');
 $manager = new RememberTokenManager($clock, lifetimeMinutes: 60);
-$createdAt = $clock->now();
+$expiresAt = $manager->expiresAt(); // 13:00:00
 
-$clock->travel('+60 minutes');
-$manager->isExpired($createdAt); // false
+$clock->travel('+59 minutes');
+$manager->hasExpired($expiresAt); // false
 
-$clock->travel('+1 second');
-$manager->isExpired($createdAt); // true
+$clock->travel('+1 minute');
+$manager->hasExpired($expiresAt); // true
 ```
 
 ## Middleware
@@ -583,7 +602,7 @@ The auth package dispatches [events](/docs/packages/events/) during the authenti
 
 ### LoginEvent
 
-Dispatched when a user successfully logs in:
+Dispatched when a user successfully logs in, including a login from a remember-me cookie (with `getRemember()` returning `true`):
 
 ```php title="LogLoginObserver.php"
 use Marko\Authentication\Event\LoginEvent;
@@ -606,7 +625,7 @@ class LogLoginObserver
 
 ### LogoutEvent
 
-Dispatched when a user logs out:
+Dispatched when a user logs out, after the session ID has been regenerated:
 
 ```php title="LogLogoutObserver.php"
 use Marko\Authentication\Event\LogoutEvent;
@@ -736,6 +755,8 @@ public function getAuthIdentifierName(): string;
 public function getAuthPassword(): string;
 public function getRememberToken(): ?string;
 public function setRememberToken(?string $token): void;
+public function getRememberTokenExpiresAt(): ?DateTimeImmutable;
+public function setRememberTokenExpiresAt(?DateTimeImmutable $expiresAt): void;
 public function getRememberTokenName(): string;
 ```
 
@@ -752,7 +773,7 @@ public function retrieveById(int|string $identifier): ?AuthenticatableInterface;
 public function retrieveByCredentials(array $credentials): ?AuthenticatableInterface;
 public function validateCredentials(AuthenticatableInterface $user, array $credentials): bool;
 public function retrieveByRememberToken(int|string $identifier, string $token): ?AuthenticatableInterface;
-public function updateRememberToken(AuthenticatableInterface $user, ?string $token): void;
+public function updateRememberToken(AuthenticatableInterface $user, ?string $token, ?DateTimeImmutable $expiresAt): void;
 ```
 
 `retrieveByRememberToken()` receives the SHA-256 hash of the cookie's token, the same value previously passed to `updateRememberToken()`.
@@ -791,6 +812,9 @@ public function __construct(ClockInterface $clock, ?int $lifetimeMinutes = null)
 public function generate(): string;
 public function hash(string $token): string;
 public function validate(string $token, string $storedHash): bool;
+public function expiresAt(): DateTimeImmutable;
+public function hasExpired(DateTimeImmutable $expiresAt): bool;
+public function minutesUntil(DateTimeImmutable $expiresAt): int;
 public function isExpired(DateTimeImmutable $createdAt): bool;
 ```
 
