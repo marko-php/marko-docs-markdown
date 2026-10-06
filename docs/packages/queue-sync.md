@@ -48,7 +48,7 @@ public function process(): void
 
 ### Container-Aware Jobs and Async Observers
 
-`SyncQueue` is constructed with the container and the `JobEnvelope`, and the container autowires both. Before a job that implements `ContainerAwareJobInterface` runs, `SyncQueue` calls `setContainer()` and `setJobEnvelope()` on it, just as the worker does. This is how `#[Observer(async: true)]` observers run under the sync driver. The observer is queued as an `AsyncObserverJob`, and `push()` runs it straight away against a copy of the event unwrapped from the signed envelope. If the observer throws, `dispatch()` throws a `JobFailedException`.
+`SyncQueue` is constructed with the container and the `JobEnvelope`, and the container autowires both. Before a job that implements `ContainerAwareJobInterface` runs, `SyncQueue` calls `setContainer()` and `setJobEnvelope()` on it, just as the worker does, and calls `releaseContainer()` once `handle()` returns or throws. This is how `#[Observer(async: true)]` observers run under the sync driver. The observer is queued as an `AsyncObserverJob`, and `push()` runs it straight away against a copy of the event unwrapped from the signed envelope. If the observer throws, `dispatch()` throws a `JobFailedException`.
 
 ### Failed Job Repository
 
@@ -74,7 +74,7 @@ Implements all methods from `QueueInterface`. See [marko/queue](/docs/packages/q
 | Method | Description |
 |---|---|
 | `__construct(ContainerInterface $container, JobEnvelope $jobEnvelope)` | Autowired. Both are passed to container-aware jobs before they run. |
-| `push(JobInterface $job, ?string $queue = null): string` | Execute the job immediately and return its ID. Container-aware jobs get the container and job envelope first. Throws `JobFailedException` on failure. |
+| `push(JobInterface $job, ?string $queue = null): string` | Execute the job immediately and return its ID. Container-aware jobs get the container and job envelope first, and release them afterwards. Throws `JobFailedException` on failure. |
 | `later(int $delay, JobInterface $job, ?string $queue = null): string` | Ignores the delay and executes immediately via `push()`. |
 | `pop(?string $queue = null): ?JobInterface` | Always returns `null` --- no jobs are ever queued. |
 | `size(?string $queue = null): int` | Always returns `0`. |
@@ -82,9 +82,7 @@ Implements all methods from `QueueInterface`. See [marko/queue](/docs/packages/q
 | `delete(string $jobId): bool` | Always returns `true`. |
 | `release(string $jobId, int $delay = 0): bool` | Always returns `true`. |
 
-### SyncQueueFactory
-
-`SyncQueueFactory` builds the `SyncQueue` used by the queue manager. It is autowired with `(QueueConfig $config, ContainerInterface $container, JobEnvelope $jobEnvelope)` and passes the container and envelope on to `SyncQueue`.
+`module.php` binds `QueueInterface` straight to `SyncQueue`; there is no factory.
 
 ### NullFailedJobRepository
 

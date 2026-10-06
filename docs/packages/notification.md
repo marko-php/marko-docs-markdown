@@ -135,7 +135,7 @@ $this->notificationSender->queue(
 );
 ```
 
-`queue()` pushes a `SendNotificationJob` onto the queue. The job implements `ContainerAwareJobInterface` and resolves `NotificationSender` from the container at handle-time, so no services are serialized into the payload. If no queue implementation is available, calling `queue()` throws a `NotificationException` with a suggestion to install a queue driver.
+`queue()` pushes a `SendNotificationJob` onto the queue. The job implements `ContainerAwareJobInterface` and resolves `NotificationSender` from the container at handle-time, so no services are serialized into the payload. The worker releases the container once `handle()` returns or throws, so a job that fails for the last time is still recorded in the failed-job store. If no queue implementation is available, calling `queue()` throws a `NotificationException` with a suggestion to install a queue driver.
 
 ### Registering Custom Channels
 

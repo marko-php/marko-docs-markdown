@@ -106,7 +106,7 @@ Declare the property with exactly the type `array|int|null`, since PHP requires 
 
 ### Jobs That Need Container Services
 
-If your job needs to resolve services (like a mailer or repository) from the container at handle-time rather than serializing them, implement `ContainerAwareJobInterface`. The worker automatically injects the container before calling `handle()`:
+If your job needs to resolve services (like a mailer or repository) from the container at handle-time rather than serializing them, implement `ContainerAwareJobInterface`. The worker injects the container before calling `handle()`, and calls `releaseContainer()` afterwards:
 
 ```php
 use Marko\Queue\Job;
@@ -116,7 +116,7 @@ use Marko\Core\Container\ContainerInterface;
 
 class SendOrderEmail extends Job implements ContainerAwareJobInterface
 {
-    private ContainerInterface $container;
+    private ?ContainerInterface $container = null;
 
     public function __construct(
         private readonly int $orderId,
@@ -130,6 +130,11 @@ class SendOrderEmail extends Job implements ContainerAwareJobInterface
 
     public function setJobEnvelope(JobEnvelope $jobEnvelope): void {}
 
+    public function releaseContainer(): void
+    {
+        $this->container = null;
+    }
+
     public function handle(): void
     {
         $mailer = $this->container->get(MailerInterface::class);
@@ -139,6 +144,18 @@ class SendOrderEmail extends Job implements ContainerAwareJobInterface
 ```
 
 Store only scalar values (IDs, strings) in the job's constructor — resolve heavy services from the container in `handle()`. This avoids serializing objects that may not survive across queue backends.
+
+`releaseContainer()` must drop everything `setContainer()` and `setJobEnvelope()` stored, so the job holds only serializable data again. The worker calls it in a `finally` block around `handle()`, so it runs when the job succeeds and when it throws. That matters on the job's last attempt: the worker serializes the failed job into the failed-job store, and the container holds closures that cannot be serialized. Make `releaseContainer()` safe to call more than once, and before anything was injected.
+
+### When a Failed Job Cannot Be Serialized
+
+If a job that has used up its attempts still can't be serialized (for example, it holds a closure, a resource or a live connection), the worker records it anyway and keeps running:
+
+- The failed job's payload is a placeholder, `['class' => <job class>, 'serialization_error' => <message>]`, signed with the same envelope as every other payload. `queue:failed` shows the job class from it.
+- The failed job's `exception` text holds the job's own exception and trace, followed by `Job payload could not be serialized, so this failed job cannot be retried.` with the job class and the serialization error.
+- The job is deleted from the queue, so the next worker doesn't pick it up again.
+
+`queue:retry` refuses a placeholder (and any payload that isn't a queue job): it prints why, leaves the row in the failed-job store, and returns exit code 1. Fix the job so it holds only serializable data, then dispatch it again.
 
 ### Dispatching Jobs
 
@@ -244,6 +261,7 @@ When an async observer fires, `QueueAsyncObserverDispatcher` serializes the even
 |---------|-------------|
 | `marko queue:failed` | List failed jobs |
 | `marko queue:retry <id>` | Retry a failed job (resets attempt counter so the job gets its full `maxAttempts`) |
+| `marko queue:retry --all` | Retry every failed job. Rows whose payload could not be serialized are skipped and reported, and the command returns exit code 1 if any were skipped |
 | `marko queue:clear` | Clear all jobs from a queue |
 | `marko queue:status` | Show queue size |
 
@@ -376,9 +394,12 @@ use Marko\Core\Container\ContainerInterface;
 
 public function setContainer(ContainerInterface $container): void;
 public function setJobEnvelope(JobEnvelope $jobEnvelope): void;
+public function releaseContainer(): void;
 ```
 
-Implement this interface on any job class that needs to resolve services from the container when `handle()` runs. The `Worker` detects the interface and calls both setters before invoking `handle()`. The [sync driver](/docs/packages/queue-sync/) does the same when it runs a job on `push()`. Keep job constructor arguments to scalars and IDs only --- resolve services inside `handle()`.
+Implement this interface on any job class that needs to resolve services from the container when `handle()` runs. The `Worker` detects the interface, calls both setters before invoking `handle()`, and calls `releaseContainer()` once `handle()` returns or throws. The [sync driver](/docs/packages/queue-sync/) does the same when it runs a job on `push()`. Keep job constructor arguments to scalars and IDs only --- resolve services inside `handle()`.
+
+`releaseContainer()` is part of the contract: a job written before it existed must add it. It must drop the container, the envelope and anything else the setters stored. See [Jobs That Need Container Services](#jobs-that-need-container-services).
 
 ### QueueAsyncObserverDispatcher
 

@@ -231,7 +231,7 @@ public function __construct(
 public function handle(): void;
 ```
 
-Implements `ContainerAwareJobInterface` from [`marko/queue`](/docs/packages/queue/). The job stores only the `WebhookPayload` value object and the attempt number; services (`WebhookDispatcherInterface`, `WebhookDeliveryService`, `QueueInterface`, config) are resolved from the container at `handle()` time by the queue `Worker`. Do not inject services via the constructor.
+Implements `ContainerAwareJobInterface` from [`marko/queue`](/docs/packages/queue/). The job stores only the `WebhookPayload` value object and the attempt number; services (`WebhookDispatcherInterface`, `WebhookDeliveryService`, `QueueInterface`, config) are resolved from the container at `handle()` time by the queue `Worker`, which releases the container (`releaseContainer()`) once `handle()` returns or throws, so a job that fails for the last time can still be serialized into the failed-job store. Do not inject services via the constructor.
 
 ### WebhookDeliveryService
 
