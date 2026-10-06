@@ -481,7 +481,7 @@ readonly class UnregisteredPermission
 
 `getPermissionsForRoles()` returns the deduplicated permission set across all given role IDs in a single query. Empty input returns an empty array without issuing a query.
 
-`syncPermissions()` replaces a role's permissions: it deletes the existing rows and inserts the new set in batches, all inside one `transaction()`. A failure part-way through rolls the whole sync back, so a role is never left half-synced. Called inside your own transaction, the sync runs in a savepoint. If it fails, only the sync's changes are undone, and you can catch the exception and still commit the rest of your transaction.
+`syncPermissions()` replaces a role's permissions and `syncRoles()` replaces an admin user's roles. Each deletes the existing rows and inserts the new set in batches, all inside one `transaction()`. A failure part-way through rolls the whole sync back, so a role is never left half-synced and a user keeps their previous roles when an id is unknown or repeated (the foreign key or the unique index rejects it). Called inside your own transaction, the sync runs in a savepoint. If it fails, only the sync's changes are undone, and you can catch the exception and still commit the rest of your transaction.
 
 ### AdminAuthConfigInterface
 
